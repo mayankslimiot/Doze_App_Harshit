@@ -1,6 +1,16 @@
-import React, { useMemo } from 'react';
-import { View, StyleSheet, Dimensions, Text } from 'react-native';
+import React, { useMemo, useState, useRef, useCallback } from 'react';
+import { View, StyleSheet, Dimensions, Text, TouchableOpacity } from 'react-native';
 import Svg, { Path, Line, Circle, G, Text as SvgText, Rect } from 'react-native-svg';
+import { GestureDetector, Gesture } from 'react-native-gesture-handler';
+import Animated, {
+  useSharedValue,
+  useAnimatedStyle,
+  withSpring,
+  withTiming,
+  runOnJS,
+  interpolate,
+} from 'react-native-reanimated';
+import * as Haptics from 'expo-haptics';
 
 // Zoom level configurations
 export type ZoomLevel = {
@@ -10,7 +20,7 @@ export type ZoomLevel = {
 };
 
 export const ZOOM_LEVELS: ZoomLevel[] = [
-  { name: '15min', durationMs: 15 * 60 * 1000, sampleWindowMs: 6 * 1000 }, // 6 sec average
+  { name: '10min', durationMs: 10 * 60 * 1000, sampleWindowMs: 4 * 1000 }, // 4 sec average for 10 min view
   { name: '1hour', durationMs: 60 * 60 * 1000, sampleWindowMs: 24 * 1000 }, // 24 sec average
   { name: '2hours', durationMs: 2 * 60 * 60 * 1000, sampleWindowMs: 48 * 1000 }, // 48 sec average
   { name: '4hours', durationMs: 4 * 60 * 60 * 1000, sampleWindowMs: 96 * 1000 }, // 96 sec average
@@ -84,7 +94,7 @@ function downsampleData(
 
 export const HealthGraph: React.FC<HealthGraphProps> = ({
   rawData,
-  initialZoomLevel = 0, // Default to 15 minutes
+  initialZoomLevel = 0, // Default to 10 minutes
   onZoomChange,
   height = 450,
   yAxisLabel = 'BPM',
@@ -93,6 +103,23 @@ export const HealthGraph: React.FC<HealthGraphProps> = ({
   minY,
   maxY,
 }) => {
+  // Zoom and pan state
+  const [currentZoomLevel, setCurrentZoomLevel] = useState(initialZoomLevel);
+  const [panOffset, setPanOffset] = useState(0); // Time offset in milliseconds (X-axis)
+  const [yPanOffset, setYPanOffset] = useState(0); // Y-axis pan offset (value offset)
+  const [scale, setScale] = useState(1); // Current zoom scale (1 = default)
+  const [yScale, setYScale] = useState(1); // Y-axis zoom scale
+  
+  // Animated values
+  const scaleValue = useSharedValue(1);
+  const translateX = useSharedValue(0);
+  const focalX = useSharedValue(0);
+  
+  // Refs for gesture handling
+  const savedScale = useRef(1);
+  const savedTranslateX = useRef(0);
+  const lastPinchScale = useRef(1);
+  
   // Sort raw data by timestamp
   const sortedData = useMemo(() => {
     return [...rawData]
@@ -100,21 +127,36 @@ export const HealthGraph: React.FC<HealthGraphProps> = ({
       .sort((a, b) => a.timestamp - b.timestamp);
   }, [rawData]);
 
-  // Calculate initial domain for 15 minutes
-  const initialDomain = useMemo(() => {
+  // Calculate current time window based on zoom and pan
+  const getCurrentTimeWindow = useCallback(() => {
     if (sortedData.length === 0) {
       const now = Date.now();
+      const baseDuration = ZOOM_LEVELS[currentZoomLevel].durationMs;
+      const actualDuration = baseDuration / scale;
+      return [now - actualDuration, now] as [number, number];
+    }
+    
+    const lastTimestamp = sortedData[sortedData.length - 1].timestamp;
+    const baseDuration = ZOOM_LEVELS[currentZoomLevel].durationMs;
+    const actualDuration = baseDuration / scale;
+    const baseEndTime = lastTimestamp - panOffset;
+    const baseStartTime = baseEndTime - actualDuration;
+    
+    return [baseStartTime, baseEndTime] as [number, number];
+  }, [sortedData, currentZoomLevel, panOffset, scale]);
+
+  // Calculate current domain
+  const currentDomain = useMemo(() => {
+    const [startTime, endTime] = getCurrentTimeWindow();
+    
+    if (sortedData.length === 0) {
       return {
-        x: [now - ZOOM_LEVELS[0].durationMs, now] as [number, number],
+        x: [startTime, endTime] as [number, number],
         y: [minY !== undefined ? minY : 40, maxY !== undefined ? maxY : 100] as [number, number],
       };
     }
 
-    const lastTimestamp = sortedData[sortedData.length - 1].timestamp;
-    const endTime = lastTimestamp;
-    const startTime = endTime - ZOOM_LEVELS[0].durationMs; // 15 minutes
-
-    // Calculate Y domain
+    // Calculate Y domain from visible data
     const visibleData = sortedData.filter(
       (d) => d.timestamp >= startTime && d.timestamp <= endTime && !isNaN(d.value) && isFinite(d.value)
     );
@@ -128,25 +170,41 @@ export const HealthGraph: React.FC<HealthGraphProps> = ({
       x: [startTime, endTime] as [number, number],
       y: [yMin, yMax] as [number, number],
     };
-  }, [sortedData, minY, maxY]);
+  }, [sortedData, minY, maxY, getCurrentTimeWindow]);
 
-  // Downsample data for current view (15 minutes)
+  // Downsample data for current view
   const chartData = useMemo(() => {
     if (sortedData.length === 0) return [];
 
     try {
-      const [startTime, endTime] = initialDomain.x;
+      const [startTime, endTime] = currentDomain.x;
       
       // Validate domain
       if (!isFinite(startTime) || !isFinite(endTime) || startTime >= endTime) {
         return [];
       }
 
+      // Filter data to visible range and sort by timestamp
+      const visibleData = sortedData.filter(
+        (point) => point.timestamp >= startTime && point.timestamp <= endTime
+      ).sort((a, b) => a.timestamp - b.timestamp);
+
+      // Determine if we need to downsample based on zoom level and data density
+      const timeRange = endTime - startTime;
+      const sampleWindow = ZOOM_LEVELS[currentZoomLevel].sampleWindowMs;
+      const maxPoints = Math.ceil(timeRange / sampleWindow) * 2; // Allow 2x for smoothness
+
+      // If we have reasonable number of points, use them directly
+      if (visibleData.length <= maxPoints) {
+        return visibleData.filter((point) => isFinite(point.timestamp) && isFinite(point.value) && point.value > 0);
+      }
+
+      // Downsample if we have too many points
       const downsampled = downsampleData(
-        sortedData,
+        visibleData,
         startTime,
         endTime,
-        ZOOM_LEVELS[0].sampleWindowMs // 6 seconds for 15-minute view
+        sampleWindow
       );
 
       return downsampled.filter((point) => isFinite(point.timestamp) && isFinite(point.value) && point.value > 0);
@@ -154,28 +212,41 @@ export const HealthGraph: React.FC<HealthGraphProps> = ({
       console.error('[HealthGraph] Error processing chart data:', error);
       return [];
     }
-  }, [sortedData, initialDomain]);
+  }, [sortedData, currentDomain, currentZoomLevel]);
 
-  // Calculate Y domain with padding
+  // Calculate Y domain with padding and pan/zoom
   const yDomain = useMemo(() => {
     if (chartData.length === 0) {
-      return [minY !== undefined ? minY : 40, maxY !== undefined ? maxY : 100] as [number, number];
+      const baseMin = minY !== undefined ? minY : 40;
+      const baseMax = maxY !== undefined ? maxY : 100;
+      const baseRange = baseMax - baseMin;
+      const actualRange = baseRange / yScale;
+      const center = (baseMin + baseMax) / 2 + yPanOffset;
+      return [center - actualRange / 2, center + actualRange / 2] as [number, number];
     }
 
     const values = chartData.map((d) => d.value).filter((v) => !isNaN(v) && isFinite(v));
     if (values.length === 0) {
-      return [minY !== undefined ? minY : 40, maxY !== undefined ? maxY : 100] as [number, number];
+      const baseMin = minY !== undefined ? minY : 40;
+      const baseMax = maxY !== undefined ? maxY : 100;
+      const baseRange = baseMax - baseMin;
+      const actualRange = baseRange / yScale;
+      const center = (baseMin + baseMax) / 2 + yPanOffset;
+      return [center - actualRange / 2, center + actualRange / 2] as [number, number];
     }
 
     const dataMin = Math.min(...values);
     const dataMax = Math.max(...values);
     const padding = (dataMax - dataMin) * 0.1 || 10;
+    
+    const baseMin = minY !== undefined ? minY : Math.max(0, dataMin - padding);
+    const baseMax = maxY !== undefined ? maxY : dataMax + padding;
+    const baseRange = baseMax - baseMin;
+    const actualRange = baseRange / yScale;
+    const center = (baseMin + baseMax) / 2 + yPanOffset;
 
-    const yMin = minY !== undefined ? minY : Math.max(0, dataMin - padding);
-    const yMax = maxY !== undefined ? maxY : dataMax + padding;
-
-    return [yMin, yMax] as [number, number];
-  }, [chartData, minY, maxY]);
+    return [center - actualRange / 2, center + actualRange / 2] as [number, number];
+  }, [chartData, minY, maxY, yScale, yPanOffset]);
 
   // Chart dimensions - Full width, edge to edge like professional apps
   const screenWidth = Dimensions.get('window').width;
@@ -194,39 +265,242 @@ export const HealthGraph: React.FC<HealthGraphProps> = ({
     return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
   };
 
-  if (sortedData.length === 0 || chartData.length === 0) {
-    return (
-      <View style={[styles.container, { height }]}>
-        <View style={styles.emptyStateContainer}>
-          <Text style={styles.emptyStateText}>No data available</Text>
-          <Text style={styles.emptyStateSubtext}>Connect your device to see heart rate data</Text>
-        </View>
-      </View>
-    );
-  }
+  // Calculate chart points - extract safely with defaults
+  const startTime = currentDomain.x[0] ?? Date.now();
+  const endTime = currentDomain.x[1] ?? Date.now();
+  const yMin = yDomain[0] ?? 40;
+  const yMax = yDomain[1] ?? 100;
+  const timeRange = Math.max(1, endTime - startTime);
+  const valueRange = Math.max(1, yMax - yMin);
 
-  // Validate domain before rendering
-  if (!isFinite(initialDomain.x[0]) || !isFinite(initialDomain.x[1]) || !isFinite(yDomain[0]) || !isFinite(yDomain[1])) {
-    return (
-      <View style={[styles.container, { height }]}>
-        <View style={styles.emptyStateContainer}>
-          <Text style={styles.emptyStateText}>Invalid data</Text>
-          <Text style={styles.emptyStateSubtext}>Please refresh the screen</Text>
-        </View>
-      </View>
-    );
-  }
+  // Store values that need to be accessed in worklets
+  const timeRangeRef = useRef(0);
+  const availableWidthRef = useRef(availableWidth);
+  const valueRangeRef = useRef(0);
+  const availableHeightRef = useRef(availableHeight);
+  
+  // Update refs when values change
+  React.useEffect(() => {
+    timeRangeRef.current = currentDomain.x[1] - currentDomain.x[0];
+    availableWidthRef.current = availableWidth;
+    valueRangeRef.current = yDomain[1] - yDomain[0];
+    availableHeightRef.current = availableHeight;
+  }, [currentDomain, availableWidth, yDomain, availableHeight]);
 
-  // Calculate chart points
-  const [startTime, endTime] = initialDomain.x;
-  const [yMin, yMax] = yDomain;
-  const timeRange = endTime - startTime;
-  const valueRange = yMax - yMin;
+  // Update zoom from scale (simplified version) - MUST be defined before gestures
+  const updateZoomFromScale = useCallback((newScale: number) => {
+    try {
+      setScale(newScale);
+      
+      // Snap to zoom levels if close
+      const baseDuration = ZOOM_LEVELS[currentZoomLevel].durationMs;
+      const newDuration = baseDuration / newScale;
+      
+      // Find closest zoom level
+      let closestLevel = currentZoomLevel;
+      let minDiff = Infinity;
+      
+      ZOOM_LEVELS.forEach((level, index) => {
+        const diff = Math.abs(level.durationMs - newDuration);
+        if (diff < minDiff) {
+          minDiff = diff;
+          closestLevel = index;
+        }
+      });
+      
+      // Only snap if very close to a zoom level
+      if (closestLevel !== currentZoomLevel && minDiff < baseDuration * 0.3) {
+        setCurrentZoomLevel(closestLevel);
+        setScale(1); // Reset scale when changing zoom level
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+        
+        if (onZoomChange) {
+          const [startTime, endTime] = getCurrentTimeWindow();
+          onZoomChange(ZOOM_LEVELS[closestLevel], { x: [startTime, endTime] });
+        }
+      }
+    } catch (error) {
+      console.error('[HealthGraph] Error in updateZoomFromScale:', error);
+    }
+  }, [currentZoomLevel, onZoomChange, getCurrentTimeWindow]);
 
-  // Generate X-axis time labels (6 labels for 15 minutes)
+  // Update pan offset (X-axis) - MUST be defined before gestures
+  const updatePanOffset = useCallback((timeOffset: number) => {
+    try {
+      setPanOffset((prev) => {
+        const newOffset = prev - timeOffset;
+        // Prevent panning beyond available data
+        if (sortedData.length > 0) {
+          const oldestTime = sortedData[0].timestamp;
+          const newestTime = sortedData[sortedData.length - 1].timestamp;
+          const [startTime] = getCurrentTimeWindow();
+          const minOffset = 0; // Can't go into future
+          const maxOffset = newestTime - oldestTime; // Can't go before oldest data
+          return Math.max(minOffset, Math.min(maxOffset, newOffset));
+        }
+        return Math.max(0, newOffset); // Can't go into future
+      });
+    } catch (error) {
+      console.error('[HealthGraph] Error in updatePanOffset:', error);
+    }
+  }, [sortedData, getCurrentTimeWindow]);
+
+  // Update Y-axis pan offset - MUST be defined before gestures
+  const updateYPanOffset = useCallback((valueOffset: number) => {
+    try {
+      setYPanOffset((prev) => {
+        // Calculate reasonable bounds based on current Y domain
+        const [yMin, yMax] = yDomain;
+        const range = yMax - yMin;
+        const maxOffset = range * 2; // Allow panning up to 2x the current range
+        const newOffset = prev + valueOffset;
+        return Math.max(-maxOffset, Math.min(maxOffset, newOffset));
+      });
+    } catch (error) {
+      console.error('[HealthGraph] Error in updateYPanOffset:', error);
+    }
+  }, [yDomain]);
+
+  // Animated values for Y-axis
+  const translateY = useSharedValue(0);
+  const savedTranslateY = useRef(0);
+
+  // Gesture handlers - defined AFTER the callback functions
+  // Pinch gesture for X-axis zoom (time domain)
+  const pinchGesture = Gesture.Pinch()
+    .onStart(() => {
+      savedScale.current = scale;
+      lastPinchScale.current = 1;
+    })
+    .onUpdate((e) => {
+      'worklet';
+      const newScale = savedScale.current * e.scale;
+      // Limit zoom between 0.5x and 5x
+      const clampedScale = Math.max(0.5, Math.min(5, newScale));
+      scaleValue.value = clampedScale;
+      focalX.value = e.focalX;
+    })
+    .onEnd(() => {
+      'worklet';
+      const finalScale = scaleValue.value;
+      savedScale.current = finalScale;
+      // Reset visual scale immediately (no spring animation)
+      scaleValue.value = 1;
+      
+      // Update zoom level based on scale (only affects data domain, not visual movement)
+      runOnJS(updateZoomFromScale)(finalScale);
+    });
+
+  // Pan gesture - separate X and Y axis handling with real-time updates
+  const panGesture = Gesture.Pan()
+    .onStart(() => {
+      'worklet';
+      savedTranslateX.current = 0;
+      savedTranslateY.current = 0;
+    })
+    .onUpdate((e) => {
+      'worklet';
+      const currentTranslateX = e.translationX;
+      const currentTranslateY = e.translationY;
+      
+      // Calculate incremental changes
+      const deltaX = currentTranslateX - savedTranslateX.current;
+      const deltaY = currentTranslateY - savedTranslateY.current;
+      
+      // Handle X-axis pan (time domain) - update incrementally
+      if (Math.abs(deltaX) > 2) { // Minimum 2px movement
+        const timeRange = timeRangeRef.current;
+        const width = availableWidthRef.current;
+        const timeOffset = (deltaX / width) * timeRange;
+        runOnJS(updatePanOffset)(timeOffset);
+        savedTranslateX.current = currentTranslateX;
+      }
+      
+      // Handle Y-axis pan (value domain) - update incrementally
+      if (Math.abs(deltaY) > 2) { // Minimum 2px movement
+        const valueRange = valueRangeRef.current;
+        const height = availableHeightRef.current;
+        const valueOffset = -(deltaY / height) * valueRange; // Negative for natural scrolling
+        runOnJS(updateYPanOffset)(valueOffset);
+        savedTranslateY.current = currentTranslateY;
+      }
+    })
+    .onEnd(() => {
+      'worklet';
+      // Reset saved translations
+      savedTranslateX.current = 0;
+      savedTranslateY.current = 0;
+    });
+
+  // Combined gesture (pinch and pan can work together)
+  const composedGesture = Gesture.Simultaneous(pinchGesture, panGesture);
+
+  // Double tap to zoom (X-axis only)
+  const doubleTapGesture = Gesture.Tap()
+    .numberOfTaps(2)
+    .onEnd((e) => {
+      if (scale === 1) {
+        // Zoom in to 2x (only affects X-axis data domain, not visual)
+        const newScale = 2;
+        setScale(newScale);
+        scaleValue.value = 1; // No visual animation
+        savedScale.current = newScale;
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      } else {
+        // Reset zoom (only affects data domain, not visual)
+        setScale(1);
+        setYScale(1);
+        scaleValue.value = 1; // No visual animation
+        savedScale.current = 1;
+        setPanOffset(0);
+        setYPanOffset(0);
+        savedTranslateX.current = 0;
+        savedTranslateY.current = 0;
+        translateX.value = 0;
+        translateY.value = 0;
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      }
+    });
+
+  // Reset zoom handler
+  const handleResetZoom = useCallback(() => {
+    setScale(1);
+    setYScale(1);
+    setPanOffset(0);
+    setYPanOffset(0);
+    setCurrentZoomLevel(initialZoomLevel);
+    // No spring animations - immediate reset
+    scaleValue.value = 1;
+    translateX.value = 0;
+    translateY.value = 0;
+    savedScale.current = 1;
+    savedTranslateX.current = 0;
+    savedTranslateY.current = 0;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+  }, [initialZoomLevel]);
+
+  // Combined gesture with double tap
+  const finalGesture = Gesture.Race(doubleTapGesture, composedGesture);
+
+  // Format time range for display
+  const formatTimeRange = () => {
+    const [start, end] = currentDomain.x;
+    return `${formatTime(start)} - ${formatTime(end)}`;
+  };
+
+  // Generate X-axis time labels (dynamic based on time range)
   const timeLabels = useMemo(() => {
     const labels = [];
-    const labelCount = 6;
+    const minutes = timeRange / (60 * 1000);
+    let labelCount = 5;
+    
+    // Adjust label count based on time range
+    if (minutes <= 5) labelCount = 5; // Every minute for 5 min view
+    else if (minutes <= 10) labelCount = 5; // Every 2 minutes for 10 min view
+    else if (minutes <= 30) labelCount = 6; // Every 5 minutes
+    else if (minutes <= 60) labelCount = 6; // Every 10 minutes
+    else labelCount = 6; // Every hour for longer views
+    
     for (let i = 0; i <= labelCount; i++) {
       const time = startTime + (timeRange * i) / labelCount;
       labels.push({
@@ -250,21 +524,32 @@ export const HealthGraph: React.FC<HealthGraphProps> = ({
     return labels;
   }, [yMin, yMax, valueRange, chartPadding, availableHeight]);
 
-  // Generate path for line and area
+  // Generate path for line and area - ensure smooth connections between all points
   const linePath = useMemo(() => {
-    if (chartData.length === 0) return '';
+    if (chartData.length === 0) return { linePath: '', areaPath: '' };
+    if (chartData.length === 1) {
+      // Single point - draw a small horizontal line
+      const x = chartPadding + ((chartData[0].timestamp - startTime) / timeRange) * availableWidth;
+      const y = chartPadding + availableHeight - ((chartData[0].value - yMin) / valueRange) * availableHeight;
+      const path = `M ${x - 2} ${y} L ${x + 2} ${y}`;
+      const areaPath = `M ${x - 2} ${chartPadding + availableHeight} L ${x - 2} ${y} L ${x + 2} ${y} L ${x + 2} ${chartPadding + availableHeight} Z`;
+      return { linePath: path, areaPath };
+    }
 
     let path = '';
     let areaPath = '';
 
+    // Build path ensuring all points are connected sequentially
     chartData.forEach((point, index) => {
       const x = chartPadding + ((point.timestamp - startTime) / timeRange) * availableWidth;
       const y = chartPadding + availableHeight - ((point.value - yMin) / valueRange) * availableHeight;
 
       if (index === 0) {
+        // Move to first point
         path = `M ${x} ${y}`;
         areaPath = `M ${x} ${chartPadding + availableHeight} L ${x} ${y}`;
       } else {
+        // Line to next point - ensures clear connection
         path += ` L ${x} ${y}`;
         areaPath += ` L ${x} ${y}`;
       }
@@ -272,16 +557,57 @@ export const HealthGraph: React.FC<HealthGraphProps> = ({
 
     // Close area path
     if (chartData.length > 0) {
-      const lastX = chartPadding + ((chartData[chartData.length - 1].timestamp - startTime) / timeRange) * availableWidth;
+      const lastPoint = chartData[chartData.length - 1];
+      const lastX = chartPadding + ((lastPoint.timestamp - startTime) / timeRange) * availableWidth;
       areaPath += ` L ${lastX} ${chartPadding + availableHeight} Z`;
     }
 
     return { linePath: path, areaPath };
   }, [chartData, startTime, timeRange, yMin, valueRange, chartPadding, availableWidth, availableHeight]);
 
+  // Early returns after all hooks are defined
+  if (sortedData.length === 0 || chartData.length === 0) {
+    return (
+      <View style={[styles.container, { height }]}>
+        <View style={styles.emptyStateContainer}>
+          <Text style={styles.emptyStateText}>No data available</Text>
+          <Text style={styles.emptyStateSubtext}>Connect your device to see heart rate data</Text>
+        </View>
+      </View>
+    );
+  }
+
+  // Validate domain before rendering
+  if (!isFinite(currentDomain.x[0]) || !isFinite(currentDomain.x[1]) || !isFinite(yDomain[0]) || !isFinite(yDomain[1])) {
+    return (
+      <View style={[styles.container, { height }]}>
+        <View style={styles.emptyStateContainer}>
+          <Text style={styles.emptyStateText}>Invalid data</Text>
+          <Text style={styles.emptyStateSubtext}>Please refresh the screen</Text>
+        </View>
+      </View>
+    );
+  }
+
   return (
     <View style={[styles.container, { height }]}>
-      <Svg width={chartWidth} height={chartHeight}>
+      {/* Zoom indicator and controls */}
+      <View style={styles.zoomControls}>
+        <View style={styles.zoomInfo}>
+          <Text style={styles.zoomTimeRange}>{formatTimeRange()}</Text>
+          <Text style={styles.zoomLevelBadge}>{ZOOM_LEVELS[currentZoomLevel].name}</Text>
+        </View>
+        {scale !== 1 || panOffset !== 0 || yScale !== 1 || yPanOffset !== 0 ? (
+          <TouchableOpacity onPress={handleResetZoom} style={styles.resetButton}>
+            <Text style={styles.resetButtonText}>Reset</Text>
+          </TouchableOpacity>
+        ) : null}
+      </View>
+
+      {/* Gesture detector wrapper - no visual transforms, only data domain changes */}
+      <GestureDetector gesture={finalGesture}>
+        <View>
+          <Svg width={chartWidth} height={chartHeight}>
         {/* Y-axis label */}
         <SvgText
           x={10}
@@ -346,7 +672,7 @@ export const HealthGraph: React.FC<HealthGraphProps> = ({
             d={linePath.linePath}
             fill="none"
             stroke={lineColor}
-            strokeWidth={2.8}
+            strokeWidth={1.5}
             strokeLinecap="round"
             strokeLinejoin="round"
           />
@@ -356,15 +682,129 @@ export const HealthGraph: React.FC<HealthGraphProps> = ({
         {chartData.map((point, index) => {
           const x = chartPadding + ((point.timestamp - startTime) / timeRange) * availableWidth;
           const y = chartPadding + availableHeight - ((point.value - yMin) / valueRange) * availableHeight;
+          const isLatestPoint = index === chartData.length - 1;
+          
           return (
-            <Circle
-              key={`point-${index}`}
-              cx={x}
-              cy={y}
-              r={2}
-              fill={lineColor}
-              opacity={0.6}
-            />
+            <G key={`point-${index}`}>
+              {/* Regular data points with visible circles */}
+              {!isLatestPoint && (
+                <>
+                  {/* Outer circle for visibility */}
+                  <Circle
+                    cx={x}
+                    cy={y}
+                    r={4}
+                    fill={lineColor}
+                    opacity={0.15}
+                  />
+                  {/* Middle circle */}
+                  <Circle
+                    cx={x}
+                    cy={y}
+                    r={3}
+                    fill={lineColor}
+                    opacity={0.3}
+                  />
+                  {/* Main point */}
+                  <Circle
+                    cx={x}
+                    cy={y}
+                    r={2.5}
+                    fill={lineColor}
+                    opacity={0.6}
+                  />
+                </>
+              )}
+              
+              {/* Highlighted latest point with glow effect */}
+              {isLatestPoint && (
+                <>
+                  {/* Outer glow circle */}
+                  <Circle
+                    cx={x}
+                    cy={y}
+                    r={6}
+                    fill={lineColor}
+                    opacity={0.3}
+                  />
+                  {/* Middle glow circle */}
+                  <Circle
+                    cx={x}
+                    cy={y}
+                    r={4}
+                    fill={lineColor}
+                    opacity={0.5}
+                  />
+                  {/* Main point */}
+                  <Circle
+                    cx={x}
+                    cy={y}
+                    r={3.5}
+                    fill={lineColor}
+                    opacity={1}
+                  />
+                  {/* White center dot */}
+                  <Circle
+                    cx={x}
+                    cy={y}
+                    r={1.5}
+                    fill="#FFFFFF"
+                    opacity={1}
+                  />
+                  
+                  {/* Tooltip positioning - ensure it stays within bounds */}
+                  {(() => {
+                    const tooltipWidth = 90;
+                    const tooltipHeight = 28;
+                    const tooltipX = Math.max(
+                      chartPadding + 5,
+                      Math.min(x - tooltipWidth / 2, chartPadding + availableWidth - tooltipWidth - 5)
+                    );
+                    const tooltipY = y - 35;
+                    const tooltipCenterX = tooltipX + tooltipWidth / 2;
+                    
+                    return (
+                      <>
+                        {/* Tooltip background */}
+                        <Rect
+                          x={tooltipX}
+                          y={tooltipY}
+                          width={tooltipWidth}
+                          height={tooltipHeight}
+                          rx={6}
+                          fill="rgba(0, 0, 0, 0.85)"
+                          stroke={lineColor}
+                          strokeWidth={1}
+                        />
+                        
+                        {/* Value text */}
+                        <SvgText
+                          x={tooltipCenterX}
+                          y={tooltipY + 15}
+                          fill="#FFFFFF"
+                          fontSize="11"
+                          fontWeight="700"
+                          textAnchor="middle"
+                        >
+                          {`${Math.round(point.value)} ${yAxisLabel || ''}`.trim()}
+                        </SvgText>
+                        
+                        {/* Time text */}
+                        <SvgText
+                          x={tooltipCenterX}
+                          y={tooltipY + 25}
+                          fill="rgba(255,255,255,0.7)"
+                          fontSize="9"
+                          textAnchor="middle"
+                        >
+                          {formatTime(point.timestamp)}
+                        </SvgText>
+                      </>
+                    );
+                  })()}
+                </>
+              )}
+            </G>
           );
         })}
 
@@ -399,7 +839,14 @@ export const HealthGraph: React.FC<HealthGraphProps> = ({
           stroke="rgba(255,255,255,0.15)"
           strokeWidth={1}
         />
-      </Svg>
+          </Svg>
+        </View>
+      </GestureDetector>
+      
+      {/* Hint text */}
+      <View style={styles.hintContainer}>
+        <Text style={styles.hintText}>👆 Pinch to zoom • Drag to pan • Double-tap to reset</Text>
+      </View>
     </View>
   );
 };
@@ -430,5 +877,55 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '400',
     textAlign: 'center',
+  },
+  zoomControls: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    backgroundColor: 'rgba(0, 0, 0, 0.3)',
+    borderRadius: 8,
+    marginBottom: 8,
+  },
+  zoomInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  zoomTimeRange: {
+    color: 'rgba(255, 255, 255, 0.9)',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  zoomLevelBadge: {
+    color: 'rgba(255, 255, 255, 0.7)',
+    fontSize: 10,
+    fontWeight: '500',
+    backgroundColor: 'rgba(255, 255, 255, 0.15)',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  resetButton: {
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 6,
+  },
+  resetButtonText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  hintContainer: {
+    alignItems: 'center',
+    paddingTop: 8,
+    paddingBottom: 4,
+  },
+  hintText: {
+    color: 'rgba(255, 255, 255, 0.4)',
+    fontSize: 10,
+    fontStyle: 'italic',
   },
 });

@@ -34,4 +34,21 @@ export async function sendTestNotification(message: string = 'Hello, how was you
   });
 }
 
+/**
+ * Send notification when device is registered successfully
+ * @param deviceId Device serial number/ID
+ */
+export async function sendDeviceRegisteredNotification(deviceId: string): Promise<void> {
+  await ensureAndroidChannel();
+  await Notifications.scheduleNotificationAsync({
+    content: {
+      title: 'New Device Registered',
+      body: `Device ${deviceId} has been added to your account`,
+      sound: 'default',
+      data: { type: 'device_registered', deviceId },
+    },
+    trigger: null, // Immediate
+  });
+}
+
 

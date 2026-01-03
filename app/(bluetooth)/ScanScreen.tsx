@@ -41,7 +41,7 @@ const PREVIOUS_DEVICES_KEY = '@slimiot_previous_doze_devices';
 export default function ScanScreen() {
   const router = useRouter();
   const { scannedDevices, isScanning, startScan, stopScan, requestPermissions, connectToDevice, connectionStatus } = useBluetooth();
-  const { setSelectedDevice } = useProvisioning();
+  const { setSelectedDevice, setWifiProvisioningSuccess } = useProvisioning();
   
   const [previousDevices, setPreviousDevices] = useState<{id: string, name: string | null}[]>([]);
   const [hasPermission, setHasPermission] = useState(false);
@@ -416,6 +416,11 @@ export default function ScanScreen() {
     }
     
     console.log(`Connecting to ${device.name} (${device.id})`);
+    
+    // Reset WiFi provisioning success flag for new device
+    setWifiProvisioningSuccess(false);
+    console.log('🔄 Reset WiFi provisioning success flag for new device');
+    
     stopScan();
     setConnectingDeviceId(device.id);
     setCurrentDevice(device);

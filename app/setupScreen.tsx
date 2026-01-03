@@ -10,15 +10,19 @@ import {
   Linking,
   Animated,
   Platform,
+  ScrollView,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { BlurView } from 'expo-blur';
 import { useRouter } from 'expo-router';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
-const { width } = Dimensions.get('window');
+const { width, height } = Dimensions.get('window');
+const isTablet = width >= 768;
 
 export default function SetupScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const scaleAnim = React.useRef(new Animated.Value(1)).current;
 
   const handleSetupDozemate = () => {
@@ -51,7 +55,7 @@ export default function SetupScreen() {
   }, [startZoomAnimation]);
 
   return (
-    <View style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
       <StatusBar barStyle="light-content" backgroundColor="#02041A" />
 
       <LinearGradient
@@ -60,51 +64,57 @@ export default function SetupScreen() {
       />
 
       <TouchableOpacity
-        style={styles.skipButton}
+        style={[styles.skipButton, { top: insets.top + (Platform.OS === 'ios' ? 10 : 10) }]}
         onPress={() => router.replace('/(tabs)/home')}
         activeOpacity={0.8}
       >
         <Text style={styles.skipButtonText}>Skip</Text>
       </TouchableOpacity>
 
-      <View style={styles.contentContainer}>
-        <Text style={styles.title}>Connect your Dozemate</Text>
+      <ScrollView 
+        contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + 40 }]}
+        showsVerticalScrollIndicator={false}
+        bounces={false}
+      >
+        <View style={styles.contentContainer}>
+          <Text style={styles.title}>Connect your Dozemate</Text>
 
-        <View style={styles.deviceContainer}>
-          <Animated.Image
-            source={require('../assets/images/dozemate_transparent.png')}
-            style={[styles.deviceImage, { transform: [{ scale: scaleAnim }] }]}
-            resizeMode="contain"
-          />
-        </View>
-
-        <BlurView intensity={25} tint="dark" style={styles.glassContainer}>
-          <View style={styles.buttonsContainer}>
-            <TouchableOpacity
-              style={styles.setupButton}
-              onPress={handleSetupDozemate}
-              activeOpacity={0.8}
-            >
-              <Text style={styles.setupButtonText}>Setup Dozemate</Text>
-            </TouchableOpacity>
-
-            <View style={styles.orDivider}>
-              <View style={styles.orLine} />
-              <Text style={styles.orText}>OR</Text>
-              <View style={styles.orLine} />
-            </View>
-
-            <TouchableOpacity
-              style={styles.buyButton}
-              onPress={handleBuyDozemate}
-              activeOpacity={0.8}
-            >
-              <Text style={styles.buyButtonText}>Buy Dozemate</Text>
-            </TouchableOpacity>
+          <View style={styles.deviceContainer}>
+            <Animated.Image
+              source={require('../assets/images/dozemate_transparent.png')}
+              style={[styles.deviceImage, { transform: [{ scale: scaleAnim }] }]}
+              resizeMode="contain"
+            />
           </View>
-        </BlurView>
-      </View>
-    </View>
+
+          <BlurView intensity={25} tint="dark" style={styles.glassContainer}>
+            <View style={styles.buttonsContainer}>
+              <TouchableOpacity
+                style={styles.setupButton}
+                onPress={handleSetupDozemate}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.setupButtonText}>Setup Dozemate</Text>
+              </TouchableOpacity>
+
+              <View style={styles.orDivider}>
+                <View style={styles.orLine} />
+                <Text style={styles.orText}>OR</Text>
+                <View style={styles.orLine} />
+              </View>
+
+              <TouchableOpacity
+                style={styles.buyButton}
+                onPress={handleBuyDozemate}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.buyButtonText}>Buy Dozemate</Text>
+              </TouchableOpacity>
+            </View>
+          </BlurView>
+        </View>
+      </ScrollView>
+    </SafeAreaView>
   );
 }
 
@@ -120,36 +130,44 @@ const styles = StyleSheet.create({
     top: 0,
     height: '100%',
   },
+  scrollContent: {
+    flexGrow: 1,
+    minHeight: height,
+  },
   contentContainer: {
-    flex: 1,
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingTop: 80,
-    paddingBottom: 60,
-  },
-  title: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    color: '#FFFFFF',
-    textAlign: 'center',
-    marginBottom: 20,
-    paddingHorizontal: 20,
-  },
-  deviceContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
+    paddingHorizontal: isTablet ? Math.min(width * 0.15, 100) : 20,
+    paddingTop: isTablet ? 40 : 60,
+    paddingBottom: isTablet ? 40 : 20,
+  },
+  title: {
+    fontSize: isTablet ? 36 : 28,
+    fontWeight: 'bold',
+    color: '#FFFFFF',
+    textAlign: 'center',
+    marginBottom: isTablet ? 30 : 20,
+    paddingHorizontal: 20,
+  },
+  deviceContainer: {
+    justifyContent: 'center',
+    alignItems: 'center',
     width: '100%',
-    marginVertical: 20,
+    marginVertical: isTablet ? 30 : 20,
+    minHeight: isTablet ? 300 : 200,
   },
   deviceImage: {
-    width: width * 1.3,
-    height: width * 1.2,
+    width: isTablet ? Math.min(width * 0.6, 500) : Math.min(width * 0.8, 350),
+    height: isTablet ? Math.min(width * 0.55, 450) : Math.min(width * 0.75, 320),
+    maxWidth: 500,
+    maxHeight: 450,
   },
   glassContainer: {
     width: '100%',
-    padding: 20,
+    maxWidth: isTablet ? 500 : '100%',
+    alignSelf: 'center',
+    padding: isTablet ? 30 : 20,
     borderRadius: 30,
     alignItems: 'center',
     overflow: 'hidden',
@@ -214,7 +232,6 @@ const styles = StyleSheet.create({
   },
   skipButton: {
     position: 'absolute',
-    top: (StatusBar.currentHeight || 0) + (Platform.OS === 'ios' ? 50 : 10),
     right: 16,
     backgroundColor: 'rgba(255,255,255,0.12)',
     borderColor: 'rgba(255,255,255,0.25)',

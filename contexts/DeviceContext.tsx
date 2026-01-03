@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { addDeviceToUser, getUserDevices, validateDeviceId } from '@/services/deviceData';
+import { useAuth } from '@/contexts/AuthContext';
 
 type Device = {
   _id: string;
@@ -8,6 +9,7 @@ type Device = {
   deviceType?: string;
   manufacturer?: string;
   status?: string;
+  customName?: string | null;
 };
 
 type DeviceContextType = {
@@ -25,11 +27,20 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
   const [devices, setDevices] = useState<Device[]>([]);
   const [activeDevice, setActiveDeviceState] = useState<Device | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const { auth } = useAuth();
 
-  // Load devices on mount
+  // Load devices on mount, but only if user is logged in
   useEffect(() => {
+    // Only load devices if auth is not loading and user is logged in
+    if (!auth.isLoading && auth.isLoggedIn) {
     loadDevices();
-  }, []);
+    } else if (!auth.isLoading && !auth.isLoggedIn) {
+      // User not logged in - clear devices and set loading to false
+      setDevices([]);
+      setActiveDeviceState(null);
+      setIsLoading(false);
+    }
+  }, [auth.isLoading, auth.isLoggedIn]);
 
   const loadDevices = async () => {
     try {
@@ -37,22 +48,36 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
       const result = await getUserDevices();
       
       if (result.success) {
-        setDevices(result.devices || []);
+        const devicesList = result.devices || [];
+        setDevices(devicesList);
         
-        // Set active device from result or from storage
-        if (result.activeDevice) {
-          const active = result.devices?.find(d => String(d._id) === String(result.activeDevice)) || null;
-          setActiveDeviceState(active);
-          if (active) {
-            await AsyncStorage.setItem('active_device_id', active.deviceId);
-          }
-        } else {
-          // Try to load from storage
+        let active: Device | null = null;
+        
+        // First, try to set active device from backend result
+        if (result.activeDevice && devicesList.length > 0) {
+          active = devicesList.find(d => String(d._id) === String(result.activeDevice)) || null;
+        }
+        
+        // If no active device from backend, try to load from storage
+        if (!active) {
           const storedDeviceId = await AsyncStorage.getItem('active_device_id');
-          if (storedDeviceId && result.devices) {
-            const active = result.devices.find(d => d.deviceId === storedDeviceId) || null;
-            setActiveDeviceState(active);
+          if (storedDeviceId && devicesList.length > 0) {
+            active = devicesList.find(d => d.deviceId === storedDeviceId) || null;
           }
+        }
+        
+        // If still no active device but we have devices, set the first one as active
+        if (!active && devicesList.length > 0) {
+          active = devicesList[0];
+          console.log('[DeviceContext] Auto-setting first device as active:', active.deviceId);
+        }
+        
+        // Set the active device
+        setActiveDeviceState(active);
+        if (active) {
+          await AsyncStorage.setItem('active_device_id', active.deviceId);
+        } else {
+          await AsyncStorage.removeItem('active_device_id');
         }
       }
     } catch (error) {
@@ -105,6 +130,13 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
     setActiveDeviceState(device);
     if (device) {
       await AsyncStorage.setItem('active_device_id', device.deviceId);
+      // Update backend to set this device as active
+      try {
+        const { activateDevice } = await import('@/services/deviceData');
+        await activateDevice(device.deviceId);
+      } catch (error) {
+        console.error('Failed to update backend active device:', error);
+      }
     } else {
       await AsyncStorage.removeItem('active_device_id');
     }

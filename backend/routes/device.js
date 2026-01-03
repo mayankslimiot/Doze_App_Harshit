@@ -6,6 +6,8 @@ const adminMiddleware = require("../middleware/adminMiddleware");
 const mongoose = require('mongoose');
 const DevicePrefix = require('../models/DevicePrefix');
 const Profile = require("../models/Profile");
+const { logger } = require("../utils/logger");
+const { getIO } = require("../services/websocketService");
 const router = express.Router();
 const ID_RX = /^\d{4}-[0-9A-F]{12}$/i;; // 4 digits 12 hex chars
 const pad5 = (n) => String(n).padStart(5, '0');
@@ -14,8 +16,15 @@ const deviceController= require('../controllers/deviceManagementController');
 // --- local handlers so we don't need another controller import ---
 async function getByDeviceId(req, res) {
   try {
-    const device = await Device.findOne({ deviceId: req.params.deviceId });
-    if (!device) return res.status(404).json({ message: 'Device not found' });
+    const device = await Device.findOne({ 
+      deviceId: req.params.deviceId,
+      userId: req.user.userId 
+    });
+    if (!device) {
+      return res.status(403).json({ 
+        message: 'Device not found or access denied' 
+      });
+    }
     res.json({ data: { device } });
   } catch (e) {
     res.status(500).json({ message: 'Server error' });
@@ -27,12 +36,20 @@ async function validateDeviceId(req, res) {
     const { deviceId } = req.query;
     if (!deviceId) return res.status(400).json({ ok: false, message: 'deviceId required' });
 
-    const d = await Device.findOne({ deviceId });
+    // Check ownership - only return device if it belongs to current user
+    const d = await Device.findOne({ 
+      deviceId,
+      userId: req.user.userId 
+    });
+    
+    // If device exists but doesn't belong to user, return exists:false for security
+    const deviceExists = await Device.findOne({ deviceId });
+    
     res.json({
       ok: true,
-      exists: !!d,
+      exists: !!d, // Only true if device exists AND belongs to user
       assigned: !!d?.userId,
-      device: d || null
+      device: d || null // Only return device if user owns it
     });
   } catch (e) {
     res.status(500).json({ ok: false, message: e.message });
@@ -104,6 +121,15 @@ router.post("/add", authMiddleware, async (req, res) => {
     console.log(">>> Creating device with payload:", payload);
     const [device] = await Device.create([payload]);
     console.log(">>> Device created:", device._id, "deviceId:", device.deviceId, "status:", device.status);
+
+    // ✅ Audit log: Device ownership assigned (manual add)
+    logger.info('Device ownership assigned', {
+      deviceId: device.deviceId,
+      userId: req.user.userId,
+      timestamp: now.toISOString(),
+      source: 'device-add',
+      wasReassigned: false
+    });
 
     const user = await User.findById(req.user.userId);
     console.log(">>> Found user:", req.user.userId, "=>", user ? "YES" : "NO");
@@ -578,6 +604,52 @@ router.post("/auto-register", authMiddleware, async (req, res) => {
       device.lastActiveAt = now;
       await device.save();
 
+      // ✅ WebSocket cleanup and audit logging for ownership transfer
+      if (wasReassigned && previousUserId) {
+        const io = getIO();
+        
+        if (io) {
+          try {
+            // Find all sockets for old owner
+            const sockets = await io.in(`user:${previousUserId}`).fetchSockets();
+            
+            sockets.forEach(socket => {
+              // Force leave device room
+              socket.leave(`device:${deviceId}`);
+              
+              // Emit ownership transfer event
+              socket.emit('device_ownership_transferred', {
+                deviceId,
+                message: 'Device ownership has been transferred to another account'
+              });
+            });
+            
+            logger.info('WebSocket cleanup on ownership shift', {
+              deviceId,
+              previousUserId,
+              currentUserId,
+              socketsDisconnected: sockets.length
+            });
+          } catch (wsError) {
+            logger.err(wsError, { 
+              where: 'auto-register: WebSocket cleanup',
+              deviceId,
+              previousUserId 
+            });
+          }
+        }
+
+        // ✅ Audit log: Device ownership transferred
+        logger.info('Device ownership transferred', {
+          deviceId,
+          fromUserId: previousUserId,
+          toUserId: currentUserId,
+          timestamp: now.toISOString(),
+          source: 'auto-register',
+          wasReassigned: true
+        });
+      }
+
     } else {
       // Device is new - create it
       // Extract device type and manufacturer from deviceId (first 2 chars)
@@ -599,6 +671,15 @@ router.post("/auto-register", authMiddleware, async (req, res) => {
         validity: new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000), // 1 year from now
         profileVersion: 1
       });
+
+      // ✅ Audit log: Device ownership assigned (new device)
+      logger.info('Device ownership assigned', {
+        deviceId,
+        userId: currentUserId,
+        timestamp: now.toISOString(),
+        source: 'auto-register',
+        wasReassigned: false
+      });
     }
 
     // Add device to current user's devices array (if not already present)
@@ -618,6 +699,28 @@ router.post("/auto-register", authMiddleware, async (req, res) => {
       }
 
       await currentUser.save();
+    }
+
+    // ✅ Notify new owner via WebSocket (if ownership was transferred)
+    if (wasReassigned) {
+      const io = getIO();
+      if (io) {
+        try {
+          const newOwnerSockets = await io.in(`user:${currentUserId}`).fetchSockets();
+          newOwnerSockets.forEach(socket => {
+            socket.emit('device_added', {
+              deviceId,
+              message: 'Device has been added to your account'
+            });
+          });
+        } catch (wsError) {
+          logger.err(wsError, { 
+            where: 'auto-register: Notify new owner',
+            deviceId,
+            currentUserId 
+          });
+        }
+      }
     }
 
     return res.status(200).json({

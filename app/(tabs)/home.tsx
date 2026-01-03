@@ -22,8 +22,11 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useDevice } from '@/contexts/DeviceContext';
 import { useRouter } from 'expo-router';
 import { getHealthData, getHistoricalData } from '@/services/deviceData';
-import { connectMQTT, disconnectMQTT, setupMQTTMessageHandler, isMQTTConnected } from '@/services/mqttService';
-import type { MqttClient } from 'mqtt';
+// MQTT imports commented out - using WebSocket instead
+// import { connectMQTT, disconnectMQTT, setupMQTTMessageHandler, isMQTTConnected } from '@/services/mqttService';
+// import type { MqttClient } from 'mqtt';
+import { connectWebSocket, disconnectWebSocket, isWebSocketConnected } from '@/services/websocketService';
+import type { Socket } from 'socket.io-client';
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const RNSvg = require('react-native-svg');
@@ -37,16 +40,7 @@ const STROKE_WIDTH = 10;
 const RADIUS = (CIRCLE_SIZE - STROKE_WIDTH) / 2;
 const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
 
-const MOCK_SLEEP = {
-  score: 59,
-  date: new Date(),
-  metrics: [
-    { label: 'Duration', value: '5H 57M', iconName: 'time-outline' },
-    { label: 'Heart Rate', value: '63BPM', iconName: 'heart' },
-    { label: 'Respiration', value: '18RPM', iconName: 'speedometer-outline' },
-    { label: 'Efficiency', value: '56%', iconName: 'trending-up-outline' },
-  ],
-};
+// NOTE: Home should not show mock/static values when device data is unavailable.
 
 const MOCK_MEDITATIONS = [
   {
@@ -74,8 +68,10 @@ const MOCK_MEDITATIONS = [
 
 // small util: generate sample sparkline points
 function genSparklinePoints(widthPx = 120, heightPx = 28, count = 10, min = 0, max = 100) {
-  const values = Array.from({ length: count }, () => Math.random() * (max - min) + min);
-  const stepX = widthPx / (count - 1);
+  // Ensure count is at least 2 to generate valid SVG path
+  const safeCount = Math.max(2, count);
+  const values = Array.from({ length: safeCount }, () => Math.random() * (max - min) + min);
+  const stepX = widthPx / (safeCount - 1);
   const maxVal = Math.max(...values);
   const minVal = Math.min(...values);
   const range = maxVal - minVal || 1;
@@ -83,7 +79,13 @@ function genSparklinePoints(widthPx = 120, heightPx = 28, count = 10, min = 0, m
     const x = i * stepX;
     const y = heightPx - ((v - minVal) / range) * heightPx;
     return `${x},${y}`;
-  });
+  }).filter(p => p && p.includes(',')); // Filter out invalid points
+  // Ensure we have at least 2 points
+  if (points.length < 2) {
+    // Generate at least 2 points if we don't have enough
+    points.push(`${0},${heightPx / 2}`);
+    points.push(`${widthPx},${heightPx / 2}`);
+  }
   return { svgPoints: points.join(' '), raw: values };
 }
 
@@ -160,7 +162,7 @@ export default function HomeScreen() {
   const { auth } = useAuth();
   const { activeDevice } = useDevice();
   const router = useRouter();
-  const [sleepDate, setSleepDate] = React.useState(MOCK_SLEEP.date);
+  const [sleepDate, setSleepDate] = React.useState(new Date());
   const [isDatePickerVisible, setDatePickerVisible] = React.useState(false);
   const [displayScore, setDisplayScore] = React.useState(0);
   const [isSwitcherOpen, setSwitcherOpen] = React.useState(false);
@@ -170,10 +172,14 @@ export default function HomeScreen() {
   const [historicalData, setHistoricalData] = React.useState<any[]>([]);
   const [isLoadingData, setIsLoadingData] = React.useState(false);
   const [lastUpdateTime, setLastUpdateTime] = React.useState<Date | null>(null);
-  const [mqttClient, setMqttClient] = React.useState<MqttClient | null>(null);
-  const [useMQTT, setUseMQTT] = React.useState(true); // Enable MQTT by default (like website)
+  // MQTT client replaced with WebSocket
+  // const [mqttClient, setMqttClient] = React.useState<MqttClient | null>(null);
+  // const [useMQTT, setUseMQTT] = React.useState(true);
+  const [wsSocket, setWsSocket] = React.useState<Socket | null>(null);
+  const [wsConnected, setWsConnected] = React.useState(false);
   // Force update counter to ensure React Native detects changes
   const [updateCounter, setUpdateCounter] = React.useState(0);
+  const [lastStreamAt, setLastStreamAt] = React.useState<number | null>(null);
 
   const carouselRef = React.useRef<ScrollView | null>(null);
   const loopData = React.useMemo(() => {
@@ -198,12 +204,18 @@ export default function HomeScreen() {
       if (healthResult.success && healthResult.data && healthResult.data.length > 0) {
         setLatestHealthData(healthResult.data[0]);
         setLastUpdateTime(new Date());
+      } else {
+        // If backend returns no data, keep UI empty (no mock/static fallback)
+        setLatestHealthData(null);
+        setLastUpdateTime(null);
       }
 
       // Fetch historical data for charts
       const historyResult = await getHistoricalData(activeDevice.deviceId, '24h');
       if (historyResult.success && historyResult.data) {
         setHistoricalData(historyResult.data);
+      } else {
+        setHistoricalData([]);
       }
     } catch (error) {
       console.error('Failed to fetch device data:', error);
@@ -212,23 +224,21 @@ export default function HomeScreen() {
     }
   }, [activeDevice?.deviceId, auth.isLoggedIn]);
 
-  // Setup MQTT connection (same as website)
+  // Setup WebSocket connection (replacing MQTT)
   React.useEffect(() => {
-    if (!activeDevice?.deviceId || !auth.isLoggedIn || !useMQTT) {
+    if (!activeDevice?.deviceId || !auth.isLoggedIn) {
       return;
     }
 
-    console.log('[Home] Setting up MQTT connection for device:', activeDevice.deviceId);
+    const deviceId = activeDevice.deviceId;
     
-    // Setup message handler FIRST (before connection) to ensure we catch all messages
-    // This ensures React detects state changes even when values are similar
+    // Setup message handler for WebSocket
     const messageHandler = (data: any) => {
-      const timestamp = new Date().toLocaleTimeString('en-IN', { hour12: false });
-      console.log(`[${timestamp}] 📱 APP: 🌡️${data.temperature || data.temp || 'N/A'}°C | ❤️${data.heartRate || data.hr || 'N/A'}BPM | 🌬️${data.respiration || data.resp || 'N/A'}RPM | 😰${data.stress || 'N/A'} | 💧${data.humidity || 'N/A'}%`);
+      setLastStreamAt(Date.now());
       
       // CRITICAL: Update state immediately for real-time updates
       // React Native will batch these updates automatically
-      // Use functional state update (like website) to ensure React detects changes
+      // Use functional state update to ensure React detects changes
       // Force update by always creating a new object with current timestamp
       const updateTimestamp = new Date();
       const updateKey = Date.now(); // Unique key for each update
@@ -236,6 +246,18 @@ export default function HomeScreen() {
       // CRITICAL: Update state in a way that React Native will definitely detect
       // Use functional update to ensure we always have latest previous values
       setLatestHealthData((prev: any) => {
+        // Handle respiration data - prioritize new data, but keep previous if new is invalid/zero
+        // Accept any positive value, or keep previous if new data is missing/zero
+        const newRespiration = (data.respiration !== undefined && data.respiration > 0) 
+          ? data.respiration 
+          : ((data.resp !== undefined && data.resp > 0) 
+              ? data.resp 
+              : ((prev?.respiration && prev.respiration > 0) 
+                  ? prev.respiration 
+                  : ((prev?.resp && prev.resp > 0) 
+                      ? prev.resp 
+                      : 0)));
+        
         // Create a completely new object with all fields to ensure reference change
         const newHealthData = {
           // Core health metrics (handle both formats: temp/hr/resp and temperature/heartRate/respiration)
@@ -243,8 +265,8 @@ export default function HomeScreen() {
                        (data.temp !== undefined ? data.temp : (prev?.temperature ?? 0)),
           heartRate: data.heartRate !== undefined ? data.heartRate : 
                      (data.hr !== undefined ? data.hr : (prev?.heartRate ?? 0)),
-          respiration: data.respiration !== undefined ? data.respiration : 
-                       (data.resp !== undefined ? data.resp : (prev?.respiration ?? 0)),
+          respiration: newRespiration,
+          resp: newRespiration, // Also set resp field for compatibility
           stress: data.stress !== undefined ? data.stress : (prev?.stress ?? 0),
           hrv: data.hrv !== undefined ? data.hrv : (prev?.hrv ?? 0),
           
@@ -263,9 +285,6 @@ export default function HomeScreen() {
           _updateKey: updateKey, // Force React to detect change
         };
         
-        // UI update confirmation
-        console.log(`[${timestamp}] ✅ UI Updated: HR=${newHealthData.heartRate || 'N/A'}, Resp=${newHealthData.respiration || 'N/A'}, Temp=${newHealthData.temperature || 'N/A'}`);
-        
         // Always return a new object to ensure React Native detects the change
         return newHealthData;
       });
@@ -276,8 +295,11 @@ export default function HomeScreen() {
       // Force update counter to ensure useMemo recomputes
       setUpdateCounter(prev => prev + 1);
       
-      // Update historical data array (keep last 100 points for charts)
+      // Update historical data array (keep only last 30 minutes - sliding window)
       setHistoricalData((prev) => {
+        const now = updateTimestamp.getTime();
+        const thirtyMinutesAgo = now - (30 * 60 * 1000); // 30 minutes in milliseconds
+        
         const newDataPoint = {
           temperature: data.temperature ?? data.temp ?? 0,
           heartRate: data.heartRate ?? data.hr ?? 0,
@@ -289,11 +311,117 @@ export default function HomeScreen() {
           eco2: data.eco2 ?? 0,
           tvoc: data.tvoc ?? 0,
           etoh: data.etoh ?? 0,
-          timestamp: data.timestamp || new Date(),
+          timestamp: updateTimestamp,
         };
-        const newData = [...prev, newDataPoint];
-        return newData.slice(-100);
+        
+        // Filter out old data points (older than 30 minutes) and add new point
+        const filteredData = prev.filter((point) => {
+          const pointTime = point.timestamp instanceof Date ? point.timestamp.getTime() : new Date(point.timestamp).getTime();
+          return pointTime >= thirtyMinutesAgo;
+        });
+        
+        // Add new point and ensure it's sorted by timestamp
+        const newData = [...filteredData, newDataPoint].sort((a, b) => {
+          const timeA = a.timestamp instanceof Date ? a.timestamp.getTime() : new Date(a.timestamp).getTime();
+          const timeB = b.timestamp instanceof Date ? b.timestamp.getTime() : new Date(b.timestamp).getTime();
+          return timeA - timeB;
+        });
+        
+        return newData;
       });
+    };
+
+    // Connect to WebSocket server
+    let socketInstance: Socket | null = null;
+    const currentDeviceId = activeDevice.deviceId; // Capture deviceId to check if it changed
+    
+    connectWebSocket(currentDeviceId, messageHandler)
+      .then((socket) => {
+        // Check if device hasn't changed during connection
+        if (activeDevice?.deviceId !== currentDeviceId) {
+          if (socket) {
+            disconnectWebSocket();
+          }
+          return;
+        }
+        
+        if (socket) {
+          socketInstance = socket;
+          setWsSocket(socket);
+          setWsConnected(socket.connected === true);
+        }
+      })
+      .catch((error) => {
+        console.error('[Home] WebSocket connection error:', error);
+      });
+
+    // Monitor connection status
+    const checkConnection = setInterval(() => {
+      // Check if device has changed
+      if (activeDevice?.deviceId !== currentDeviceId) {
+        clearInterval(checkConnection);
+        disconnectWebSocket();
+        setWsSocket(null);
+        setWsConnected(false);
+        setLastStreamAt(null);
+        return;
+      }
+      
+      const isConnected = isWebSocketConnected();
+      setWsConnected(isConnected);
+    }, 5000);
+
+    // Initial fetch for historical data
+    fetchDeviceData();
+
+    // Cleanup on unmount or device change
+    return () => {
+      clearInterval(checkConnection);
+      // Only disconnect if this is still the active device
+      if (activeDevice?.deviceId === currentDeviceId) {
+        disconnectWebSocket();
+      }
+      setWsSocket(null);
+      setWsConnected(false);
+      setLastStreamAt(null);
+    };
+  }, [activeDevice?.deviceId, auth.isLoggedIn]);
+
+  // Keep wsConnected reactive to actual socket events (so dot/polling update immediately)
+  React.useEffect(() => {
+    if (!wsSocket) return;
+
+    const onConnect = () => setWsConnected(true);
+    const onDisconnect = () => setWsConnected(false);
+    const onConnectError = () => setWsConnected(false);
+
+    wsSocket.on('connect', onConnect);
+    wsSocket.on('disconnect', onDisconnect);
+    wsSocket.on('connect_error', onConnectError);
+
+    // Initialize from current state
+    setWsConnected(wsSocket.connected === true);
+
+    return () => {
+      wsSocket.off('connect', onConnect);
+      wsSocket.off('disconnect', onDisconnect);
+      wsSocket.off('connect_error', onConnectError);
+    };
+  }, [wsSocket]);
+
+  /* MQTT CODE COMMENTED OUT - Using WebSocket instead
+  // Setup MQTT connection (same as website)
+  React.useEffect(() => {
+    if (!activeDevice?.deviceId || !auth.isLoggedIn || !useMQTT) {
+      return;
+    }
+
+    console.log('[Home] Setting up MQTT connection for device:', activeDevice.deviceId);
+    
+    // Setup message handler FIRST (before connection) to ensure we catch all messages
+    // This ensures React detects state changes even when values are similar
+    const messageHandler = (data: any) => {
+      // ... MQTT message handler code ...
     };
 
     // Connect to MQTT broker (this will also set up the message handler)
@@ -333,7 +461,29 @@ export default function HomeScreen() {
       setMqttClient(null);
     };
   }, [activeDevice?.deviceId, auth.isLoggedIn, useMQTT]);
+  */
 
+  // Fallback: HTTP polling if WebSocket is not connected
+  React.useEffect(() => {
+    if (wsConnected) {
+      return; // Don't poll if WebSocket is active
+    }
+
+    if (!activeDevice?.deviceId || !auth.isLoggedIn) {
+      return;
+    }
+
+    fetchDeviceData();
+    
+    // Poll for updates every 30 seconds (fallback mode)
+    const pollInterval = setInterval(() => {
+      fetchDeviceData();
+    }, 30000);
+
+    return () => clearInterval(pollInterval);
+  }, [fetchDeviceData, wsConnected, activeDevice?.deviceId, auth.isLoggedIn]);
+
+  /* MQTT FALLBACK CODE COMMENTED OUT
   // Fallback: HTTP polling if MQTT is disabled or fails
   React.useEffect(() => {
     if (!useMQTT || mqttClient) {
@@ -354,6 +504,7 @@ export default function HomeScreen() {
 
     return () => clearInterval(pollInterval);
   }, [fetchDeviceData, useMQTT, mqttClient, activeDevice?.deviceId, auth.isLoggedIn]);
+  */
 
   React.useEffect(() => {
     requestAnimationFrame(() => {
@@ -382,9 +533,24 @@ export default function HomeScreen() {
   const progressAnim = React.useRef(new Animated.Value(0)).current;
   const scoreAnim = React.useRef(new Animated.Value(0)).current;
 
+  const hasAnyDeviceData = React.useMemo(() => {
+    if (!latestHealthData) return false;
+    const anyNonZero =
+      (latestHealthData.heartRate ?? latestHealthData.hr ?? 0) > 0 ||
+      (latestHealthData.respiration ?? latestHealthData.resp ?? 0) > 0 ||
+      (latestHealthData.temperature ?? latestHealthData.temp ?? 0) > 0 ||
+      (latestHealthData.humidity ?? 0) > 0 ||
+      (latestHealthData.stress ?? 0) > 0 ||
+      (latestHealthData.iaq ?? 0) > 0 ||
+      (latestHealthData.eco2 ?? 0) > 0 ||
+      (latestHealthData.tvoc ?? 0) > 0 ||
+      (latestHealthData.etoh ?? 0) > 0;
+    return anyNonZero;
+  }, [latestHealthData]);
+
   // Calculate sleep score from latest data (if available)
   const sleepScore = React.useMemo(() => {
-    if (!latestHealthData) return MOCK_SLEEP.score;
+    if (!latestHealthData) return 0;
     
     // First, try to use SleepQuality from metrics if available (backend provides this)
     const sleepQuality = latestHealthData.metrics?.SleepQuality;
@@ -398,7 +564,8 @@ export default function HomeScreen() {
     const stress = latestHealthData.stress || 0;
     const hrv = latestHealthData.hrv || 0;
     
-    if (hr === 0 || resp === 0) return MOCK_SLEEP.score;
+    // If there isn't enough data, keep UI empty (no mock/static fallback)
+    if (hr === 0 || resp === 0) return 0;
     
     // Multi-factor sleep score calculation:
     // 1. Heart rate score (optimal: 50-70 BPM for sleep)
@@ -452,6 +619,7 @@ export default function HomeScreen() {
   }, [latestHealthData]);
 
   React.useEffect(() => {
+    // Keep empty (0) when there is no device data; no mock fallback.
     Animated.parallel([
       Animated.timing(progressAnim, {
         toValue: sleepScore / 100,
@@ -506,23 +674,14 @@ export default function HomeScreen() {
        // Calculate sleep duration (mock for now, could be calculated from historical data)
        const sleepDuration = '--';
 
-       const metrics = [
-         { key: 'sleep', name: 'Sleep', value: sleepDuration, unit: '', icon: '😴', colors: ['#2B2E57', '#1B1E3D'] as const },
-         { key: 'heartRate', name: 'Heart Rate', value: hr > 0 ? String(Math.round(hr)) : '--', unit: 'BPM', icon: '❤️', colors: ['#2B2E57', '#1B1E3D'] as const },
-         { key: 'respiration', name: 'Respiration Rate', value: resp > 0 ? String(Math.round(resp)) : '--', unit: 'RPM', icon: '🌬️', colors: ['#24425F', '#18253A'] as const },
-         { key: 'stress', name: 'Stress', value: stressText, unit: '', icon: '😮‍💨', colors: ['#4A2B2B', '#1E1414'] as const },
-       ];
+      const metrics = [
+        { key: 'heartRate', name: 'Heart Rate', value: hr > 0 ? String(Math.round(hr)) : '--', unit: 'BPM', icon: '❤️', colors: ['#2B2E57', '#1B1E3D'] as const },
+        { key: 'respiration', name: 'Respiration Rate', value: resp > 0 ? String(Math.round(resp)) : '--', unit: 'RPM', icon: '🫁', colors: ['#24425F', '#18253A'] as const },
+        { key: 'stress', name: 'Stress', value: stressText, unit: '', icon: '😮‍💨', colors: ['#4A2B2B', '#1E1414'] as const },
+        { key: 'sleep', name: 'Sleep', value: sleepDuration, unit: '', icon: '😴', colors: ['#2B2E57', '#1B1E3D'] as const },
+      ];
        
-       // Debug log when metrics change
-       console.log('[Home] Health metrics updated:', {
-         heartRate: metrics[1].value,
-         respiration: metrics[2].value,
-         stress: metrics[3].value,
-         timestamp: latestHealthData?.timestamp,
-         updateCounter: updateCounter,
-       });
-       
-       return metrics;
+      return metrics;
      },
      [latestHealthData, updateCounter] // Include updateCounter to force recomputation
    );
@@ -547,15 +706,7 @@ export default function HomeScreen() {
          { key: 'etoh', name: 'ETOH', value: etoh > 0 ? etoh.toFixed(2) : '--', unit: 'ppb', icon: '🍷', colors: ['#2B2F3F', '#161925'] as const },
        ];
        
-       // Debug log when metrics change
-       console.log('[Home] Environment metrics updated:', {
-         temperature: metrics[0].value,
-         humidity: metrics[1].value,
-         iaq: metrics[2].value,
-         updateCounter: updateCounter,
-       });
-       
-       return metrics;
+      return metrics;
      },
      [latestHealthData, updateCounter] // Include updateCounter to force recomputation
    );
@@ -565,17 +716,24 @@ export default function HomeScreen() {
     const map: Record<string, { svgPoints: string; raw: number[] }> = {};
     
     if (historicalData.length === 0) {
-      // Fallback to mock data if no historical data
-      [...healthMetrics, ...envMetrics].forEach((m) => {
-        map[m.key] = genSparklinePoints(120, 28, 12, 0, 100);
-      });
+      // No historical data: keep charts empty (no random/mock sparklines)
       return map;
     }
 
     // Map historical data to sparklines
     const dataMap: Record<string, number[]> = {
-      heartRate: historicalData.map(d => d.heartRate || d.hr || 0).filter(v => v > 0),
-      respiration: historicalData.map(d => d.respiration || d.resp || 0).filter(v => v > 0),
+      heartRate: historicalData
+        .map((d) => {
+          const hr = d.heartRate ?? d.hr ?? null;
+          return hr !== null && hr !== undefined && !isNaN(hr) ? Number(hr) : null;
+        })
+        .filter((v): v is number => v !== null && v > 0),
+      respiration: historicalData
+        .map(d => {
+          const resp = d.respiration ?? d.resp ?? null;
+          return resp !== null && resp !== undefined && !isNaN(resp) ? Number(resp) : null;
+        })
+        .filter((v): v is number => v !== null && v > 0),
       stress: historicalData.map(d => d.stress || 0).filter(v => v > 0),
       temp: historicalData.map(d => d.temperature || d.temp || 0).filter(v => v > 0),
       hum: historicalData.map(d => d.humidity || 0).filter(v => v > 0),
@@ -587,7 +745,8 @@ export default function HomeScreen() {
 
     [...healthMetrics, ...envMetrics].forEach((m) => {
       const values = dataMap[m.key] || [];
-      if (values.length > 0) {
+      if (values.length >= 2) {
+        // Ensure we have at least 2 points for valid SVG path
         const min = Math.min(...values);
         const max = Math.max(...values);
         const range = max - min || 1;
@@ -596,10 +755,16 @@ export default function HomeScreen() {
           const x = i * stepX;
           const y = 28 - ((v - min) / range) * 28;
           return `${x},${y}`;
-        });
-        map[m.key] = { svgPoints: points.join(' '), raw: values };
+        }).filter(p => p && p.includes(',')); // Filter out invalid points
+        
+        // Ensure we have at least 2 valid points
+        if (points.length >= 2) {
+          map[m.key] = { svgPoints: points.join(' '), raw: values };
+        } else {
+          // Not enough valid points: keep empty (no random/mock fallback)
+        }
       } else {
-        map[m.key] = genSparklinePoints(120, 28, 12, 0, 100);
+        // Not enough data: keep empty (no random/mock fallback)
       }
     });
     
@@ -623,34 +788,32 @@ export default function HomeScreen() {
           />
         }
       >
-        {/* Device status indicator */}
-        {activeDevice ? (
-          <View style={styles.deviceStatusBar}>
-            <Text style={styles.deviceStatusText}>
-              {isMQTTConnected() ? '🟢' : '🟡'} Device: {activeDevice.deviceId}
-              {isMQTTConnected() ? ' (MQTT Live)' : ' (HTTP Polling - MQTT WebSocket not available)'}
-              {lastUpdateTime && ` • Updated: ${lastUpdateTime.toLocaleTimeString()}`}
-            </Text>
-          </View>
-        ) : (
-          <View style={styles.deviceStatusBar}>
-            <Text style={styles.deviceStatusText}>
-              ⚠️ No device connected. Add a device in Settings to see live data.
-            </Text>
-          </View>
-        )}
-
         {/* --- Sleep Card --- */}
         <View style={styles.card}>
           <View style={styles.cardHeader}>
             <Text style={styles.cardTitle}>Your Sleep</Text>
-            <TouchableOpacity
-              style={styles.avatarPill}
-              onPress={() => setSwitcherOpen(true)}
-              activeOpacity={0.8}
-            >
-              <Text style={styles.avatarText}>{initials}</Text>
-            </TouchableOpacity>
+            <View style={styles.cardHeaderRight}>
+              {activeDevice && (
+                <View style={styles.deviceNameIndicator}>
+                  <View
+                    style={[
+                      styles.deviceIndicatorDot,
+                      wsConnected && lastStreamAt !== null ? styles.deviceIndicatorGreen : styles.deviceIndicatorYellow,
+                    ]}
+                  />
+                  <Text style={styles.deviceNameText}>
+                    {activeDevice.customName || activeDevice.deviceId}
+                  </Text>
+                </View>
+              )}
+              <TouchableOpacity
+                style={styles.avatarPill}
+                onPress={() => setSwitcherOpen(true)}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.avatarText}>{initials}</Text>
+              </TouchableOpacity>
+            </View>
           </View>
 
           <TouchableOpacity style={styles.dateCenter} onPress={() => setDatePickerVisible(true)}>
@@ -693,7 +856,12 @@ export default function HomeScreen() {
           </View>
 
           <View style={styles.metricsRow}>
-            {MOCK_SLEEP.metrics.map((m) => (
+            {[
+              { label: 'Duration', value: '--', iconName: 'time-outline' },
+              { label: 'Heart Rate', value: hasAnyDeviceData ? `${Math.round(latestHealthData?.heartRate ?? latestHealthData?.hr ?? 0)}BPM` : '--', iconName: 'heart' },
+              { label: 'Respiration', value: hasAnyDeviceData && (latestHealthData?.respiration > 0 || latestHealthData?.resp > 0) ? `${Math.round(latestHealthData?.respiration ?? latestHealthData?.resp ?? 0)}RPM` : '--', iconName: 'pulse-outline' },
+              { label: 'Efficiency', value: '--', iconName: 'trending-up-outline' },
+            ].map((m) => (
               <View key={m.label} style={styles.metricItem}>
                 <Ionicons name={m.iconName as any} size={18} color="#C7D6FF" />
                 <Text key={`metric-${m.label}-${updateCounter}`} style={styles.metricValue}>{m.value}</Text>
@@ -718,7 +886,7 @@ export default function HomeScreen() {
               return rows.map((pair, rowIndex) => (
                 <View key={`health-row-${rowIndex}`} style={styles.envRow}>
                   {pair.map((m) => {
-                    const spark = sparklines[m.key] || genSparklinePoints(120, 28, 12);
+                    const spark = sparklines[m.key];
                     const Container: any = m.key === 'sleep' || m.key === 'heartRate' || m.key === 'respiration' || m.key === 'stress' ? TouchableOpacity : View;
                     return (
                       <Container
@@ -755,15 +923,30 @@ export default function HomeScreen() {
                           {/* mini chart - bar chart for sleep and stress, sparkline for others */}
                           <View style={styles.sparklineWrap}>
                             {m.key === 'sleep' ? (
-                              <MiniSleepChart width={120} height={32} />
+                              // No device data -> keep empty (no static chart)
+                              hasAnyDeviceData ? <MiniSleepChart width={120} height={32} /> : null
                             ) : m.key === 'stress' ? (
-                              <MiniStressChart width={120} height={32} />
+                              hasAnyDeviceData ? <MiniStressChart width={120} height={32} /> : null
                             ) : (
                               <Svg height={28} width={120}>
                                 {(() => {
-                                  const pts = spark.svgPoints.split(' ');
-                                  if (!pts.length) return null;
-                                  const d = `M ${pts[0]} L ${pts.slice(1).join(' L ')}`;
+                                  if (!spark || !spark.svgPoints) {
+                                    return null;
+                                  }
+                                  
+                                  const pts = spark.svgPoints.split(' ').filter(p => p.trim().length > 0);
+                                  if (!pts.length || pts.length < 2) {
+                                    return null;
+                                  }
+                                  
+                                  // Ensure we have valid coordinates
+                                  const validPts = pts.filter(pt => pt && pt.includes(','));
+                                  if (validPts.length < 2) {
+                                    return null;
+                                  }
+                                  
+                                  const d = `M ${validPts[0]} L ${validPts.slice(1).join(' L ')}`;
+                                  
                                   return (
                                     <Path
                                       d={d}
@@ -807,7 +990,7 @@ export default function HomeScreen() {
               return rows.map((pair, rowIndex) => (
                 <View key={`env-row-${rowIndex}`} style={styles.envRow}>
                   {pair.map((m) => {
-                    const spark = sparklines[m.key] || genSparklinePoints(120, 28, 12);
+                    const spark = sparklines[m.key];
                     return (
                       <View
                         key={m.key}
@@ -835,9 +1018,13 @@ export default function HomeScreen() {
                            <View style={styles.sparklineWrap}>
                              <Svg height={28} width={120}>
                                {(() => {
-                                 const pts = spark.svgPoints.split(' ');
-                                 if (!pts.length) return null;
-                                 const d = `M ${pts[0]} L ${pts.slice(1).join(' L ')}`;
+                                 if (!spark || !spark.svgPoints) return null;
+                                 const pts = spark.svgPoints.split(' ').filter(p => p.trim().length > 0);
+                                 if (!pts.length || pts.length < 2) return null;
+                                 // Ensure we have valid coordinates
+                                 const validPts = pts.filter(pt => pt && pt.includes(','));
+                                 if (validPts.length < 2) return null;
+                                 const d = `M ${validPts[0]} L ${validPts.slice(1).join(' L ')}`;
                                  return (
                                    <Path
                                      d={d}
@@ -961,6 +1148,29 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(255,255,255,0.08)',
   },
   cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  cardHeaderRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  deviceNameIndicator: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    gap: 6,
+    marginRight: 8,
+  },
+  deviceIndicatorDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  deviceIndicatorGreen: {
+    backgroundColor: '#4CAF50',
+  },
+  deviceIndicatorYellow: {
+    backgroundColor: '#FFA500',
+  },
+  deviceNameText: {
+    color: 'rgba(255,255,255,0.8)',
+    fontSize: 12,
+    fontWeight: '600',
+  },
   cardTitle: { color: '#FFF', fontSize: 18, fontWeight: '700' },
   infoPill: {
     width: 24,
@@ -1164,19 +1374,4 @@ const styles = StyleSheet.create({
   addAccountText: { color: '#C7B9FF', fontWeight: '800' },
   manageDeviceRow: { paddingVertical: 10 },
   manageDeviceText: { color: 'rgba(255,255,255,0.8)' },
-  
-  // Device status bar
-  deviceStatusBar: {
-    backgroundColor: 'rgba(255,255,255,0.05)',
-    padding: 12,
-    borderRadius: 12,
-    marginBottom: 16,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.1)',
-  },
-  deviceStatusText: {
-    color: 'rgba(255,255,255,0.8)',
-    fontSize: 12,
-    textAlign: 'center',
-  },
 });

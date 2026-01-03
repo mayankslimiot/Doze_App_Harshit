@@ -30,14 +30,14 @@ export async function validateDeviceId(deviceId: string): Promise<{
   try {
     const normalizedId = deviceId.trim().toUpperCase();
     
-    // Validate format: XXXX-XXXXXXXXXXXX (4 digits, hyphen, 12 hex chars)
-    const formatRegex = /^\d{4}-[0-9A-F]{12}$/i;
+    // Validate format: 16 hexadecimal characters (e.g., 77089FB890EAA298)
+    const formatRegex = /^[0-9A-F]{16}$/i;
     if (!formatRegex.test(normalizedId)) {
       return {
         ok: false,
         exists: false,
         assigned: false,
-        message: 'Device ID must match format: XXXX-XXXXXXXXXXXX (4 digits, hyphen, 12 hex characters)',
+        message: 'Device ID must be exactly 16 hexadecimal characters (e.g., 77089FB890EAA298)',
       };
     }
 
@@ -339,6 +339,179 @@ export async function getRespirationLive(
   }
 }
 
+// Get monthly aggregated heart rate data (30 days, one per day)
+export async function getMonthlyHeartRateData(
+  deviceId: string,
+  monthStart?: Date
+): Promise<{
+  success: boolean;
+  data?: Array<{
+    day: number;
+    dayIndex: number;
+    date: string;
+    avg: number | null;
+    min: number | null;
+    max: number | null;
+    isPartial: boolean;
+    count: number;
+  }>;
+  monthStart?: string;
+  monthEnd?: string;
+  daysInMonth?: number;
+  message?: string;
+}> {
+  try {
+    const normalizedId = deviceId.trim().toUpperCase();
+    const headers = await getAuthHeaders();
+    
+    const params = new URLSearchParams();
+    if (monthStart) {
+      params.append('monthStart', monthStart.toISOString());
+    }
+
+    const queryString = params.toString();
+    const url = apiUrl(`/api/data/health/monthly/${normalizedId}${queryString ? `?${queryString}` : ''}`);
+
+    const response = await fetch(url, {
+      method: 'GET',
+      headers,
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      return {
+        success: false,
+        message: data.message || 'Failed to fetch monthly heart rate data',
+      };
+    }
+
+    return {
+      success: true,
+      data: data.data || [],
+      monthStart: data.monthStart,
+      monthEnd: data.monthEnd,
+      daysInMonth: data.daysInMonth,
+    };
+  } catch (error: any) {
+    return {
+      success: false,
+      message: error.message || 'Network error',
+    };
+  }
+}
+
+// Get weekly aggregated heart rate data (7 days, one per day)
+export async function getWeeklyHeartRateData(
+  deviceId: string,
+  weekStart?: Date
+): Promise<{
+  success: boolean;
+  data?: Array<{
+    day: string;
+    dayIndex: number;
+    date: string;
+    avg: number | null;
+    min: number | null;
+    max: number | null;
+    isPartial: boolean;
+    count: number;
+  }>;
+  weekStart?: string;
+  weekEnd?: string;
+  message?: string;
+}> {
+  try {
+    const normalizedId = deviceId.trim().toUpperCase();
+    const headers = await getAuthHeaders();
+    
+    const params = new URLSearchParams();
+    if (weekStart) {
+      params.append('weekStart', weekStart.toISOString());
+    }
+
+    const queryString = params.toString();
+    const url = apiUrl(`/api/data/health/weekly/${normalizedId}${queryString ? `?${queryString}` : ''}`);
+
+    const response = await fetch(url, {
+      method: 'GET',
+      headers,
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      return {
+        success: false,
+        message: data.message || 'Failed to fetch weekly heart rate data',
+      };
+    }
+
+    return {
+      success: true,
+      data: data.data || [],
+      weekStart: data.weekStart,
+      weekEnd: data.weekEnd,
+    };
+  } catch (error: any) {
+    return {
+      success: false,
+      message: error.message || 'Network error',
+    };
+  }
+}
+
+// Get heart rate graph data (backend-owned aggregation)
+export async function getHeartRateGraph(
+  deviceId: string,
+  zoomLevel: number = 0
+): Promise<{
+  success: boolean;
+  data?: {
+    points: Array<{ x: number; y: number }>;
+    xDomain: [number, number];
+    yDomain: [number, number];
+    zoomLevel: {
+      index: number;
+      label: string;
+      rangeSec: number;
+    };
+  };
+  message?: string;
+}> {
+  try {
+    const normalizedId = deviceId.trim().toUpperCase();
+    const headers = await getAuthHeaders();
+    
+    const response = await fetch(
+      apiUrl(`/api/data/health/heart-rate/graph/${normalizedId}?zoomLevel=${zoomLevel}`),
+      {
+        method: 'GET',
+        headers,
+      }
+    );
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      return {
+        success: false,
+        message: data.message || 'Failed to fetch heart rate graph data',
+      };
+    }
+
+    return {
+      success: true,
+      data: data.data,
+    };
+  } catch (error: any) {
+    return {
+      success: false,
+      message: error.message || 'Network error',
+    };
+  }
+}
+
 // Get live stress data
 export async function getStressLive(
   deviceId: string,
@@ -391,5 +564,306 @@ export async function getStressLive(
   }
 }
 
+// Get WiFi connection status for a device
+export async function getWiFiStatus(
+  deviceId: string
+): Promise<{
+  success: boolean;
+  connected?: boolean;
+  status?: string;
+  wifiStatus?: string;
+  wifiConnectedAt?: string;
+  wifiLastAttempt?: string;
+  deviceStatus?: string;
+  message?: string;
+}> {
+  try {
+    if (!deviceId) {
+      return {
+        success: false,
+        message: 'Device ID is required',
+      };
+    }
+    
+    const headers = await getAuthHeaders();
+    
+    // Use the API endpoint for WiFi status
+    // deviceId should be the serial number from Device Information Service
+    const response = await fetch(apiUrl(`/api/http/wifi-status/${deviceId}`), {
+      method: 'GET',
+      headers,
+    });
 
+    const data = await response.json();
+
+    if (!response.ok) {
+      return {
+        success: false,
+        message: data.message || 'Failed to fetch WiFi status',
+      };
+    }
+
+    // API response format:
+    // {
+    //   "success": true,
+    //   "deviceId": "3BCE9E1BFA48CF12",
+    //   "wifiStatus": "CONNECTED",
+    //   "wifiConnectedAt": "2025-12-18T13:40:56.533Z",
+    //   "wifiLastAttempt": "2025-12-18T13:40:56.533Z",
+    //   "deviceStatus": "active",
+    //   "isConnected": true
+    // }
+    return {
+      success: true,
+      connected: data.isConnected === true || data.wifiStatus === 'CONNECTED',
+      status: data.wifiStatus?.toLowerCase() || (data.isConnected ? 'connected' : 'disconnected'),
+      wifiStatus: data.wifiStatus,
+      wifiConnectedAt: data.wifiConnectedAt,
+      wifiLastAttempt: data.wifiLastAttempt,
+      deviceStatus: data.deviceStatus,
+    };
+  } catch (error: any) {
+    return {
+      success: false,
+      message: error.message || 'Network error',
+    };
+  }
+}
+
+/**
+ * Auto-register device to current user
+ * Called automatically when device connects to WiFi
+ * @param serialNumber Device serial number (deviceId)
+ * @returns Registration result
+ */
+export async function autoRegisterDevice(
+  serialNumber: string
+): Promise<{
+  success: boolean;
+  message?: string;
+  device?: {
+    deviceId: string;
+    _id: string;
+    userId: string;
+    status: string;
+    wifiStatus: string;
+    wifiConnectedAt: string;
+  };
+  wasReassigned?: boolean;
+  error?: string;
+}> {
+  try {
+    const headers = await getAuthHeaders();
+    
+    // Check if user is authenticated
+    if (!headers['Authorization']) {
+      return {
+        success: false,
+        error: 'AUTH_REQUIRED',
+        message: 'Please log in to register device',
+      };
+    }
+
+    const response = await fetch(
+      apiUrl('/api/devices/auto-register'),
+      {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ serialNumber }),
+      }
+    );
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      
+      if (response.status === 401) {
+        return {
+          success: false,
+          error: 'AUTH_REQUIRED',
+          message: 'Please log in to register device',
+        };
+      }
+
+      return {
+        success: false,
+        error: 'REGISTRATION_FAILED',
+        message: errorData.message || `Failed to register device (${response.status})`,
+      };
+    }
+
+    const data = await response.json();
+    return {
+      success: true,
+      message: data.message || 'Device registered successfully',
+      device: data.device,
+      wasReassigned: data.wasReassigned || false,
+    };
+  } catch (error) {
+    console.error('Error auto-registering device:', error);
+    return {
+      success: false,
+      error: 'NETWORK_ERROR',
+      message: error instanceof Error ? error.message : 'Network error occurred',
+    };
+  }
+}
+
+/**
+ * Activate a device (set as active device for user)
+ * @param deviceId Device ID to activate
+ * @returns Activation result
+ */
+export async function activateDevice(
+  deviceId: string
+): Promise<{
+  success: boolean;
+  message?: string;
+  error?: string;
+}> {
+  try {
+    const headers = await getAuthHeaders();
+    
+    if (!headers['Authorization']) {
+      return {
+        success: false,
+        error: 'AUTH_REQUIRED',
+        message: 'Please log in to activate device',
+      };
+    }
+
+    const normalizedId = deviceId.trim().toUpperCase();
+    const response = await fetch(
+      apiUrl(`/api/devices/activate/${normalizedId}`),
+      {
+        method: 'PATCH',
+        headers,
+      }
+    );
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      
+      if (response.status === 401) {
+        return {
+          success: false,
+          error: 'AUTH_REQUIRED',
+          message: 'Please log in to activate device',
+        };
+      }
+
+      if (response.status === 404) {
+        return {
+          success: false,
+          error: 'DEVICE_NOT_FOUND',
+          message: 'Device not found',
+        };
+      }
+
+      if (response.status === 403) {
+        return {
+          success: false,
+          error: 'DEVICE_NOT_OWNED',
+          message: 'Device does not belong to this user',
+        };
+      }
+
+      return {
+        success: false,
+        error: 'ACTIVATION_FAILED',
+        message: errorData.message || `Failed to activate device (${response.status})`,
+      };
+    }
+
+    const data = await response.json();
+    return {
+      success: true,
+      message: data.message || 'Device activated successfully',
+    };
+  } catch (error) {
+    console.error('Error activating device:', error);
+    return {
+      success: false,
+      error: 'NETWORK_ERROR',
+      message: error instanceof Error ? error.message : 'Network error occurred',
+    };
+  }
+}
+
+/**
+ * Update device custom name for current user
+ * @param deviceId Device ID
+ * @param customName Custom name for the device (null/empty to remove)
+ * @returns Update result
+ */
+export async function updateDeviceName(
+  deviceId: string,
+  customName: string | null
+): Promise<{
+  success: boolean;
+  message?: string;
+  customName?: string | null;
+  error?: string;
+}> {
+  try {
+    const headers = await getAuthHeaders();
+    
+    if (!headers['Authorization']) {
+      return {
+        success: false,
+        error: 'AUTH_REQUIRED',
+        message: 'Please log in to update device name',
+      };
+    }
+
+    const normalizedId = deviceId.trim().toUpperCase();
+    const response = await fetch(
+      apiUrl(`/api/devices/rename/${normalizedId}`),
+      {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify({ customName }),
+      }
+    );
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      
+      if (response.status === 401) {
+        return {
+          success: false,
+          error: 'AUTH_REQUIRED',
+          message: 'Please log in to update device name',
+        };
+      }
+
+      if (response.status === 404) {
+        return {
+          success: false,
+          error: 'DEVICE_NOT_FOUND',
+          message: errorData.message || 'Device not found',
+        };
+      }
+
+      return {
+        success: false,
+        error: 'UPDATE_FAILED',
+        message: errorData.message || `Failed to update device name (${response.status})`,
+      };
+    }
+
+    const data = await response.json();
+    return {
+      success: true,
+      message: data.message || 'Device name updated successfully',
+      customName: data.customName || null,
+    };
+  } catch (error) {
+    console.error('Error updating device name:', error);
+    return {
+      success: false,
+      error: 'NETWORK_ERROR',
+      message: error instanceof Error ? error.message : 'Network error occurred',
+    };
+  }
+}
 

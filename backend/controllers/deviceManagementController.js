@@ -225,6 +225,15 @@ exports.getDeviceHistory = async (req, res) => {
       return res.status(400).json({ status: "fail", message: "deviceId is required" });
     }
 
+    // ✅ Verify device ownership before allowing access to history
+    const device = await Device.findOne({ deviceId, userId: req.user.userId });
+    if (!device) {
+      return res.status(403).json({ 
+        status: "fail", 
+        message: "Access denied to this device" 
+      });
+    }
+
     const q = { deviceId };
     if (from || to) q.timestamp = {};
     if (from) q.timestamp.$gte = from;
@@ -337,6 +346,15 @@ exports.getRespirationLive = async (req, res) => {
       return res.status(400).json({ status: "fail", message: "deviceId is required" });
     }
 
+    // ✅ Verify device ownership before allowing access to respiration data
+    const device = await Device.findOne({ deviceId, userId: req.user.userId });
+    if (!device) {
+      return res.status(403).json({ 
+        status: "fail", 
+        message: "Access denied to this device" 
+      });
+    }
+
     const now = new Date();
     const windowStart = new Date(now.getTime() - windowMinutes * 60 * 1000);
     const bucketMs = bucketSeconds * 1000;
@@ -425,6 +443,15 @@ exports.getStressAggregates = async (req, res) => {
     const { deviceId } = req.query;
     if (!deviceId) {
       return res.status(400).json({ status: "fail", message: "deviceId is required" });
+    }
+
+    // ✅ Verify device ownership before allowing access to stress data
+    const device = await Device.findOne({ deviceId, userId: req.user.userId });
+    if (!device) {
+      return res.status(403).json({ 
+        status: "fail", 
+        message: "Access denied to this device" 
+      });
     }
 
     const bucketSeconds = Math.max(parseInt(req.query.bucketSeconds, 10) || 30, 10);

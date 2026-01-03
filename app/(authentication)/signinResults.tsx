@@ -46,8 +46,11 @@ export default function SigninResult() {
 
             <TouchableOpacity
               style={styles.primaryBtn}
-              onPress={() => {router.dismissAll;
-                router.replace('/setup')}}
+              onPress={() => {
+                // Let NavigationGuard handle routing based on device status
+                // It will route to setup if no devices, or home if devices exist
+                router.replace('/(tabs)/home');
+              }}
             >
               <Text style={styles.primaryText}>Continue</Text>
             </TouchableOpacity>

@@ -67,27 +67,42 @@ function initializeWebSocket(server) {
       
       if (user && user.devices && user.devices.length > 0) {
         const deviceIds = user.devices.map(device => device.deviceId || device._id.toString());
+        const verifiedDeviceIds = [];
         
-        // Subscribe to each device room
-        deviceIds.forEach(deviceId => {
-          const roomName = `device:${deviceId}`;
-          socket.join(roomName);
-          logger.info("WebSocket: Subscribed to device room", { 
-            socketId: socket.id, 
-            userId: socket.userId,
-            deviceId,
-            room: roomName 
-          });
-        });
+        // ✅ Re-verify ownership before auto-subscribing (prevents race conditions)
+        for (const deviceId of deviceIds) {
+          const device = await Device.findOne({ deviceId });
+          
+          // Only subscribe if device exists and user owns it
+          if (device && device.userId && device.userId.toString() === socket.userId) {
+            const roomName = `device:${deviceId}`;
+            socket.join(roomName);
+            verifiedDeviceIds.push(deviceId);
+            logger.info("WebSocket: Auto-subscribed to device room", { 
+              socketId: socket.id, 
+              userId: socket.userId,
+              deviceId,
+              room: roomName 
+            });
+          } else {
+            logger.warn("WebSocket: Skipped auto-subscribe - ownership mismatch", {
+              socketId: socket.id,
+              userId: socket.userId,
+              deviceId,
+              deviceExists: !!device,
+              deviceOwnerId: device?.userId?.toString() || null
+            });
+          }
+        }
 
         // Also subscribe to user-specific room
         socket.join(`user:${socket.userId}`);
         
-        // Send confirmation
+        // Send confirmation with only verified devices
         socket.emit("connected", {
           success: true,
           message: "Connected to WebSocket server",
-          subscribedDevices: deviceIds,
+          subscribedDevices: verifiedDeviceIds,
           userId: socket.userId
         });
       } else {
@@ -112,8 +127,10 @@ function initializeWebSocket(server) {
     socket.on("subscribe_device", async (data) => {
       try {
         const { deviceId } = data;
+        console.log(`📡 [WebSocket Backend] subscribe_device received for deviceId: ${deviceId}, socketId: ${socket.id}`);
         
         if (!deviceId) {
+          console.log(`❌ [WebSocket Backend] subscribe_device failed: deviceId is required`);
           socket.emit("error", { message: "deviceId is required" });
           return;
         }
@@ -121,6 +138,7 @@ function initializeWebSocket(server) {
         // Verify user has access to this device
         const device = await Device.findOne({ deviceId });
         if (!device) {
+          console.log(`❌ [WebSocket Backend] subscribe_device failed: Device not found: ${deviceId}`);
           socket.emit("error", { message: "Device not found" });
           return;
         }
@@ -135,22 +153,28 @@ function initializeWebSocket(server) {
           (user && user.devices && user.devices.some(d => d.toString() === device._id.toString()));
 
         if (!hasAccess) {
+          console.log(`❌ [WebSocket Backend] subscribe_device failed: Access denied for device: ${deviceId}`);
           socket.emit("error", { message: "Access denied to this device" });
           return;
         }
 
         const roomName = `device:${deviceId}`;
         socket.join(roomName);
+        const roomSize = io.sockets.adapter.rooms.get(roomName)?.size || 0;
+        
+        console.log(`✅ [WebSocket Backend] Subscribed to device room: ${roomName}, Total clients in room: ${roomSize}`);
         
         logger.info("WebSocket: Manually subscribed to device", { 
           socketId: socket.id, 
           userId: socket.userId,
           deviceId,
-          room: roomName 
+          room: roomName,
+          roomSize
         });
 
         socket.emit("subscribed", { deviceId, room: roomName });
       } catch (error) {
+        console.error(`❌ [WebSocket Backend] subscribe_device error:`, error);
         logger.err(error, { where: "WebSocket: Subscribe device error", socketId: socket.id });
         socket.emit("error", { message: "Failed to subscribe to device" });
       }
@@ -212,6 +236,7 @@ function broadcastHealthData(deviceId, healthData) {
     const clientData = {
       deviceId: healthData.deviceId,
       timestamp: healthData.timestamp,
+      timestampSeconds: healthData.timestampSeconds, // Include timestampSeconds for accurate timestamp extraction
       temperature: healthData.temperature,
       humidity: healthData.humidity,
       heartRate: healthData.heartRate,
@@ -228,15 +253,85 @@ function broadcastHealthData(deviceId, healthData) {
     };
 
     // Broadcast to device room
+    const roomSize = io.sockets.adapter.rooms.get(roomName)?.size || 0;
+    console.log(`📡 [WebSocket] Broadcasting health_data_update to room: ${roomName}, Clients: ${roomSize}, Respiration: ${clientData.respiration}`);
     io.to(roomName).emit("health_data_update", clientData);
     
     logger.info("WebSocket: Health data broadcasted", { 
       deviceId, 
       room: roomName,
-      timestamp: healthData.timestamp 
+      timestamp: healthData.timestamp,
+      clients: roomSize,
+      respiration: clientData.respiration
     });
   } catch (error) {
     logger.err(error, { where: "broadcastHealthData", deviceId });
+  }
+}
+
+/**
+ * Broadcast heart rate graph update (backend-owned aggregation)
+ * Fetches recent data, aggregates it, and emits graph-ready payload
+ * @param {string} deviceId - Device ID
+ * @param {number} zoomIndex - Zoom level index (default: 0 = 10m)
+ */
+async function broadcastHeartRateGraphUpdate(deviceId, zoomIndex = 0) {
+  if (!io) {
+    return;
+  }
+
+  try {
+    const HealthData = require("../models/HealthData");
+    const { getTimeWindow } = require("../config/zoomLevels");
+    const { aggregateHeartRateGraph } = require("../utils/graphAggregation");
+
+    // Get viewport window for zoom level (controls what's visible)
+    const viewportWindow = getTimeWindow(zoomIndex);
+    
+    // Always fetch last 24 hours of data for live updates
+    // This ensures graph shows full historical context even when device was offline
+    const twentyFourHoursAgo = Date.now() - (24 * 60 * 60 * 1000);
+    const now = Date.now();
+
+    // Fetch last 24 hours of health data
+    const rawData = await HealthData.find({
+      deviceId: deviceId,
+      timestamp: {
+        $gte: new Date(twentyFourHoursAgo),
+        $lte: new Date(now)
+      },
+      $or: [
+        { heartRate: { $exists: true, $ne: null, $gt: 0 } },
+        { hr: { $exists: true, $ne: null, $gt: 0 } },
+        { bpm: { $exists: true, $ne: null, $gt: 0 } }
+      ]
+    })
+    .sort({ timestamp: 1 })
+    .select("timestamp heartRate hr bpm")
+    .lean()
+    .limit(10000); // Limit to prevent excessive data
+
+    // Aggregate data - process all 24h but use zoom level for viewport
+    const graphData = aggregateHeartRateGraph(rawData, zoomIndex, null, viewportWindow);
+
+    // Broadcast to device room
+    const roomName = `device:${deviceId}`;
+    const roomSize = io.sockets.adapter.rooms.get(roomName)?.size || 0;
+    
+    io.to(roomName).emit("heart_rate_graph_update", {
+      deviceId,
+      ...graphData
+    });
+
+    logger.info("WebSocket: Heart rate graph update broadcasted", {
+      deviceId,
+      room: roomName,
+      clients: roomSize,
+      zoomIndex,
+      points: graphData.points.length
+    });
+  } catch (error) {
+    logger.err(error, { where: "broadcastHeartRateGraphUpdate", deviceId });
   }
 }
 
@@ -275,6 +370,7 @@ module.exports = {
   initializeWebSocket,
   broadcastHealthData,
   broadcastDeviceStatus,
+  broadcastHeartRateGraphUpdate,
   getIO
 };
 

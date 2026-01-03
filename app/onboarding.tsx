@@ -87,6 +87,8 @@ export default function OnboardingScreen() {
 
   const onDone = async () => {
     await AsyncStorage.setItem('onboarding_seen_v1', 'true');
+    // NavigationGuard will handle routing based on auth and device status
+    // Navigate to a neutral route and let NavigationGuard decide
     if (auth.isLoggedIn) {
       router.replace('/(tabs)/home');
     } else {

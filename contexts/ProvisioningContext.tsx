@@ -8,9 +8,13 @@ interface ProvisioningContextType {
   wifiPassword: string;
   selectedDevice: Device | null;
   selectedDeviceId: string | null;
+  serialNumber: string | null; // Device serial number from BLE Device Information Service
+  wifiProvisioningSuccess: boolean; // Track if WiFi provisioning succeeded
   setWifiSSID: (ssid: string) => void;
   setWifiPassword: (password: string) => void;
   setSelectedDevice: (device: Device | null) => void;
+  setSerialNumber: (serialNumber: string | null) => void;
+  setWifiProvisioningSuccess: (success: boolean) => void;
   sendWifiCredentials: () => Promise<boolean>;
 }
 
@@ -21,6 +25,8 @@ export const ProvisioningProvider = ({ children }: { children: ReactNode }) => {
   const [wifiPassword, setWifiPassword] = useState("");
   const [selectedDevice, setSelectedDevice] = useState<Device | null>(null);
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
+  const [serialNumber, setSerialNumber] = useState<string | null>(null);
+  const [wifiProvisioningSuccess, setWifiProvisioningSuccess] = useState(false);
 
   // UUIDs matching Nordic UART Service (nRF52832)
   // Service UUID: Nordic UART Service = 6E400001-B5A3-F393-E0A9-E50E24DCCA9E
@@ -33,6 +39,10 @@ export const ProvisioningProvider = ({ children }: { children: ReactNode }) => {
   const handleSetSelectedDevice = (device: Device | null) => {
     setSelectedDevice(device);
     setSelectedDeviceId(device?.id || null);
+    // Reset serial number when device changes
+    if (!device) {
+      setSerialNumber(null);
+    }
   };
 
   const sendWifiCredentials = async (): Promise<boolean> => {
@@ -128,9 +138,13 @@ export const ProvisioningProvider = ({ children }: { children: ReactNode }) => {
         wifiPassword,
         selectedDevice,
         selectedDeviceId,
+        serialNumber,
+        wifiProvisioningSuccess,
         setWifiSSID,
         setWifiPassword,
         setSelectedDevice: handleSetSelectedDevice,
+        setSerialNumber,
+        setWifiProvisioningSuccess,
         sendWifiCredentials,
       }}
     >

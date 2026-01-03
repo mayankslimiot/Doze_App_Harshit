@@ -6,13 +6,22 @@ import { Buffer } from "buffer";
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from "expo-router";
 import React, { useEffect, useRef, useState } from "react";
-import { ActivityIndicator, Animated, Platform, SafeAreaView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { ActivityIndicator, Animated, Platform, SafeAreaView, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { Subscription } from 'react-native-ble-plx';
+import { getWiFiStatus, autoRegisterDevice } from '@/services/deviceData';
+import { 
+  connectToWiFiProvisioningMQTT, 
+  disconnectWiFiProvisioningMQTT,
+  isWiFiProvisioningMQTTConnected 
+} from '@/services/mqttService';
+import { sendDeviceRegisteredNotification } from '@/services/Notifications';
+import { useDevice } from '@/contexts/DeviceContext';
 
 // Status codes from the device (matching prov_status_t enum)
 enum ProvisioningStatus {
   IDLE = 0x00,
   CONNECTING = 0x01,
+  REGISTERING = 0x05, // New status for device registration
   SUCCESS = 0x02,
   FAILED = 0x03,
   SSID_NOT_FOUND = 0x04,
@@ -50,11 +59,18 @@ const STATUS_CONFIG = {
     color: '#FF6B6B',
     description: 'WiFi network is not available or out of range'
   },
+  [ProvisioningStatus.REGISTERING]: {
+    text: 'Registering Device',
+    icon: 'cloud-upload-outline' as const,
+    color: '#4A90E2',
+    description: 'Registering device to your account'
+  },
 };
 
 export default function ConnectScreen() {
-  const { selectedDeviceId, wifiSSID, wifiPassword, sendWifiCredentials } = useProvisioning();
+  const { selectedDeviceId, wifiSSID, wifiPassword, sendWifiCredentials, setWifiProvisioningSuccess, serialNumber, setSerialNumber } = useProvisioning();
   const router = useRouter();
+  const { refreshDevices } = useDevice();
 
   const [currentStatus, setCurrentStatus] = useState<ProvisioningStatus>(ProvisioningStatus.IDLE);
   const [statusMessage, setStatusMessage] = useState<string>('');
@@ -63,12 +79,26 @@ export default function ConnectScreen() {
   const [alertConfig, setAlertConfig] = useState({ title: '', message: '', buttons: [] as any[] });
   // Track the last error key reported by device (e.g., wrong_password, ssid_not_found, weak_signal, connect_failed)
   const [lastErrorKey, setLastErrorKey] = useState<string | null>(null);
+  // Retry count for WiFi provisioning (0-3)
+  const [retryCount, setRetryCount] = useState(0);
+  // Checklist states: 'pending' | 'loading' | 'success' | 'failed'
+  const [step1WiFiStatus, setStep1WiFiStatus] = useState<'pending' | 'loading' | 'success' | 'failed'>('pending');
+  const [step2RegisterStatus, setStep2RegisterStatus] = useState<'pending' | 'loading' | 'success' | 'failed'>('pending');
   
-  const statusSubscriptionRef = useRef<Subscription | null>(null);
   const pulseAnim = useRef(new Animated.Value(1)).current;
   const fadeAnim = useRef(new Animated.Value(0)).current;
-  // Keep a ref of current status to avoid stale closures in intervals
-  const statusRef = useRef<ProvisioningStatus>(ProvisioningStatus.IDLE);
+  // Timeout ref to cancel when success is received (20 seconds for CONNECTED message)
+  const mqttTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Success animation ref
+  const successScaleAnim = useRef(new Animated.Value(0)).current;
+  // API polling interval ref
+  const apiPollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Serial number ref to access latest value in polling closure
+  const serialNumberRef = useRef<string | null>(null);
+  // Guard to ensure handleMQTTConnected is only called once
+  const mqttConnectedHandledRef = useRef<boolean>(false);
+  // Retry count ref to avoid stale closures
+  const retryCountRef = useRef<number>(0);
 
   // Service and characteristic UUIDs (matching Nordic UART Service)
   const PROVISION_SERVICE_UUID = "6E400001-B5A3-F393-E0A9-E50E24DCCA9E";
@@ -105,274 +135,239 @@ export default function ConnectScreen() {
     }).start();
   }, []);
 
-  // Keep the status ref updated so polling can read the latest value
+  // REMOVED: statusRef useEffect - no longer needed, BLE is write-only
+
+  // Update serial number ref when serialNumber changes
   useEffect(() => {
-    statusRef.current = currentStatus;
-  }, [currentStatus]);
+    serialNumberRef.current = serialNumber;
+  }, [serialNumber]);
 
-  // Parse status notification from device
-  const parseStatusNotification = (base64Data: string) => {
-    try {
-      const data = Buffer.from(base64Data, 'base64');
-      
-      console.log('═══════════════════════════════════════');
-      console.log('📥 PARSING STATUS NOTIFICATION');
-      console.log(`   Length: ${data.length} bytes`);
-      console.log(`   Hex: ${data.toString('hex')}`);
-      console.log(`   Bytes: ${Array.from(data).map(b => `0x${b.toString(16).padStart(2, '0')}`).join(' ')}`);
-      console.log(`   ASCII: ${data.toString('ascii').replace(/[^\x20-\x7E]/g, '.')}`);
-      console.log('═══════════════════════════════════════');
-      
-      if (data.length === 0) {
-        console.warn('⚠️ Empty status notification received');
+  // Update retry count ref when retryCount changes
+  useEffect(() => {
+    retryCountRef.current = retryCount;
+  }, [retryCount]);
+
+  // Read serial number from device when component mounts
+  useEffect(() => {
+    const readSerialNumber = async () => {
+      if (!selectedDeviceId || serialNumber) {
+        // Already have serial number or no device selected
         return;
       }
 
-      // Check if this is pure JSON (starts with '{')
-      const firstByte = data[0];
-      if (firstByte === 0x7B) { // '{' character
-        console.log('📄 Detected pure JSON format (no status code byte)');
-        const jsonString = data.toString('utf-8');
-        console.log(`   JSON string: ${jsonString}`);
-        
-        try {
-          const parsed = JSON.parse(jsonString);
-          console.log('✅ Parsed JSON:', JSON.stringify(parsed, null, 2));
-          setStatusMessage(JSON.stringify(parsed, null, 2));
-          
-          // Check for error/result in JSON
-          if (parsed.error) {
-            console.log(`❌ Error detected: ${parsed.error}`);
-            if (parsed.error === 'wrong_password' || parsed.error.includes('password')) {
-              console.log('   → Setting status to FAILED (wrong password)');
-              setCurrentStatus(ProvisioningStatus.FAILED);
-              setLastErrorKey('wrong_password');
-            } else if (parsed.error === 'ssid_not_found' || parsed.error.includes('ssid')) {
-              console.log('   → Setting status to SSID_NOT_FOUND');
-              setCurrentStatus(ProvisioningStatus.SSID_NOT_FOUND);
-              setLastErrorKey('ssid_not_found');
-            } else if (parsed.error === 'weak_signal' || parsed.error.includes('weak')) {
-              console.log('   → Setting status to FAILED (weak signal)');
-              setCurrentStatus(ProvisioningStatus.FAILED);
-              setLastErrorKey('weak_signal');
-            } else if (parsed.error === 'connect_failed' || parsed.error.includes('connect')) {
-              console.log('   → Setting status to FAILED (connect failed)');
-              setCurrentStatus(ProvisioningStatus.FAILED);
-              setLastErrorKey('connect_failed');
-            } else {
-              console.log('   → Setting status to FAILED (generic error)');
-              setCurrentStatus(ProvisioningStatus.FAILED);
-              setLastErrorKey('connect_failed');
-            }
-            return;
-          } else if (parsed.result === 'success') {
-            console.log('✅ Success result detected');
-            console.log('   → Setting status to SUCCESS');
-            setCurrentStatus(ProvisioningStatus.SUCCESS);
-            setLastErrorKey(null);
-            return;
-          } else if (parsed.status === 'connecting' || parsed.status === 'received' || parsed.status === 'sent') {
-            console.log('🔄 Connecting/received/sent status detected');
-            console.log('   → Setting status to CONNECTING');
-            setCurrentStatus(ProvisioningStatus.CONNECTING);
-            setLastErrorKey(null);
-            return;
-          } else if (parsed.status === 'connected') {
-            console.log('✅ Connected status detected');
-            console.log('   → Setting status to SUCCESS');
-            setCurrentStatus(ProvisioningStatus.SUCCESS);
-            setLastErrorKey(null);
-            return;
-          } else {
-            console.log('⚠️ JSON parsed but no recognized status field');
-            console.log('   Available fields:', Object.keys(parsed).join(', '));
-          }
-        } catch (e) {
-          console.error('⚠️ JSON parse error:', e);
-          setStatusMessage(jsonString);
-        }
-        return;
-      }
-
-      // Original format: first byte is status code
-      const statusCode = firstByte;
-      console.log(`📊 Status code byte: 0x${statusCode.toString(16).padStart(2, '0')} (${statusCode})`);
-      console.log(`   Enum value: ${ProvisioningStatus[statusCode] || 'UNKNOWN'}`);
-      
-      // Rest is optional JSON message
-      let jsonMessage = '';
-      if (data.length > 1) {
-        jsonMessage = data.slice(1).toString('utf-8');
-        console.log(`📄 JSON message (${data.length - 1} bytes): ${jsonMessage}`);
-        
-        try {
-          const parsed = JSON.parse(jsonMessage);
-          console.log('✅ Parsed JSON:', JSON.stringify(parsed, null, 2));
-          setStatusMessage(JSON.stringify(parsed, null, 2));
-          
-          // Check for error/result in JSON (overrides status code)
-          if (parsed.error) {
-            console.log(`❌ Error in JSON overrides status code: ${parsed.error}`);
-            if (parsed.error === 'wrong_password' || parsed.error.includes('password')) {
-              setCurrentStatus(ProvisioningStatus.FAILED);
-              setLastErrorKey('wrong_password');
-            } else if (parsed.error === 'ssid_not_found' || parsed.error.includes('ssid')) {
-              setCurrentStatus(ProvisioningStatus.SSID_NOT_FOUND);
-              setLastErrorKey('ssid_not_found');
-            } else if (parsed.error === 'weak_signal' || parsed.error.includes('weak')) {
-              setCurrentStatus(ProvisioningStatus.FAILED);
-              setLastErrorKey('weak_signal');
-            } else if (parsed.error === 'connect_failed' || parsed.error.includes('connect')) {
-              setCurrentStatus(ProvisioningStatus.FAILED);
-              setLastErrorKey('connect_failed');
-            } else {
-              setCurrentStatus(ProvisioningStatus.FAILED);
-              setLastErrorKey('connect_failed');
-            }
-            return;
-          } else if (parsed.result === 'success') {
-            console.log('✅ Success in JSON overrides status code');
-            setCurrentStatus(ProvisioningStatus.SUCCESS);
-            setLastErrorKey(null);
-            return;
-          }
-        } catch (e) {
-          console.log('⚠️ Not valid JSON, treating as plain text');
-          setStatusMessage(jsonMessage);
-        }
-      }
-
-      // Update status from status code byte
-      console.log(`🔄 Setting status from code byte: ${statusCode} (${ProvisioningStatus[statusCode]})`);
-      setCurrentStatus(statusCode as ProvisioningStatus);
-      // Best-effort derive error key when only code is present
-      if (statusCode === ProvisioningStatus.SSID_NOT_FOUND) {
-        setLastErrorKey('ssid_not_found');
-      } else if (statusCode === ProvisioningStatus.FAILED) {
-        setLastErrorKey('connect_failed');
-      } else if (statusCode === ProvisioningStatus.SUCCESS) {
-        setLastErrorKey(null);
-      }
-      console.log('═══════════════════════════════════════');
-
-    } catch (error) {
-      console.error('❌ Error parsing status notification:', error);
-      console.error('   Stack:', error);
-    }
-  };
-
-  // Read status characteristic manually (for testing)
-  const readStatusManually = async () => {
-    try {
-      console.log('📖 Reading status characteristic manually...');
-      const bleManager = getBleManager();
-      
-      const characteristic = await bleManager.readCharacteristicForDevice(
-        selectedDeviceId!,
-        PROVISION_SERVICE_UUID,
-        STATUS_CHAR_UUID
-      );
-      
-      if (characteristic?.value) {
-        console.log('📖 Manual read - Status value:', characteristic.value);
-        parseStatusNotification(characteristic.value);
-      } else {
-        console.log('📖 Manual read - No value returned');
-      }
-    } catch (error) {
-      console.error('❌ Error reading status manually:', error);
-    }
-  };
-
-  // Subscribe to status characteristic notifications
-  const subscribeToStatus = async () => {
-    try {
-      if (!selectedDeviceId) {
-        throw new Error('No device selected');
-      }
-
-      console.log('═══════════════════════════════════════');
-      console.log('🔔 SUBSCRIBING TO STATUS NOTIFICATIONS');
-      console.log(`   Device ID: ${selectedDeviceId}`);
-      console.log(`   Service UUID: ${PROVISION_SERVICE_UUID}`);
-      console.log(`   Status Char UUID: ${STATUS_CHAR_UUID}`);
-      console.log('═══════════════════════════════════════');
-      
-      const bleManager = getBleManager();
-
-      // First, try to read the current status
-      console.log('📖 Reading initial status value...');
       try {
-        const initialChar = await bleManager.readCharacteristicForDevice(
+        console.log('📋 Reading serial number from Device Information Service...');
+        const bleManager = getBleManager();
+        
+        // Device Information Service UUIDs
+        const DEVICE_INFO_SERVICE_UUID = '0000180a-0000-1000-8000-00805f9b34fb';
+        const SERIAL_NUMBER_CHAR_UUID = '00002a25-0000-1000-8000-00805f9b34fb';
+        
+        const char = await bleManager.readCharacteristicForDevice(
           selectedDeviceId,
-          PROVISION_SERVICE_UUID,
-          STATUS_CHAR_UUID
+          DEVICE_INFO_SERVICE_UUID,
+          SERIAL_NUMBER_CHAR_UUID
         );
         
-        if (initialChar?.value) {
-          console.log('📖 Initial status value:', initialChar.value);
-          parseStatusNotification(initialChar.value);
+        if (char?.value) {
+          const decoded = Buffer.from(char.value, 'base64').toString('utf-8');
+          console.log(`✅ Serial Number read: ${decoded}`);
+          setSerialNumber(decoded);
         } else {
-          console.log('📖 No initial status value');
+          console.warn('⚠️ Serial number not available');
         }
-      } catch (readError) {
-        console.error('⚠️ Could not read initial status:', readError);
+      } catch (error) {
+        console.error('❌ Error reading serial number:', error);
       }
+    };
 
-      // Monitor the status characteristic for updates
-      console.log('🔔 Starting to monitor for notifications...');
-      const subscription = bleManager.monitorCharacteristicForDevice(
-        selectedDeviceId,
-        PROVISION_SERVICE_UUID,
-        STATUS_CHAR_UUID,
-        (error, characteristic) => {
-          if (error) {
-            console.error('❌ Status monitoring error:', error);
-            console.error('   Error code:', error.errorCode);
-            console.error('   Error message:', error.message);
-            return;
-          }
+    readSerialNumber();
+  }, [selectedDeviceId, serialNumber, setSerialNumber]);
 
-          if (characteristic?.value) {
-            console.log('═══════════════════════════════════════');
-            console.log('📨 STATUS NOTIFICATION RECEIVED');
-            console.log(`   Timestamp: ${new Date().toISOString()}`);
-            console.log(`   Characteristic UUID: ${characteristic.uuid}`);
-            console.log(`   Value (base64): ${characteristic.value}`);
-            console.log('═══════════════════════════════════════');
-            parseStatusNotification(characteristic.value);
-          } else {
-            console.log('⚠️ Notification received but no value');
-          }
-        }
-      );
+  // BLE is write-only - no status notifications or parsing
+  // MQTT is the single source of truth for provisioning status
+  // All BLE notification handling code has been removed
 
-      statusSubscriptionRef.current = subscription;
-      console.log('✅ Status subscription active');
-      
-      // Poll status every 2 seconds as a fallback
-      console.log('⏱️ Starting status polling (every 2s)...');
-      const pollInterval = setInterval(() => {
-        const s = statusRef.current;
-        if (s === ProvisioningStatus.SUCCESS || 
-            s === ProvisioningStatus.FAILED || 
-            s === ProvisioningStatus.SSID_NOT_FOUND) {
-          console.log('⏹️ Stopping status polling (final state reached)');
-          clearInterval(pollInterval);
-          return;
+  // Handle MQTT "connected" message - Step 1 Complete (WiFi Connected)
+  // ONE-TIME HANDLING: This callback should only fire once due to cleanup in MQTT service
+  const handleMQTTConnected = async () => {
+    // Safety guard: Prevent duplicate execution
+    if (mqttConnectedHandledRef.current) {
+      console.log('[WiFi Provisioning] ⚠️ handleMQTTConnected already executed, ignoring duplicate call');
+      return;
+    }
+    
+    // Mark as handled immediately
+    mqttConnectedHandledRef.current = true;
+    
+    console.log('═══════════════════════════════════════');
+    console.log('[WiFi Provisioning] ✅ ✅ ✅ "connected" MESSAGE RECEIVED! ✅ ✅ ✅');
+    console.log('[WiFi Provisioning] Step 1: WiFi Connection SUCCESS');
+    console.log('═══════════════════════════════════════');
+    
+    // IMMEDIATE CLEANUP: Stop all services before processing
+    // Cancel MQTT timeout
+    if (mqttTimeoutRef.current) {
+      console.log('[WiFi Provisioning] ⏹️ Cancelling MQTT timeout...');
+      clearTimeout(mqttTimeoutRef.current);
+      mqttTimeoutRef.current = null;
+    }
+    
+    // Stop API polling if running
+    if (apiPollIntervalRef.current) {
+      console.log('[WiFi Provisioning] ⏹️ Stopping API polling...');
+      clearInterval(apiPollIntervalRef.current);
+      apiPollIntervalRef.current = null;
+    }
+    
+    // Disconnect MQTT immediately to prevent any further messages
+    console.log('[WiFi Provisioning] 🔌 Disconnecting MQTT client...');
+    disconnectWiFiProvisioningMQTT();
+    
+    // Mark Step 1 as success
+    setStep1WiFiStatus('success');
+    
+    // Get serial number for registration
+    const serialForRegistration = serialNumberRef.current || serialNumber;
+    if (!serialForRegistration) {
+      console.error('[WiFi Provisioning] ❌ Serial number not available for registration');
+      setStep1WiFiStatus('failed');
+      setCurrentStatus(ProvisioningStatus.FAILED);
+      setStatusMessage('Device connected but serial number not available');
+      setIsProcessing(false);
+      return;
+    }
+
+    // Wait a moment before starting Step 2
+    await new Promise(resolve => setTimeout(resolve, 500));
+
+    // Start Step 2: Register Device
+    console.log('[WiFi Provisioning] 📝 Starting Step 2: Device Registration...');
+    setStep2RegisterStatus('loading');
+    setCurrentStatus(ProvisioningStatus.REGISTERING);
+    setIsProcessing(true);
+
+    try {
+      // Call auto-register API (ONLY ONCE)
+      console.log(`[WiFi Provisioning] 📡 Calling auto-register API for serial: ${serialForRegistration}`);
+      const registrationResult = await autoRegisterDevice(serialForRegistration);
+
+      if (registrationResult.success) {
+        console.log('[WiFi Provisioning] ✅ Device registered successfully!');
+        console.log(`[WiFi Provisioning]    Device ID: ${registrationResult.device?.deviceId}`);
+        console.log(`[WiFi Provisioning]    Was Reassigned: ${registrationResult.wasReassigned || false}`);
+        
+        // Mark Step 2 as success
+        setStep2RegisterStatus('success');
+        
+        // SINGLE SUCCESS STATE: Set final provisioning status
+        setCurrentStatus(ProvisioningStatus.SUCCESS);
+        setStatusMessage('Device registered successfully');
+        setLastErrorKey(null);
+        setIsProcessing(false);
+        setWifiProvisioningSuccess(true);
+        
+        // Reset retry count on success
+        setRetryCount(0);
+        retryCountRef.current = 0;
+        
+        // Send notification
+        try {
+          await sendDeviceRegisteredNotification(serialForRegistration);
+          console.log('[WiFi Provisioning] ✅ Notification sent');
+        } catch (notifError) {
+          console.error('[WiFi Provisioning] ⚠️ Failed to send notification:', notifError);
         }
         
-        console.log('🔄 Polling status...');
-        readStatusManually();
-      }, 2000);
-      
-      // Store interval for cleanup
-      (statusSubscriptionRef.current as any).pollInterval = pollInterval;
-
+        // Refresh device list so it appears on dashboard
+        try {
+          console.log('[WiFi Provisioning] 🔄 Refreshing device list...');
+          await refreshDevices();
+          console.log('[WiFi Provisioning] ✅ Device list refreshed');
+          // DeviceContext will automatically set the first device (or the one from backend activeDevice) as active
+        } catch (refreshError) {
+          console.error('[WiFi Provisioning] ⚠️ Failed to refresh device list:', refreshError);
+        }
+        
+        // Trigger success animation
+        Animated.spring(successScaleAnim, {
+          toValue: 1,
+          tension: 50,
+          friction: 7,
+          useNativeDriver: true,
+        }).start();
+        
+        console.log('[WiFi Provisioning] ✅ ✅ ✅ REGISTRATION COMPLETE! ✅ ✅ ✅');
+        console.log('[WiFi Provisioning] 🎯 Final State: SUCCESS - Dashboard button should be visible');
+      } else {
+        // Registration failed
+        console.error('[WiFi Provisioning] ❌ Registration failed:', registrationResult.message);
+        setStep2RegisterStatus('failed');
+        
+        if (registrationResult.error === 'AUTH_REQUIRED') {
+          setCurrentStatus(ProvisioningStatus.FAILED);
+          setStatusMessage('Please log in to register device');
+        } else {
+          setCurrentStatus(ProvisioningStatus.FAILED);
+          setStatusMessage(registrationResult.message || 'Registration failed. Please try again.');
+        }
+        setIsProcessing(false);
+      }
     } catch (error) {
-      console.error('❌ Error subscribing to status:', error);
-      console.error('   Full error:', JSON.stringify(error, null, 2));
+      console.error('[WiFi Provisioning] ❌ Error during registration:', error);
+      setStep2RegisterStatus('failed');
+      setCurrentStatus(ProvisioningStatus.FAILED);
+      setStatusMessage(error instanceof Error ? error.message : 'Registration failed. Please try again.');
+      setIsProcessing(false);
     }
+    // Note: MQTT already disconnected above, no need for finally block
+  };
+
+  // Handle MQTT timeout (20 seconds) - Step 1 Failed
+  const handleMQTTTimeout = () => {
+    console.log('═══════════════════════════════════════');
+    console.log('[WiFi Provisioning] ⏱️ ⏱️ ⏱️ MQTT TIMEOUT (20 seconds) ⏱️ ⏱️ ⏱️');
+    console.log('[WiFi Provisioning] Step 1: WiFi Connection FAILED');
+    console.log('═══════════════════════════════════════');
+    
+    // Mark Step 1 as failed
+    setStep1WiFiStatus('failed');
+    
+    // Disconnect MQTT
+    disconnectWiFiProvisioningMQTT();
+    
+    // Stop API polling if running
+    if (apiPollIntervalRef.current) {
+      clearInterval(apiPollIntervalRef.current);
+      apiPollIntervalRef.current = null;
+    }
+    
+    const currentRetryCount = retryCountRef.current;
+    console.log(`[WiFi Provisioning] Current retry count: ${currentRetryCount}/3`);
+    
+    if (currentRetryCount < 3) {
+      // Show retry button
+      console.log('[WiFi Provisioning] Showing retry button...');
+      setCurrentStatus(ProvisioningStatus.FAILED);
+      setIsProcessing(false);
+      // Don't show alert, show retry button in UI
+    } else {
+      // Max retries reached - auto navigate to Scan screen
+      console.log('[WiFi Provisioning] ❌ Max retries reached (3/3)');
+      console.log('[WiFi Provisioning] Auto-navigating to Scan screen...');
+      setRetryCount(0);
+      retryCountRef.current = 0;
+      setStep1WiFiStatus('pending');
+      setStep2RegisterStatus('pending');
+      
+      // Auto navigate after short delay
+      setTimeout(() => {
+        cleanupBleConnection();
+        router.replace('/(bluetooth)/ScanScreen');
+      }, 2000);
+    }
+    
+    mqttTimeoutRef.current = null;
   };
 
   // Send credentials and monitor progress
@@ -383,17 +378,24 @@ export default function ConnectScreen() {
       console.log(`   SSID: ${wifiSSID}`);
       console.log(`   Password: ${wifiPassword ? '***' + wifiPassword.slice(-4) : 'empty'}`);
       console.log(`   Device: ${selectedDeviceId}`);
+      console.log(`   Serial Number: ${serialNumber || 'Not available yet'}`);
+      console.log(`   Retry Count: ${retryCountRef.current}/3`);
       console.log('═══════════════════════════════════════');
 
-      // Subscribe to status updates first
-      console.log('📡 Step 1: Subscribe to status notifications');
-      await subscribeToStatus();
+      // Check if serial number is available
+      const currentSerialNumber = serialNumberRef.current || serialNumber;
+      if (!currentSerialNumber) {
+        console.warn('[WiFi Provisioning] ⚠️ Serial number not available yet, waiting...');
+        // Wait a bit for serial number to be read
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        const serialAfterWait = serialNumberRef.current || serialNumber;
+        if (!serialAfterWait) {
+          throw new Error('Serial number is required for MQTT subscription. Please ensure device is connected.');
+        }
+      }
 
-      // Small delay to ensure subscription is ready
-      console.log('⏳ Waiting 1 second for subscription to stabilize...');
-      await new Promise(resolve => setTimeout(resolve, 1000));
-
-      // Send credentials
+      // BLE is write-only - no status subscriptions needed
+      // Send credentials via BLE
       console.log('═══════════════════════════════════════');
       console.log('📤 Step 2: Sending WiFi credentials to device');
       console.log('═══════════════════════════════════════');
@@ -404,51 +406,75 @@ export default function ConnectScreen() {
       }
 
       console.log('✅ Credentials sent successfully!');
-      console.log('⏳ Waiting for device response...');
-      console.log('   Expected status updates:');
-      console.log('   1. CONNECTING (0x01)');
-      console.log('   2. SUCCESS (0x02) or FAILED (0x03/0x04)');
+      
+      // Get serial number for MQTT topic
+      const serialForMQTT = serialNumberRef.current || serialNumber;
+      if (!serialForMQTT) {
+        throw new Error('Serial number is required for MQTT subscription');
+      }
+
+      // Reset MQTT connected handler guard for fresh attempt
+      mqttConnectedHandledRef.current = false;
+
+      // Connect to MQTT and subscribe to WiFi status topic
+      // SINGLE SOURCE OF TRUTH: device/{serialNumber}/status with "connected" message
+      console.log('═══════════════════════════════════════');
+      console.log('📡 Step 3: Connecting to MQTT for WiFi status');
+      console.log(`   Topic: device/${serialForMQTT}/status`);
+      console.log(`   Expected Message: "connected" (lowercase)`);
       console.log('═══════════════════════════════════════');
       
-      // The status will be updated via notifications or polling
-      // After 45 seconds, if no final status, show timeout
-      setTimeout(() => {
-        if (currentStatus !== ProvisioningStatus.SUCCESS && 
-            currentStatus !== ProvisioningStatus.FAILED &&
-            currentStatus !== ProvisioningStatus.SSID_NOT_FOUND) {
-          console.log('⏱️ Provisioning timeout - no final status received');
-          console.log(`   Current status: ${currentStatus} (${ProvisioningStatus[currentStatus]})`);
-          setAlertConfig({
-            title: 'Connection Timeout',
-            message: 'The device did not respond in time. Please check:\n\n• Device is powered on\n• WiFi credentials are correct\n• Network is available',
-            buttons: [
-              {
-                text: 'Retry',
-                onPress: () => {
-                  setShowAlert(false);
-                  setCurrentStatus(ProvisioningStatus.IDLE);
-                  setIsProcessing(true);
-                  setTimeout(() => initiateProvisioning(), 500);
-                }
-              },
-              {
-                text: 'Cancel',
-                onPress: () => {
-                  setShowAlert(false);
-                  router.back();
-                }
-              }
-            ]
-          });
-          setShowAlert(true);
-        }
-      }, 45000);
+      const mqttClient = connectToWiFiProvisioningMQTT(serialForMQTT, handleMQTTConnected);
+      
+      if (!mqttClient) {
+        console.error('[WiFi Provisioning] ❌ Failed to connect to MQTT');
+        throw new Error('Failed to connect to MQTT broker');
+      }
+
+      // Set status to CONNECTING and mark Step 1 as loading
+      setCurrentStatus(ProvisioningStatus.CONNECTING);
+      setStep1WiFiStatus('loading');
+      setStep2RegisterStatus('pending'); // Reset Step 2 - don't show until Step 1 succeeds
+      setIsProcessing(true);
+      setLastErrorKey(null); // Clear any previous errors
+
+      // Set 20 second timeout for "connected" message
+      console.log('[WiFi Provisioning] ⏱️ Starting 20 second timeout for "connected" message...');
+      mqttTimeoutRef.current = setTimeout(() => {
+        handleMQTTTimeout();
+      }, 20000); // 20 seconds
+
+      console.log('═══════════════════════════════════════');
+      console.log('[WiFi Provisioning] ✅ Setup complete!');
+      console.log('[WiFi Provisioning] ⏳ Waiting for "connected" message from device...');
+      console.log('[WiFi Provisioning] ⏱️ Timeout: 20 seconds');
+      console.log('[WiFi Provisioning] 📋 Topic: device/' + serialForMQTT + '/status');
+      console.log('═══════════════════════════════════════');
 
     } catch (error) {
       console.error('❌ Provisioning error:', error);
+      
+      // Cleanup on error
+      if (mqttTimeoutRef.current) {
+        clearTimeout(mqttTimeoutRef.current);
+        mqttTimeoutRef.current = null;
+      }
+      disconnectWiFiProvisioningMQTT();
+      
+      // Mark Step 1 as failed
+      setStep1WiFiStatus('failed');
       setCurrentStatus(ProvisioningStatus.FAILED);
-      setStatusMessage('Failed to send credentials');
+      setStatusMessage(error instanceof Error ? error.message : 'Failed to send credentials');
       setIsProcessing(false);
+      
+      // Check retry count
+      if (retryCountRef.current >= 3) {
+        // Auto navigate after delay
+        setTimeout(() => {
+          cleanupBleConnection();
+          router.replace('/(bluetooth)/ScanScreen');
+        }, 2000);
+      }
     }
   };
 
@@ -457,18 +483,24 @@ export default function ConnectScreen() {
     try {
       console.log('🧹 Cleaning up BLE connection...');
       
-      // Clear polling interval
-      if (statusSubscriptionRef.current && (statusSubscriptionRef.current as any).pollInterval) {
-        console.log('⏹️ Clearing status poll interval');
-        clearInterval((statusSubscriptionRef.current as any).pollInterval);
+      // Cancel MQTT timeout timer if still running
+      if (mqttTimeoutRef.current) {
+        console.log('⏹️ Clearing MQTT timeout timer');
+        clearTimeout(mqttTimeoutRef.current);
+        mqttTimeoutRef.current = null;
       }
       
-      // Remove subscription
-      if (statusSubscriptionRef.current) {
-        console.log('🔕 Removing status subscription');
-        statusSubscriptionRef.current.remove();
-        statusSubscriptionRef.current = null;
+      // Disconnect MQTT
+      disconnectWiFiProvisioningMQTT();
+      
+      // Stop API polling
+      if (apiPollIntervalRef.current) {
+        console.log('⏹️ Stopping API polling...');
+        clearInterval(apiPollIntervalRef.current);
+        apiPollIntervalRef.current = null;
       }
+      
+      // BLE is write-only - no subscriptions to clean up
 
       if (selectedDeviceId) {
         const bleManager = getBleManager();
@@ -493,8 +525,14 @@ export default function ConnectScreen() {
 
   // Handle status changes
   useEffect(() => {
+    console.log('═══════════════════════════════════════');
+    console.log(`[WiFi Provisioning] 🔄 Status Changed Effect Triggered`);
+    console.log(`[WiFi Provisioning]    New Status: ${ProvisioningStatus[currentStatus]} (${currentStatus})`);
+    console.log(`[WiFi Provisioning]    Is Processing: ${isProcessing}`);
+    console.log('═══════════════════════════════════════');
+    
     if (currentStatus === ProvisioningStatus.SUCCESS) {
-      console.log('✅ SUCCESS status received - stopping processing');
+      console.log('✅ ✅ ✅ SUCCESS status received - stopping processing ✅ ✅ ✅');
       setIsProcessing(false);
       // Don't auto-navigate, wait for user to click Continue
     } else if (currentStatus === ProvisioningStatus.FAILED || currentStatus === ProvisioningStatus.SSID_NOT_FOUND) {
@@ -528,23 +566,41 @@ export default function ConnectScreen() {
   const isSuccess = currentStatus === ProvisioningStatus.SUCCESS;
 
   const handleRetry = async () => {
-    console.log('🔄 Retry button pressed - cleaning up and going back to scan');
+    const currentRetryCount = retryCountRef.current;
+    if (currentRetryCount >= 3) {
+      // Max retries - navigate to scan screen
+      await cleanupBleConnection();
+      router.replace('/(bluetooth)/ScanScreen');
+      return;
+    }
     
-    // Cleanup current BLE connection
-    await cleanupBleConnection();
+    console.log(`🔄 Retry button pressed - Attempt ${currentRetryCount + 1}/3`);
     
-    // Navigate back to scan screen to start fresh
-    router.push('/(bluetooth)/ScanScreen');
+      // Reset states
+      setRetryCount(currentRetryCount + 1);
+      setStep1WiFiStatus('pending');
+      setStep2RegisterStatus('pending');
+      setCurrentStatus(ProvisioningStatus.IDLE);
+      setIsProcessing(true);
+      
+      // Reset MQTT connected handler guard for retry
+      mqttConnectedHandledRef.current = false;
+      
+      // Retry provisioning
+      setTimeout(() => initiateProvisioning(), 500);
   };
 
-  const handleContinue = async () => {
-    console.log('✅ Continue button pressed - cleaning up and navigating to complete screen');
+  const handleGoToDashboard = async () => {
+    console.log('✅ Go to Dashboard button pressed');
+    
+    // Ensure success flag is set before cleanup
+    setWifiProvisioningSuccess(true);
     
     // Cleanup BLE connection
     await cleanupBleConnection();
     
-    // Navigate to completion screen
-    router.push('/(bluetooth)/ProvisionCompleteScreen');
+    // Navigate directly to home/dashboard
+    router.replace('/(tabs)/home');
   };
 
   const handleCancel = async () => {
@@ -570,79 +626,131 @@ export default function ConnectScreen() {
         <View style={styles.headerIconContainer} />
       </View>
 
-      <Animated.View style={[styles.content, { opacity: fadeAnim }]}>
-        {/* Status Icon */}
-        <Animated.View style={[styles.iconContainer, { transform: [{ scale: pulseAnim }] }]}>
-          <View style={[styles.iconCircle, { backgroundColor: config.color + '20' }]}>
-            <Ionicons name={config.icon} size={80} color={config.color} />
+      <ScrollView 
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+      >
+        <Animated.View style={[styles.content, { opacity: fadeAnim }]}>
+          {/* Success Icon - Only show on final success */}
+          {isSuccess && step2RegisterStatus === 'success' && (
+            <Animated.View style={[styles.iconContainer, { transform: [{ scale: successScaleAnim }], marginBottom: 30 }]}>
+              <View style={[styles.iconCircle, { backgroundColor: '#4CAF5020' }]}>
+                <Animated.View style={{ transform: [{ scale: successScaleAnim }] }}>
+                  <Ionicons name="checkmark-circle" size={100} color="#4CAF50" />
+                </Animated.View>
+              </View>
+            </Animated.View>
+          )}
+
+          {/* Checklist Container */}
+          <View style={styles.checklistContainer}>
+            {/* Step 1: Connecting WiFi */}
+            <View style={styles.checklistItemCard}>
+              <View style={styles.checklistItemContent}>
+                <View style={styles.checklistIconContainer}>
+                  {step1WiFiStatus === 'success' ? (
+                    <View style={[styles.checklistIcon, styles.checklistIconSuccess]}>
+                      <Ionicons name="checkmark" size={20} color="#FFF" />
+                    </View>
+                  ) : step1WiFiStatus === 'failed' ? (
+                    <View style={[styles.checklistIcon, styles.checklistIconFailed]}>
+                      <Ionicons name="close" size={20} color="#FFF" />
+                    </View>
+                  ) : step1WiFiStatus === 'loading' ? (
+                    <View style={[styles.checklistIcon, styles.checklistIconLoading]}>
+                      <ActivityIndicator size="small" color="#4A90E2" />
+                    </View>
+                  ) : (
+                    <View style={[styles.checklistIcon, styles.checklistIconPending]}>
+                      <Ionicons name="ellipse-outline" size={20} color="rgba(255, 255, 255, 0.4)" />
+                    </View>
+                  )}
+                </View>
+                <View style={styles.checklistContent}>
+                  <Text style={styles.checklistTitle}>Connecting WiFi</Text>
+                  <Text style={styles.checklistDescription}>
+                    {step1WiFiStatus === 'success' 
+                      ? 'WiFi connected successfully' 
+                      : step1WiFiStatus === 'failed'
+                      ? 'WiFi connection failed'
+                      : step1WiFiStatus === 'loading'
+                      ? 'Connecting to WiFi network...'
+                      : 'Waiting to connect...'}
+                  </Text>
+                </View>
+              </View>
+            </View>
+
+            {/* Step 2: Register Device - Only show if Step 1 succeeded */}
+            {step1WiFiStatus === 'success' && (
+              <View style={styles.checklistItemCard}>
+                <View style={styles.checklistItemContent}>
+                  <View style={styles.checklistIconContainer}>
+                    {step2RegisterStatus === 'success' ? (
+                      <View style={[styles.checklistIcon, styles.checklistIconSuccess]}>
+                        <Ionicons name="checkmark" size={20} color="#FFF" />
+                      </View>
+                    ) : step2RegisterStatus === 'failed' ? (
+                      <View style={[styles.checklistIcon, styles.checklistIconFailed]}>
+                        <Ionicons name="close" size={20} color="#FFF" />
+                      </View>
+                    ) : step2RegisterStatus === 'loading' ? (
+                      <View style={[styles.checklistIcon, styles.checklistIconLoading]}>
+                        <ActivityIndicator size="small" color="#4A90E2" />
+                      </View>
+                    ) : (
+                      <View style={[styles.checklistIcon, styles.checklistIconPending]}>
+                        <Ionicons name="ellipse-outline" size={20} color="rgba(255, 255, 255, 0.4)" />
+                      </View>
+                    )}
+                  </View>
+                  <View style={styles.checklistContent}>
+                    <Text style={styles.checklistTitle}>Register Device</Text>
+                    <Text style={styles.checklistDescription}>
+                      {step2RegisterStatus === 'success'
+                        ? 'Device registered successfully'
+                        : step2RegisterStatus === 'failed'
+                        ? statusMessage || 'Registration failed'
+                        : step2RegisterStatus === 'loading'
+                        ? 'Registering device to your account...'
+                        : 'Waiting to register...'}
+                    </Text>
+                  </View>
+                </View>
+              </View>
+            )}
           </View>
+
+        {/* Error Message - Show if Step 1 failed */}
+        {step1WiFiStatus === 'failed' && (
+          <View style={styles.errorContainer}>
+            <Ionicons name="alert-circle" size={20} color="#FF6B6B" />
+            <Text style={styles.errorText}>
+              {retryCountRef.current >= 3 
+                ? 'Failed after 3 attempts. Please check your WiFi credentials.'
+                : `Connection failed. Attempt ${retryCountRef.current + 1} of 3`}
+            </Text>
+          </View>
+        )}
+
+        {/* Retry Button - Only show if Step 1 failed and retries < 3 */}
+        {step1WiFiStatus === 'failed' && retryCountRef.current < 3 && (
+          <TouchableOpacity onPress={handleRetry} style={styles.retryButton}>
+            <Ionicons name="refresh" size={20} color="#FFF" />
+            <Text style={styles.retryButtonText}>Retry</Text>
+          </TouchableOpacity>
+        )}
+
+          {/* Success Button - Simplified: Show when provisioning status is SUCCESS */}
+          {/* SINGLE SOURCE OF TRUTH: Button visibility depends only on final provisioning status */}
+          {currentStatus === ProvisioningStatus.SUCCESS && (
+            <TouchableOpacity onPress={handleGoToDashboard} style={styles.dashboardButton}>
+              <Ionicons name="home" size={20} color="#1D244D" />
+              <Text style={styles.dashboardButtonText}>Go to Dashboard</Text>
+            </TouchableOpacity>
+          )}
         </Animated.View>
-
-        {/* Network Name */}
-        <View style={styles.networkInfo}>
-          <Ionicons name="wifi" size={20} color="rgba(255, 255, 255, 0.6)" />
-          <Text style={styles.networkName}>{wifiSSID}</Text>
-        </View>
-
-        {/* Status Text */}
-        <Text style={[styles.statusText, { color: config.color }]}>{config.text}</Text>
-        {/* Dynamic description: override with friendly error messages when available */}
-        <Text style={styles.statusDescription}>{(() => {
-          if (currentStatus === ProvisioningStatus.SSID_NOT_FOUND) {
-            return 'WiFi network is not available or out of range';
-          }
-          if (currentStatus === ProvisioningStatus.FAILED) {
-            switch (lastErrorKey) {
-              case 'wrong_password':
-                return 'Wrong WiFi password. Please double-check and try again.';
-              case 'weak_signal':
-                return 'Signal is too weak. Move the device closer to the router and retry.';
-              case 'connect_failed':
-                return 'Could not connect to the network. Check router/internet and try again.';
-              default:
-                return STATUS_CONFIG[ProvisioningStatus.FAILED].description;
-            }
-          }
-          return config.description;
-        })()}</Text>
-
-        {/* Progress Indicator - Show while IDLE or CONNECTING */}
-        {(currentStatus === ProvisioningStatus.IDLE || currentStatus === ProvisioningStatus.CONNECTING) && (
-          <ActivityIndicator size="large" color={config.color} style={styles.loader} />
-        )}
-
-        {/* Status Message */}
-        {statusMessage !== '' && (
-          <View style={styles.messageContainer}>
-            <Text style={styles.messageLabel}>Device Response:</Text>
-            <Text style={styles.messageText}>{statusMessage}</Text>
-          </View>
-        )}
-
-        {/* Action Buttons for Error States */}
-        {isError && (
-          <View style={styles.buttonContainer}>
-            <TouchableOpacity onPress={handleRetry} style={[styles.button, styles.retryButton]}>
-              <Ionicons name="refresh" size={20} color="#FFF" />
-              <Text style={styles.buttonText}>Retry Setup</Text>
-            </TouchableOpacity>
-            <TouchableOpacity onPress={handleCancel} style={[styles.button, styles.cancelButton]}>
-              <Ionicons name="close" size={20} color="#FFF" />
-              <Text style={styles.buttonText}>Cancel</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-
-        {/* Action Button for Success State */}
-        {isSuccess && (
-          <View style={styles.buttonContainer}>
-            <TouchableOpacity onPress={handleContinue} style={[styles.button, styles.successButton]}>
-              <Ionicons name="checkmark" size={20} color="#FFF" />
-              <Text style={styles.buttonText}>Continue</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-      </Animated.View>
+      </ScrollView>
 
       {/* Custom Alert */}
       <CustomAlert
@@ -687,11 +795,18 @@ const styles = StyleSheet.create({
     fontSize: 26,
     fontWeight: 'bold',
   },
+  scrollContent: {
+    flexGrow: 1,
+    justifyContent: 'center',
+    paddingBottom: 40,
+  },
   content: {
-    flex: 1,
+    width: '100%',
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 30,
+    paddingVertical: 20,
+    minHeight: '100%',
   },
   iconContainer: {
     marginBottom: 30,
@@ -711,12 +826,43 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     backgroundColor: 'rgba(255, 255, 255, 0.05)',
     borderRadius: 20,
+    position: 'relative',
   },
   networkName: {
     color: 'rgba(255, 255, 255, 0.9)',
     fontSize: 18,
     fontWeight: '600',
     marginLeft: 10,
+    flex: 1,
+  },
+  successBadge: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: 'rgba(76, 175, 80, 0.2)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: 8,
+  },
+  successInfoCard: {
+    backgroundColor: 'rgba(76, 175, 80, 0.1)',
+    borderRadius: 15,
+    padding: 15,
+    width: '100%',
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(76, 175, 80, 0.3)',
+  },
+  successInfoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginVertical: 5,
+  },
+  successInfoText: {
+    color: 'rgba(255, 255, 255, 0.9)',
+    fontSize: 14,
+    marginLeft: 10,
+    fontWeight: '500',
   },
   statusText: {
     fontSize: 24,
@@ -786,5 +932,159 @@ const styles = StyleSheet.create({
     fontSize: 14,
     marginTop: 20,
     fontStyle: 'italic',
+  },
+  // Checklist Styles - Modern Design
+  checklistContainer: {
+    width: '100%',
+    maxWidth: 380,
+    alignSelf: 'center',
+    alignItems: 'center',
+  },
+  checklistItemCard: {
+    width: '100%',
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderRadius: 16,
+    marginBottom: 16,
+    padding: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  checklistItemContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '100%',
+  },
+  checklistIconContainer: {
+    marginRight: 16,
+  },
+  checklistIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  checklistIconSuccess: {
+    backgroundColor: '#4CAF50',
+    shadowColor: '#4CAF50',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 4,
+  },
+  checklistIconFailed: {
+    backgroundColor: '#FF6B6B',
+    shadowColor: '#FF6B6B',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 4,
+  },
+  checklistIconLoading: {
+    backgroundColor: 'rgba(74, 144, 226, 0.15)',
+    borderWidth: 2,
+    borderColor: '#4A90E2',
+  },
+  checklistIconPending: {
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    borderWidth: 2,
+    borderColor: 'rgba(255, 255, 255, 0.15)',
+  },
+  checklistContent: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  checklistTitle: {
+    color: '#FFF',
+    fontSize: 17,
+    fontWeight: '600',
+    marginBottom: 6,
+    letterSpacing: 0.3,
+    textAlign: 'center',
+  },
+  checklistDescription: {
+    color: 'rgba(255, 255, 255, 0.75)',
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: '400',
+    textAlign: 'center',
+  },
+  errorContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 107, 107, 0.15)',
+    borderRadius: 14,
+    padding: 16,
+    marginTop: 24,
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 107, 107, 0.4)',
+    width: '100%',
+    maxWidth: 380,
+    alignSelf: 'center',
+  },
+  errorText: {
+    color: '#FF6B6B',
+    fontSize: 14,
+    marginLeft: 10,
+    flex: 1,
+    fontWeight: '500',
+    lineHeight: 20,
+  },
+  retryButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#4A90E2',
+    paddingVertical: 16,
+    paddingHorizontal: 36,
+    borderRadius: 28,
+    marginTop: 24,
+    gap: 10,
+    shadowColor: '#4A90E2',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.4,
+    shadowRadius: 8,
+    elevation: 6,
+    width: '100%',
+    maxWidth: 380,
+    alignSelf: 'center',
+  },
+  retryButtonText: {
+    color: '#FFF',
+    fontSize: 16,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+  },
+  dashboardButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FFF',
+    paddingVertical: 18,
+    paddingHorizontal: 48,
+    borderRadius: 28,
+    marginTop: 32,
+    gap: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.3,
+    shadowRadius: 12,
+    elevation: 10,
+    width: '100%',
+    maxWidth: 380,
+    alignSelf: 'center',
+  },
+  dashboardButtonText: {
+    color: '#1D244D',
+    fontSize: 18,
+    fontWeight: '700',
+    letterSpacing: 0.5,
   },
 });

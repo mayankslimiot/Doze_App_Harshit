@@ -6,8 +6,8 @@ import { Ionicons } from "@expo/vector-icons";
 import { BlurView } from "expo-blur";
 import { LinearGradient } from "expo-linear-gradient";
 import * as Location from "expo-location";
-import { useRouter } from "expo-router";
-import React, { useEffect, useRef, useState } from "react";
+import { useRouter, usePathname } from "expo-router";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Keyboard,
@@ -32,9 +32,11 @@ export default function WiFiSetupScreen() {
     setWifiPassword,
     sendWifiCredentials,
     selectedDevice,
+    wifiProvisioningSuccess,
   } = useProvisioning();
   const { connectedDevice, connectionStatus } = useBluetooth();
   const router = useRouter();
+  const pathname = usePathname();
 
   const [showPassword, setShowPassword] = useState(false);
   const [isSending, setIsSending] = useState(false);
@@ -51,6 +53,48 @@ export default function WiFiSetupScreen() {
   
   // Ref to track if we've already shown the disconnection alert
   const hasShownDisconnectAlert = useRef(false);
+
+  // Function to show disconnect alert
+  const showDisconnectAlert = useCallback(() => {
+    console.log('⚠️ Unexpected device disconnection in WiFiSetupScreen');
+    hasShownDisconnectAlert.current = true;
+    
+    setAlertTitle("Device Disconnected");
+    setAlertMessage(
+      `Connection to ${selectedDevice?.name || 'device'} was lost.\n\n` +
+      "This might happen if:\n" +
+      "• The device moved out of range\n" +
+      "• Bluetooth was turned off\n" +
+      "• The device was powered off\n\n" +
+      "If WiFi setup was in progress, please check if it completed successfully."
+    );
+    setAlertButtons([
+      {
+        text: "Check Status",
+        onPress: () => {
+          setShowAlert(false);
+          hasShownDisconnectAlert.current = false;
+          // Navigate to ConnectScreen to check provisioning status
+          setTimeout(() => {
+            router.push("/(bluetooth)/ConnectScreen");
+          }, 300);
+        },
+        style: 'primary' as const
+      },
+      {
+        text: "Back to Scan",
+        onPress: () => {
+          setShowAlert(false);
+          hasShownDisconnectAlert.current = false;
+          setTimeout(() => {
+            router.replace("/(bluetooth)/ScanScreen");
+          }, 300);
+        },
+        style: 'default' as const
+      }
+    ]);
+    setShowAlert(true);
+  }, [selectedDevice, router]);
 
   // Monitor device connection status
   useEffect(() => {
@@ -77,38 +121,43 @@ export default function WiFiSetupScreen() {
         setConnectionStatusText('Unknown');
     }
 
-    // Handle disconnection - only show alert once per disconnection event
+    // Handle disconnection - only show alert if WiFi provisioning hasn't succeeded
+    // After WiFi connection, BLE disconnect is expected and normal
     if (connectionStatus === 'disconnected' && !hasShownDisconnectAlert.current) {
-      console.log('⚠️ Device disconnected in WiFiSetupScreen');
-      hasShownDisconnectAlert.current = true;
+      // If WiFi provisioning succeeded, BLE disconnect is expected - don't show alert
+      if (wifiProvisioningSuccess) {
+        console.log('✅ WiFi provisioning succeeded - BLE disconnect is expected, not showing alert');
+        hasShownDisconnectAlert.current = true;
+        return; // Don't show disconnect alert after successful WiFi connection
+      }
       
-      setAlertTitle("Device Disconnected");
-      setAlertMessage(
-        `Connection to ${selectedDevice?.name || 'device'} was lost.\n\n` +
-        "Please ensure:\n" +
-        "• The device is powered on\n" +
-        "• The device is in range\n" +
-        "• Bluetooth is enabled"
-      );
-      setAlertButtons([
-        {
-          text: "Back to Scan",
-          onPress: () => {
-            // Close alert first
-            setShowAlert(false);
-            // Reset the flag
-            hasShownDisconnectAlert.current = false;
-            // Use setTimeout to ensure modal closes before navigation
-            setTimeout(() => {
-              router.replace("/(bluetooth)/ScanScreen");
-            }, 300);
-          },
-          style: 'primary'
-        }
-      ]);
-      setShowAlert(true);
+      // Check if we're currently on ConnectScreen (provisioning in progress)
+      // In that case, wait a bit to see if WiFi connection succeeds
+      const isProvisioningInProgress = pathname?.includes('ConnectScreen') || 
+                                       pathname?.includes('provision');
+      
+      if (isProvisioningInProgress) {
+        console.log('⏳ Provisioning in progress - BLE disconnect might be normal, waiting 3s...');
+        // Wait a bit to see if we get success status via MQTT
+        const waitTimeout = setTimeout(() => {
+          // Re-check success status after wait
+          if (wifiProvisioningSuccess) {
+            console.log('✅ WiFi provisioning succeeded during wait - not showing disconnect alert');
+            return;
+          }
+          // If still not successful after wait, show alert
+          console.log('⚠️ Still no success after wait - showing disconnect alert');
+          showDisconnectAlert();
+        }, 3000);
+        
+        // Cleanup timeout if component unmounts
+        return () => clearTimeout(waitTimeout);
+      }
+      
+      // Show disconnect alert for unexpected disconnections (not during provisioning)
+      showDisconnectAlert();
     }
-  }, [connectionStatus, connectedDevice, selectedDevice, router]);
+  }, [connectionStatus, connectedDevice, selectedDevice, router, wifiProvisioningSuccess, showDisconnectAlert]);
 
   const checkLocationPermission = async (): Promise<boolean> => {
     try {

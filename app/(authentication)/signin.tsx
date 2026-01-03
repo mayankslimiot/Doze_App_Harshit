@@ -4,6 +4,7 @@ import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import { useAuth } from '@/contexts/AuthContext';
+import { apiUrl } from '@/services/api';
 import { useState } from 'react';
 import {
   ActivityIndicator,
@@ -35,8 +36,8 @@ export default function SignInScreen() {
   const [isModalVisible, setModalVisible] = useState(false);
   const [modalInfo, setModalInfo] = useState({ title: '', message: '', isSuccess: false });
 
-  // API endpoint from your Java code
-  const LOGIN_URL = "https://admin.dozemate.com/api/auth/login";
+  // API endpoint - using Render backend URL
+  const LOGIN_URL = apiUrl('/api/auth/login');
   // Role is required by API; keep UI unchanged, default to 'user'
   const USER_ROLE = 'user';
 
@@ -109,7 +110,8 @@ export default function SignInScreen() {
         // Update AuthContext and trigger profile fetch
         await login(token, { id: userId, email: userEmail, name: userName });
 
-        router.replace('/(authentication)/signinResults?ok=1');
+        // Navigate directly to dashboard - NavigationGuard will handle proper routing
+        router.replace('/(tabs)/home');
       } else {
         const msg = result?.message || "Invalid credentials or server error.";
         triggerModal("Login Failed", msg);

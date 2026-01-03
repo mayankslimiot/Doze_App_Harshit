@@ -5,6 +5,7 @@ import { DeviceProvider } from "@/contexts/DeviceContext";
 import { Stack } from "expo-router";
 import { BluetoothProvider } from '../contexts/BluetoothProvider';
 import AnimatedSplash from '@/components/AnimatedSplash';
+import NavigationGuard from '@/components/NavigationGuard';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 // Polyfills for MQTT in React Native
@@ -25,6 +26,7 @@ export default function RootLayout() {
         <DeviceProvider>
         <BluetoothProvider>
         <ProvisioningProvider>
+          <NavigationGuard>
           <Stack
             screenOptions={{
               headerShown: false,
@@ -42,6 +44,7 @@ export default function RootLayout() {
             <Stack.Screen name="setup" />
             <Stack.Screen name="onboarding" />
           </Stack>
+          </NavigationGuard>
           {/* Global animated splash overlay */}
           <AnimatedSplash />
         </ProvisioningProvider>

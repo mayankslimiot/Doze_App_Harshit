@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { ScrollView, View, Text, StyleSheet, Switch, StatusBar, TouchableOpacity, Alert, ActivityIndicator, Linking, Platform, Modal, TextInput } from 'react-native';
+import { ScrollView, View, Text, StyleSheet, Switch, StatusBar, TouchableOpacity, Alert, ActivityIndicator, Linking, Platform } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
@@ -59,13 +59,10 @@ export default function SettingsScreen() {
   const { fetchProfile, auth } = useAuth();
   const { connectedDevice, connectionStatus } = useBluetooth();
   const { selectedDevice } = useProvisioning();
-  const { addDevice, devices, isLoading: isLoadingDevices } = useDevice();
+  const { devices, activeDevice, isLoading: isLoadingDevices } = useDevice();
   const [notificationsEnabled, setNotificationsEnabled] = useState(false);
   const [isLoadingNotificationsPref, setIsLoadingNotificationsPref] = useState(true);
   const [isRefreshingProfile, setIsRefreshingProfile] = useState(false);
-  const [isAddDeviceModalVisible, setIsAddDeviceModalVisible] = useState(false);
-  const [deviceIdInput, setDeviceIdInput] = useState('');
-  const [isAddingDevice, setIsAddingDevice] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -152,6 +149,13 @@ export default function SettingsScreen() {
             isLoading={isRefreshingProfile}
           />
           <View style={styles.divider} />
+          <Row 
+            title="All Devices" 
+            subtitle={devices.length > 0 ? `${devices.length} device(s) registered` : "View and manage your devices"}
+            onPress={() => router.push('/(tabs)/all-devices')}
+            isLoading={isLoadingDevices}
+          />
+          <View style={styles.divider} />
           <Row title="Sign out" onPress={() => router.push('/(tabs)/logout')} />
         </View>
 
@@ -209,13 +213,6 @@ export default function SettingsScreen() {
                 ]
               );
             }}
-          />
-          <View style={styles.divider} />
-          <Row 
-            title="Add device by ID" 
-            subtitle={devices.length > 0 ? `${devices.length} device(s) connected` : "Connect to a device using its ID"}
-            onPress={() => setIsAddDeviceModalVisible(true)}
-            isLoading={isLoadingDevices}
           />
         </View>
 
@@ -291,95 +288,6 @@ export default function SettingsScreen() {
         </View>
         <View style={{ height: insets.bottom + 24 }} />
       </ScrollView>
-
-      {/* Add Device Modal */}
-      <Modal
-        visible={isAddDeviceModalVisible}
-        animationType="slide"
-        transparent
-        onRequestClose={() => setIsAddDeviceModalVisible(false)}
-      >
-        <View style={styles.modalBackdrop}>
-          <View style={styles.modalContent}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Add Device by ID</Text>
-              <TouchableOpacity onPress={() => setIsAddDeviceModalVisible(false)}>
-                <Text style={styles.modalClose}>✕</Text>
-              </TouchableOpacity>
-            </View>
-
-            <Text style={styles.modalSubtitle}>
-              Enter the device ID to connect to an existing device on the server.
-            </Text>
-            <Text style={styles.modalFormatHint}>
-              Format: XXXX-XXXXXXXXXXXX (4 digits, hyphen, 12 hex characters)
-            </Text>
-
-            <TextInput
-              style={styles.deviceIdInput}
-              placeholder="0000-000000000000"
-              placeholderTextColor="rgba(255,255,255,0.5)"
-              value={deviceIdInput}
-              onChangeText={(text) => setDeviceIdInput(text.toUpperCase().replace(/[^0-9A-F-]/g, ''))}
-              autoCapitalize="characters"
-              autoCorrect={false}
-              editable={!isAddingDevice}
-            />
-
-            <View style={styles.modalButtons}>
-              <TouchableOpacity
-                style={[styles.modalButton, styles.modalButtonCancel]}
-                onPress={() => {
-                  setIsAddDeviceModalVisible(false);
-                  setDeviceIdInput('');
-                }}
-                disabled={isAddingDevice}
-              >
-                <Text style={styles.modalButtonTextCancel}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.modalButton, styles.modalButtonAdd, (!deviceIdInput.trim() || isAddingDevice) && styles.modalButtonDisabled]}
-                onPress={async () => {
-                  const id = deviceIdInput.trim();
-                  if (!id) {
-                    Alert.alert('Error', 'Please enter a device ID');
-                    return;
-                  }
-
-                  setIsAddingDevice(true);
-                  try {
-                    const result = await addDevice(id);
-                    if (result.success) {
-                      Alert.alert('Success', 'Device added successfully!', [
-                        {
-                          text: 'OK',
-                          onPress: () => {
-                            setIsAddDeviceModalVisible(false);
-                            setDeviceIdInput('');
-                          },
-                        },
-                      ]);
-                    } else {
-                      Alert.alert('Error', result.message || 'Failed to add device');
-                    }
-                  } catch (error: any) {
-                    Alert.alert('Error', error.message || 'An unexpected error occurred');
-                  } finally {
-                    setIsAddingDevice(false);
-                  }
-                }}
-                disabled={!deviceIdInput.trim() || isAddingDevice}
-              >
-                {isAddingDevice ? (
-                  <ActivityIndicator size="small" color="#1D244D" />
-                ) : (
-                  <Text style={styles.modalButtonTextAdd}>Add Device</Text>
-                )}
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
     </SafeAreaView>
   );
 }
@@ -398,85 +306,5 @@ const styles = StyleSheet.create({
   rowSubtitle: { color: 'rgba(255,255,255,0.6)', fontSize: 12, marginTop: 2 },
   chevron: { color: 'rgba(255,255,255,0.5)', fontSize: 22, marginLeft: 8 },
   divider: { height: StyleSheet.hairlineWidth, backgroundColor: 'rgba(255,255,255,0.08)', marginLeft: 16 },
-  
-  // Modal styles
-  modalBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.7)',
-    justifyContent: 'flex-end',
-  },
-  modalContent: {
-    backgroundColor: '#1D244D',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    padding: 20,
-    paddingBottom: 40,
-  },
-  modalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 16,
-  },
-  modalTitle: {
-    color: '#FFFFFF',
-    fontSize: 20,
-    fontWeight: '700',
-  },
-  modalClose: {
-    color: '#FFFFFF',
-    fontSize: 24,
-    fontWeight: '300',
-  },
-  modalSubtitle: {
-    color: 'rgba(255,255,255,0.8)',
-    fontSize: 14,
-    marginBottom: 8,
-  },
-  modalFormatHint: {
-    color: 'rgba(255,255,255,0.6)',
-    fontSize: 12,
-    marginBottom: 16,
-    fontStyle: 'italic',
-  },
-  deviceIdInput: {
-    backgroundColor: 'rgba(255,255,255,0.1)',
-    borderRadius: 12,
-    padding: 16,
-    color: '#FFFFFF',
-    fontSize: 16,
-    marginBottom: 20,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.2)',
-  },
-  modalButtons: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-  modalButton: {
-    flex: 1,
-    paddingVertical: 14,
-    borderRadius: 12,
-    alignItems: 'center',
-  },
-  modalButtonCancel: {
-    backgroundColor: 'rgba(255,255,255,0.1)',
-  },
-  modalButtonAdd: {
-    backgroundColor: '#FFFFFF',
-  },
-  modalButtonDisabled: {
-    opacity: 0.5,
-  },
-  modalButtonTextCancel: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  modalButtonTextAdd: {
-    color: '#1D244D',
-    fontSize: 16,
-    fontWeight: '600',
-  },
 });
 

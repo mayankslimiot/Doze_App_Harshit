@@ -56,6 +56,7 @@
     "react-native-ble-plx": "^3.5.0",
     "react-native-gesture-handler": "~2.24.0",
     "react-native-gifted-charts": "^1.4.64",
+    "react-native-location-enabler": "^4.1.1",
     "react-native-modal-datetime-picker": "^18.0.0",
     "react-native-permissions": "^5.4.1",
     "react-native-reanimated": "~3.17.4",

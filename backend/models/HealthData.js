@@ -4,6 +4,14 @@ const HealthDataSchema = new mongoose.Schema({
     deviceId: { type: String, required: true },
     timestamp: { type: Date, default: Date.now },
     
+    // New wrapped stream fields
+    seq: { type: Number },
+    ts: { type: Number },
+    TS: { type: Number },
+    receivedAt: { type: Date, default: Date.now },
+    streamType: { type: String, default: "live" },
+    streamVersion: { type: String, default: "v2" },
+    
     // Full name fields - stored as top-level fields (all as Number)
     timestampSeconds: { type: Number },
     timestampMilliseconds: { type: Number },
@@ -121,7 +129,9 @@ const HealthDataSchema = new mongoose.Schema({
 // Note: Fields are now stored with full names (temperature, heartRate, etc.)
 
 HealthDataSchema.index({ deviceId: 1, timestamp: -1 });
-// Unique index to prevent duplicates based on deviceId + timestampSeconds
+// Unique index to prevent duplicates based on deviceId + timestampSeconds (for backward compatibility)
 HealthDataSchema.index({ deviceId: 1, timestampSeconds: 1 }, { unique: true, sparse: true });
+// Unique index for new wrapped stream format: deviceId + seq + ts
+HealthDataSchema.index({ deviceId: 1, seq: 1, ts: 1 }, { unique: true, sparse: true });
 
 module.exports = mongoose.model("HealthData", HealthDataSchema);

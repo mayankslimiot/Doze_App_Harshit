@@ -304,7 +304,7 @@ export function useBluetooth(): BluetoothState {
   }, [stopAllScanning]);
 
   // Read device information characteristics
-  const fetchDeviceInfo = useCallback(async (device: Device) => {
+  const fetchDeviceInfo = useCallback(async (device: Device): Promise<string | null> => {
     try {
       console.log('\n📋 ========== FETCHING DEVICE INFORMATION ==========');
       console.log(`Device: ${device.name} (${device.id})`);
@@ -341,14 +341,16 @@ export function useBluetooth(): BluetoothState {
       console.log('\n🔧 Device Information Service (0x180A):');
       await readCharacteristic(DEVICE_INFO_SERVICE_UUID, MANUFACTURER_NAME_CHAR_UUID, 'Manufacturer');
       await readCharacteristic(DEVICE_INFO_SERVICE_UUID, MODEL_NUMBER_CHAR_UUID, 'Model Number');
-      await readCharacteristic(DEVICE_INFO_SERVICE_UUID, SERIAL_NUMBER_CHAR_UUID, 'Serial Number');
+      const serialNumber = await readCharacteristic(DEVICE_INFO_SERVICE_UUID, SERIAL_NUMBER_CHAR_UUID, 'Serial Number');
       await readCharacteristic(DEVICE_INFO_SERVICE_UUID, HARDWARE_REVISION_CHAR_UUID, 'Hardware Revision');
       await readCharacteristic(DEVICE_INFO_SERVICE_UUID, FIRMWARE_REVISION_CHAR_UUID, 'Firmware Revision');
       await readCharacteristic(DEVICE_INFO_SERVICE_UUID, SOFTWARE_REVISION_CHAR_UUID, 'Software Revision');
       
       console.log('========================================\n');
+      return serialNumber;
     } catch (error) {
       console.error('❌ Error fetching device info:', error);
+      return null;
     }
   }, []);
 

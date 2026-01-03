@@ -188,9 +188,9 @@ export default function SignupStep2() {
             </TouchableOpacity>
             <Text style={styles.termsText}>
               I agree to the{' '}
-              <Text style={styles.link} onPress={() => Linking.openURL('https://admin.dozemate.com/terms')}>Terms and Conditions</Text>
+              <Text style={styles.link} onPress={() => Linking.openURL('https://dozemate.com/terms')}>Terms and Conditions</Text>
               {' '}and{' '}
-              <Text style={styles.link} onPress={() => Linking.openURL('https://admin.dozemate.com/privacy')}>Privacy Policy</Text>.
+              <Text style={styles.link} onPress={() => Linking.openURL('https://dozemate.com/privacy')}>Privacy Policy</Text>.
             </Text>
           </View>
 
