@@ -2,9 +2,9 @@ import React from 'react';
 import { View, Text, StyleSheet, Dimensions, TouchableOpacity, StatusBar, FlatList, Animated, Image as RNImage } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import Svg, { Defs, ClipPath, Path, Image as SvgImage, G } from 'react-native-svg';
 import { useAuth } from '@/contexts/AuthContext';
+import { useBoot } from '@/contexts/BootContext';
 
 const { width } = Dimensions.get('window');
 const DOT_SIZE = 8;
@@ -52,6 +52,7 @@ const SLIDES: Slide[] = [
 export default function OnboardingScreen() {
   const router = useRouter();
   const { auth } = useAuth();
+  const { completeOnboarding } = useBoot();
   const [page, setPage] = React.useState(0);
   const ref = React.useRef<FlatList<Slide>>(null);
   const progressAnim = React.useRef(new Animated.Value(0)).current;
@@ -86,7 +87,9 @@ export default function OnboardingScreen() {
   const onSkip = () => onDone();
 
   const onDone = async () => {
-    await AsyncStorage.setItem('onboarding_seen_v1', 'true');
+    // Mark onboarding as complete using BootContext (single source of truth)
+    await completeOnboarding();
+    
     // NavigationGuard will handle routing based on auth and device status
     // Navigate to a neutral route and let NavigationGuard decide
     if (auth.isLoggedIn) {

@@ -3,6 +3,7 @@ import { RingBuffer, DataPoint } from '@/utils/RingBuffer';
 import { loadHistory } from '@/utils/historyLoader';
 import { isDuplicate } from '@/utils/deduplication';
 import { connectWebSocket, removeWebSocketHandler } from '@/services/websocketService';
+import { processHeartRateReading } from '@/services/heartRateNotifications';
 
 /**
  * Custom hook to manage heart rate data with ring buffer
@@ -57,21 +58,38 @@ export function useHeartRateRingBuffer(deviceId: string | null, isLoggedIn: bool
     (data: any) => {
       const heartRateValue = data.heartRate ?? data.hr ?? data.bpm ?? null;
 
-      if (heartRateValue != null && heartRateValue > 0 && heartRateValue < 250) {
-        // Extract timestamp
-        let updateTimestamp: number;
-        if (data.timestamp) {
-          updateTimestamp = new Date(data.timestamp).getTime();
-        } else if (data.timestampSeconds) {
-          updateTimestamp = data.timestampSeconds * 1000;
-        } else {
-          updateTimestamp = Date.now();
-        }
+      // Extract timestamp
+      let updateTimestamp: number;
+      if (data.timestamp) {
+        updateTimestamp = new Date(data.timestamp).getTime();
+      } else if (data.timestampSeconds) {
+        updateTimestamp = data.timestampSeconds * 1000;
+      } else {
+        updateTimestamp = Date.now();
+      }
 
-        const newPoint: DataPoint = {
-          timestamp: updateTimestamp,
-          value: Number(heartRateValue),
-        };
+      // Handle null values (gaps) and valid heart rate values
+      // Rule: null = gap (HV=0 or AS=0), valid range = 0 < value < 250
+      let processedValue: number | null = null;
+      
+      if (heartRateValue === null) {
+        // Explicit null from backend = gap
+        processedValue = null;
+      } else if (heartRateValue === 0) {
+        // 0 is invalid, treat as gap (should not happen if backend is fixed)
+        processedValue = null;
+      } else if (Number.isFinite(heartRateValue) && heartRateValue > 0 && heartRateValue < 250) {
+        // Valid heart rate value
+        processedValue = Number(heartRateValue);
+      } else {
+        // Invalid value, skip
+        return;
+      }
+
+      const newPoint: DataPoint = {
+        timestamp: updateTimestamp,
+        value: processedValue,
+      };
 
         // Check for duplicates before adding
         const lastPoint = ringBufferRef.current.last();
@@ -84,6 +102,13 @@ export function useHeartRateRingBuffer(deviceId: string | null, isLoggedIn: bool
           console.log(`[useHeartRateRingBuffer] ✅ Pushed new point: ${newPoint.value} BPM at ${new Date(newPoint.timestamp).toISOString()}, Buffer size: ${ringBufferRef.current.size()}`);
         } else {
           console.log(`[useHeartRateRingBuffer] ⏭️ Duplicate point skipped: ${newPoint.value} BPM at ${new Date(newPoint.timestamp).toISOString()}`);
+        }
+        
+        // Process heart rate for notifications (only if value is valid, not null)
+        if (newPoint.value !== null) {
+          processHeartRateReading(newPoint.value, deviceId).catch((error) => {
+            console.error('[useHeartRateRingBuffer] Error processing heart rate notification:', error);
+          });
         }
         
         // ALWAYS trigger render when we receive valid data, even if duplicate

@@ -536,30 +536,102 @@ export const HealthGraph: React.FC<HealthGraphProps> = ({
       return { linePath: path, areaPath };
     }
 
+    // Convert chart data to coordinates
+    const points = chartData.map((point) => ({
+      x: chartPadding + ((point.timestamp - startTime) / timeRange) * availableWidth,
+      y: chartPadding + availableHeight - ((point.value - yMin) / valueRange) * availableHeight,
+    }));
+
     let path = '';
     let areaPath = '';
 
-    // Build path ensuring all points are connected sequentially
-    chartData.forEach((point, index) => {
-      const x = chartPadding + ((point.timestamp - startTime) / timeRange) * availableWidth;
-      const y = chartPadding + availableHeight - ((point.value - yMin) / valueRange) * availableHeight;
+    // Helper function to calculate control points for smooth curves using Catmull-Rom spline
+    const getControlPoints = (p0: { x: number; y: number }, p1: { x: number; y: number }, p2: { x: number; y: number }, p3: { x: number; y: number }, t: number = 0.3) => {
+      // Calculate distances
+      const d01 = Math.sqrt(Math.pow(p1.x - p0.x, 2) + Math.pow(p1.y - p0.y, 2));
+      const d12 = Math.sqrt(Math.pow(p2.x - p1.x, 2) + Math.pow(p2.y - p1.y, 2));
+      const d23 = Math.sqrt(Math.pow(p3.x - p2.x, 2) + Math.pow(p3.y - p2.y, 2));
+      
+      // Avoid division by zero
+      const d01Safe = d01 || 1;
+      const d12Safe = d12 || 1;
+      const d23Safe = d23 || 1;
+      
+      // Calculate control points
+      const fa = t * d12Safe / (d01Safe + d12Safe);
+      const fb = t * d12Safe / (d12Safe + d23Safe);
+      
+      const cp1x = p1.x + fa * (p2.x - p0.x);
+      const cp1y = p1.y + fa * (p2.y - p0.y);
+      const cp2x = p2.x - fb * (p3.x - p1.x);
+      const cp2y = p2.y - fb * (p3.y - p1.y);
+      
+      return { cp1x, cp1y, cp2x, cp2y };
+    };
 
-      if (index === 0) {
-        // Move to first point
-        path = `M ${x} ${y}`;
-        areaPath = `M ${x} ${chartPadding + availableHeight} L ${x} ${y}`;
-      } else {
-        // Line to next point - ensures clear connection
-        path += ` L ${x} ${y}`;
-        areaPath += ` L ${x} ${y}`;
+    // Build smooth curve path
+    if (points.length === 2) {
+      // Only two points - use quadratic curve
+      const p0 = points[0];
+      const p1 = points[1];
+      const midX = (p0.x + p1.x) / 2;
+      const midY = (p0.y + p1.y) / 2;
+      path = `M ${p0.x} ${p0.y} Q ${midX} ${midY} ${p1.x} ${p1.y}`;
+      areaPath = `M ${p0.x} ${chartPadding + availableHeight} L ${p0.x} ${p0.y} Q ${midX} ${midY} ${p1.x} ${p1.y} L ${p1.x} ${chartPadding + availableHeight} Z`;
+    } else {
+      // Three or more points - use cubic bezier curves
+      for (let i = 0; i < points.length; i++) {
+        const point = points[i];
+        
+        if (i === 0) {
+          // Move to first point
+          path = `M ${point.x} ${point.y}`;
+          areaPath = `M ${point.x} ${chartPadding + availableHeight} L ${point.x} ${point.y}`;
+        } else if (i === points.length - 1) {
+          // Last point - draw line to it
+          const prevPoint = points[i - 1];
+          if (i === 1) {
+            // Only two points case already handled
+            path += ` L ${point.x} ${point.y}`;
+            areaPath += ` L ${point.x} ${point.y}`;
+          } else {
+            // Use smooth curve to last point
+            const p0 = points[i - 2];
+            const p1 = prevPoint;
+            const p2 = point;
+            const p3 = point; // Use same point for p3
+            const { cp1x, cp1y } = getControlPoints(p0, p1, p2, p3);
+            path += ` C ${cp1x} ${cp1y} ${point.x} ${point.y} ${point.x} ${point.y}`;
+            areaPath += ` C ${cp1x} ${cp1y} ${point.x} ${point.y} ${point.x} ${point.y}`;
+          }
+        } else {
+          // Middle points - use cubic bezier
+          const p0 = i > 0 ? points[i - 1] : point;
+          const p1 = point;
+          const p2 = points[i + 1];
+          const p3 = i + 2 < points.length ? points[i + 2] : p2;
+          
+          if (i === 1) {
+            // Second point - smooth curve from first
+            const prevPoint = points[i - 1];
+            const nextPoint = points[i + 1];
+            const { cp1x, cp1y, cp2x, cp2y } = getControlPoints(prevPoint, p1, p2, p3);
+            path += ` C ${cp1x} ${cp1y} ${cp2x} ${cp2y} ${p1.x} ${p1.y}`;
+            areaPath += ` C ${cp1x} ${cp1y} ${cp2x} ${cp2y} ${p1.x} ${p1.y}`;
+          } else {
+            // Use cubic bezier with control points
+            const { cp1x, cp1y, cp2x, cp2y } = getControlPoints(p0, p1, p2, p3);
+            path += ` C ${cp1x} ${cp1y} ${cp2x} ${cp2y} ${p1.x} ${p1.y}`;
+            areaPath += ` C ${cp1x} ${cp1y} ${cp2x} ${cp2y} ${p1.x} ${p1.y}`;
+          }
+        }
       }
-    });
+    }
 
     // Close area path
-    if (chartData.length > 0) {
-      const lastPoint = chartData[chartData.length - 1];
-      const lastX = chartPadding + ((lastPoint.timestamp - startTime) / timeRange) * availableWidth;
-      areaPath += ` L ${lastX} ${chartPadding + availableHeight} Z`;
+    if (points.length > 0) {
+      const lastPoint = points[points.length - 1];
+      areaPath += ` L ${lastPoint.x} ${chartPadding + availableHeight} Z`;
     }
 
     return { linePath: path, areaPath };
@@ -672,7 +744,7 @@ export const HealthGraph: React.FC<HealthGraphProps> = ({
             d={linePath.linePath}
             fill="none"
             stroke={lineColor}
-            strokeWidth={1.5}
+            strokeWidth={2.5}
             strokeLinecap="round"
             strokeLinejoin="round"
           />
@@ -686,72 +758,9 @@ export const HealthGraph: React.FC<HealthGraphProps> = ({
           
           return (
             <G key={`point-${index}`}>
-              {/* Regular data points with visible circles */}
-              {!isLatestPoint && (
-                <>
-                  {/* Outer circle for visibility */}
-                  <Circle
-                    cx={x}
-                    cy={y}
-                    r={4}
-                    fill={lineColor}
-                    opacity={0.15}
-                  />
-                  {/* Middle circle */}
-                  <Circle
-                    cx={x}
-                    cy={y}
-                    r={3}
-                    fill={lineColor}
-                    opacity={0.3}
-                  />
-                  {/* Main point */}
-                  <Circle
-                    cx={x}
-                    cy={y}
-                    r={2.5}
-                    fill={lineColor}
-                    opacity={0.6}
-                  />
-                </>
-              )}
-              
-              {/* Highlighted latest point with glow effect */}
+              {/* Tooltip for latest point only */}
               {isLatestPoint && (
                 <>
-                  {/* Outer glow circle */}
-                  <Circle
-                    cx={x}
-                    cy={y}
-                    r={6}
-                    fill={lineColor}
-                    opacity={0.3}
-                  />
-                  {/* Middle glow circle */}
-                  <Circle
-                    cx={x}
-                    cy={y}
-                    r={4}
-                    fill={lineColor}
-                    opacity={0.5}
-                  />
-                  {/* Main point */}
-                  <Circle
-                    cx={x}
-                    cy={y}
-                    r={3.5}
-                    fill={lineColor}
-                    opacity={1}
-                  />
-                  {/* White center dot */}
-                  <Circle
-                    cx={x}
-                    cy={y}
-                    r={1.5}
-                    fill="#FFFFFF"
-                    opacity={1}
-                  />
-                  
                   {/* Tooltip positioning - ensure it stays within bounds */}
                   {(() => {
                     const tooltipWidth = 90;

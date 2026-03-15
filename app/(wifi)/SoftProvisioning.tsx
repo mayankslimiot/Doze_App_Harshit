@@ -203,7 +203,7 @@ export default function SoftProvisioningScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#02041A' },
-  gradientBackground: { position: 'absolute', left: 0, right: 0, top: 0, height: '100%' },
+  gradientBackground: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0 },
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 10, paddingTop: Platform.OS === 'android' ? 50 : 0, paddingBottom: 10 },
   headerIconContainer: { width: 40, height: 40, justifyContent: 'center', alignItems: 'center' },
   headerText: { color: '#FFF', fontSize: 22, fontWeight: 'bold' },

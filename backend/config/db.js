@@ -5,7 +5,8 @@ const connectDB = async () => {
   try {
     // Remove deprecated options (not needed in Mongoose 6+)
     await mongoose.connect(process.env.MONGO_URI);
-    console.log("MongoDB Connected");
+    const { host, port, name } = mongoose.connection;
+    console.log("MongoDB Connected", { host, port, db: name });
   } catch (error) {
     console.error("MongoDB Connection Failed:", error);
     console.error("Connection String:", process.env.MONGO_URI ? "Set (hidden)" : "NOT SET");

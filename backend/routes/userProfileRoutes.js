@@ -1,10 +1,15 @@
 const express = require("express");
+const fs = require("fs");
+const mongoose = require("mongoose");
 const User = require("../models/User");
+const Device = require("../models/Device");
 const bcrypt = require("bcryptjs");
 const authMiddleware = require("../middleware/authMiddleware");
 const router = express.Router();
 const multer = require("multer");
 const path = require("path");
+
+const UPLOADS_PROFILES_DIR = path.join(__dirname, "..", "uploads", "profiles");
 
 // Configure multer for profile image uploads
 const storage = multer.diskStorage({
@@ -70,10 +75,8 @@ router.get("/profile", authMiddleware, async (req, res) => {
     }
 
     console.log("[PROFILE] Successfully fetched profile for user:", user.email);
-    res.json({
-      status: "success",
-      data: user
-    });
+    // Return user data directly (not wrapped in data property for consistency with frontend)
+    res.json(user);
   } catch (error) {
     console.error("[PROFILE] Error fetching user profile:", error);
     console.error("[PROFILE] Error stack:", error.stack);
@@ -93,8 +96,12 @@ router.put("/profile", authMiddleware, async (req, res) => {
       dateOfBirth, 
       gender, 
       weight, 
+      weightUnit,
       height, 
-      waist 
+      heightUnit,
+      waist,
+      waistUnit,
+      profileImage
     } = req.body;
     
     // Check if email is already in use by another user
@@ -123,8 +130,42 @@ router.put("/profile", authMiddleware, async (req, res) => {
     
     // Handle numeric fields (allow 0 as valid value)
     if (weight !== null && weight !== undefined && weight !== '') updateData.weight = weight;
+    if (weightUnit && weightUnit.trim() !== '') updateData.weightUnit = weightUnit.trim();
     if (height !== null && height !== undefined && height !== '') updateData.height = height;
+    if (heightUnit && heightUnit.trim() !== '') updateData.heightUnit = heightUnit.trim();
     if (waist !== null && waist !== undefined && waist !== '') updateData.waist = waist;
+    if (waistUnit && waistUnit.trim() !== '') updateData.waistUnit = waistUnit.trim();
+
+    // Profile image: save base64 to file in uploads/profiles/, or null to clear
+    if (profileImage !== undefined) {
+      const userId = req.user.userId;
+      const currentUser = await User.findById(userId).select("profileImage").lean();
+
+      if (profileImage === null || profileImage === "") {
+        updateData.profileImage = null;
+        if (currentUser?.profileImage && currentUser.profileImage.startsWith("/uploads/profiles/")) {
+          const oldPath = path.join(UPLOADS_PROFILES_DIR, path.basename(currentUser.profileImage));
+          try { fs.unlinkSync(oldPath); } catch (_) {}
+        }
+      } else if (typeof profileImage === "string" && profileImage.startsWith("data:image")) {
+        const base64 = profileImage.includes(",") ? profileImage.split(",")[1] : profileImage;
+        if (!base64) {
+          return res.status(400).json({ message: "Invalid profile image data" });
+        }
+        const buffer = Buffer.from(base64, "base64");
+        fs.mkdirSync(UPLOADS_PROFILES_DIR, { recursive: true });
+        const filename = `user-${userId}-${Date.now()}.jpg`;
+        const filePath = path.join(UPLOADS_PROFILES_DIR, filename);
+        fs.writeFileSync(filePath, buffer);
+        if (currentUser?.profileImage && currentUser.profileImage.startsWith("/uploads/profiles/")) {
+          const oldPath = path.join(UPLOADS_PROFILES_DIR, path.basename(currentUser.profileImage));
+          try { fs.unlinkSync(oldPath); } catch (_) {}
+        }
+        updateData.profileImage = `/uploads/profiles/${filename}`;
+      } else {
+        updateData.profileImage = profileImage;
+      }
+    }
 
     // Check if there's anything to update
     if (Object.keys(updateData).length === 0) {
@@ -226,27 +267,45 @@ router.put("/profile/password", authMiddleware, async (req, res) => {
   }
 });
 
-// Delete user account
+// Delete user account (works for both email and Google/OAuth users)
+// Device data is preserved; only the User record is removed from DB
 router.delete("/profile", authMiddleware, async (req, res) => {
   try {
-    // Option to require password confirmation
-    const { password } = req.body;
-    
-    const user = await User.findById(req.user.userId);
+    const userId = req.user.userId;
+    const { password } = req.body || {};
+
+    const user = await User.findById(userId);
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
 
-    // Verify password if provided
-    if (password) {
-      const isMatch = await bcrypt.compare(password, user.password);
-      if (!isMatch) {
-        return res.status(401).json({ message: "Password is incorrect" });
+    // Verify password only for email users (who have a password)
+    const isOAuthUser = user.oauth && user.oauth.length > 0;
+    if (!isOAuthUser && user.password) {
+      if (password) {
+        const isMatch = await bcrypt.compare(password, user.password);
+        if (!isMatch) {
+          return res.status(401).json({ message: "Password is incorrect" });
+        }
       }
     }
 
-    // Delete user account
-    await User.findByIdAndDelete(req.user.userId);
+    const userObjectId = new mongoose.Types.ObjectId(userId);
+
+    // 1. Remove user from sharedWith on any devices they're shared with
+    await Device.updateMany(
+      { "sharedWith.userId": userObjectId },
+      { $pull: { sharedWith: { userId: userObjectId } } }
+    );
+
+    // 2. Unlink owned devices (set userId to null) - device data stays intact
+    await Device.updateMany(
+      { userId: userObjectId },
+      { $set: { userId: null } }
+    );
+
+    // 3. Delete user account
+    await User.findByIdAndDelete(userId);
 
     res.json({
       status: "success",

@@ -16,8 +16,9 @@ const connectDB = require("./config/db");
 const { logger } = require("./utils/logger");
 const { updateAllDeviceStatuses } = require("./utils/deviceStatusManagement");
 const { verifySmtp } = require('./utils/mailer');
-const { initializeWebSocket } = require("./services/websocketService");
+const { initializeWebSocket, broadcastDeviceUpdate } = require("./services/websocketService");
 const { initializeMQTT } = require("./services/mqttService");
+const Device = require("./models/Device");
 
 // routes
 const publicPendingRoutes = require("./routes/publicPending");
@@ -37,6 +38,16 @@ const app = express();
 /* ───────────────────────── Middleware ───────────────────────── */
 app.use(cors());
 app.use(express.json());
+
+// Disable caching for all API routes
+app.use("/api", (req, res, next) => {
+  res.set({
+    'Cache-Control': 'no-store, no-cache, must-revalidate, private',
+    'Pragma': 'no-cache',
+    'Expires': '0'
+  });
+  next();
+});
 
 // request log (after json, before routes)
 app.use((req, res, next) => {
@@ -62,6 +73,7 @@ app.use("/api/manage/users", userManagementRoutes);
 app.use("/api/manage/devices", deviceManagementRoutes);
 app.use("/api/http", httpRoutes);
 app.use("/api", profileRoutes);
+app.use("/api", require("./routes/history"));
 
 // keep protected catch-all last
 app.use("/api/graph-settings", require("./routes/graphSettings"));
@@ -118,6 +130,85 @@ connectDB()
       logger.info(`✅ Server running on port ${PORT}`);
       logger.info(`✅ WebSocket server ready for connections`);
       logger.info(`✅ MQTT subscriber initialized`);
+    });
+
+    // ✅ 30s Watchdog Timer: Check for devices that haven't sent data for 30 seconds
+    // Runs every 3 seconds to catch devices going silent
+    cron.schedule("*/3 * * * * *", async () => {
+      try {
+        const now = new Date();
+        const thirtySecondsAgo = new Date(now.getTime() - 30000); // 30 seconds in milliseconds
+
+        // Find devices that:
+        // 1. Have lastActiveAt older than 30 seconds
+        // 2. Are currently live (isLive: true) - so we don't process already handled devices
+        const silentDevices = await Device.find({
+          lastActiveAt: { $lt: thirtySecondsAgo },
+          isLive: true
+        });
+
+        if (silentDevices.length > 0) {
+          let updatedCount = 0;
+
+          for (const device of silentDevices) {
+            const absenceStart = device.absenceStart;
+            const hv = device.HV;
+            
+            // Determine bedStatus based on AS and HV values (no data for 30s):
+            // - If AS = 0 → Always "Vacant" (regardless of HV)
+            // - If AS = 1 and HV = 1 → "Waiting" (no data for 30s)
+            // - If AS = 1 and HV = 0 → "Waiting" (no data for 30s)
+            let newBedStatus;
+            if (absenceStart === 0 || absenceStart === "0") {
+              // AS = 0 → Always Vacant
+              newBedStatus = "Vacant";
+            } else if (absenceStart === 1 || absenceStart === "1") {
+              // AS = 1 and no data for 30s → Waiting (both HV=1 and HV=0)
+              newBedStatus = "Waiting";
+            } else {
+              // AS is null/undefined → Keep current status
+              newBedStatus = device.bedStatus || "Vacant";
+            }
+
+            // Update device: Set bedStatus and isLive=false for all silent devices
+            // (mqttService will set isLive=true again when data arrives)
+            if (newBedStatus !== device.bedStatus || device.isLive !== false) {
+              await Device.findByIdAndUpdate(
+                device._id,
+                {
+                  $set: {
+                    bedStatus: newBedStatus,
+                    isLive: false // Set isLive=false for all silent devices to prevent spam
+                  }
+                },
+                { new: true }
+              );
+
+              // Broadcast device_update immediately
+              try {
+                broadcastDeviceUpdate(device.deviceId, {
+                  bedStatus: newBedStatus,
+                  absenceStart: device.absenceStart,
+                  HV: device.HV,
+                  isLive: false,
+                  source: "timeout"
+                });
+                updatedCount++;
+                logger.info(`⏰ Watchdog: Updated device ${device.deviceId} to ${newBedStatus} (AS=${absenceStart}, HV=${hv})`);
+              } catch (wsError) {
+                logger.err(wsError, { where: "watchdog:broadcastDeviceUpdate", deviceId: device.deviceId });
+              }
+            }
+          }
+
+          // Only log if we actually updated devices
+          if (updatedCount > 0) {
+            logger.info(`⏰ Watchdog: Updated ${updatedCount} device(s) silent for >30s`);
+          }
+        }
+      } catch (error) {
+        logger.err(error, { where: "watchdog:30sTimer" });
+      }
     });
 
     // hourly device status updates

@@ -7,49 +7,46 @@ import {
   ScrollView,
   TouchableOpacity,
   Dimensions,
+  ActivityIndicator,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useDevice } from '@/contexts/DeviceContext';
+import { useAuth } from '@/contexts/AuthContext';
+import {
+  getSleepSession,
+  getSleepSessions,
+  getSleepMotionTimeline,
+  formatSleepDuration,
+  formatSleepTime,
+  getSleepQualityColor,
+  type SleepSession,
+  type SleepMotionEvent,
+} from '@/services/sleepAnalytics';
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const RNSvg = require('react-native-svg');
-const { Rect } = RNSvg as { Rect: any };
+const { Rect, Text: SvgText } = RNSvg as { Rect: any; Text: any };
 
 const { width } = Dimensions.get('window');
-
-// Mock data - replace with real API data
-const MOCK_SLEEP_DATA = {
-  sleepTime: '02:26am',
-  duration: '7H 12M',
-  wakeupTime: '09:58am',
-  timeToSleep: '20Minutes',
-  snoring: 'Heavy',
-  restlessness: 'High',
-  stages: {
-    awake: 12, // minutes
-    rem: 74,
-    light: 286,
-    deep: 71,
-  },
-  hourlyData: [
-    { time: '2am', awake: 0, rem: 0, light: 0, deep: 0 },
-    { time: '3am', awake: 5, rem: 15, light: 35, deep: 5 },
-    { time: '4am', awake: 2, rem: 20, light: 30, deep: 8 },
-    { time: '5am', awake: 1, rem: 18, light: 35, deep: 6 },
-    { time: '6am', awake: 3, rem: 12, light: 40, deep: 5 },
-    { time: '7am', awake: 1, rem: 9, light: 45, deep: 5 },
-    { time: '8am', awake: 0, rem: 0, light: 50, deep: 10 },
-    { time: '9am', awake: 0, rem: 0, light: 55, deep: 5 },
-    { time: '10am', awake: 0, rem: 0, light: 0, deep: 0 },
-  ],
-};
 
 export default function SleepInsightsScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const { activeDevice } = useDevice();
+  const { auth } = useAuth();
   const [selectedPeriod, setSelectedPeriod] = React.useState<'Day' | 'Week' | 'Month'>('Day');
   const [selectedDate, setSelectedDate] = React.useState(new Date()); // Start with today's date
+  
+  // Sleep data state
+  const [sleepSession, setSleepSession] = React.useState<SleepSession | null>(null);
+  const [sleepMotionTimeline, setSleepMotionTimeline] = React.useState<SleepMotionEvent[]>([]);
+  const [weeklySessions, setWeeklySessions] = React.useState<SleepSession[]>([]);
+  const [monthlySessions, setMonthlySessions] = React.useState<SleepSession[]>([]);
+  const [isLoading, setIsLoading] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+  const dayRequestInFlightKeyRef = React.useRef<string | null>(null);
 
   // Get start of week (Monday)
   const getWeekStart = (date: Date): Date => {
@@ -124,50 +121,321 @@ export default function SleepInsightsScreen() {
     setSelectedDate(new Date());
   }, [selectedPeriod]);
 
+  // Format date to YYYY-MM-DD for API
+  const formatDateForAPI = (date: Date): string => {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
+  // Fetch sleep session for Day view
+  const fetchSleepSession = React.useCallback(async () => {
+    if (!activeDevice?.deviceId || !auth.isLoggedIn || selectedPeriod !== 'Day') {
+      return;
+    }
+
+    const dateStr = formatDateForAPI(selectedDate);
+    const requestKey = `${activeDevice.deviceId}_${dateStr}`;
+    if (dayRequestInFlightKeyRef.current === requestKey) {
+      return;
+    }
+    dayRequestInFlightKeyRef.current = requestKey;
+
+    try {
+      setIsLoading(true);
+      setError(null);
+
+      const result = await getSleepSession(activeDevice.deviceId, dateStr);
+
+      if (result.success && result.data) {
+        setSleepSession(result.data);
+        const motionResult = await getSleepMotionTimeline(
+          activeDevice.deviceId,
+          result.data.sleepOnsetTime,
+          result.data.sleepEndTime
+        );
+        setSleepMotionTimeline(motionResult.success && motionResult.data ? motionResult.data : []);
+        setError(null);
+      } else {
+        setSleepSession(null);
+        setSleepMotionTimeline([]);
+        setError(result.message || 'No valid sleep session found for this date');
+      }
+    } catch (err: any) {
+      console.error('Failed to fetch sleep session:', err);
+      setError(err.message || 'Failed to load sleep data');
+      setSleepSession(null);
+      setSleepMotionTimeline([]);
+    } finally {
+      if (dayRequestInFlightKeyRef.current === requestKey) {
+        dayRequestInFlightKeyRef.current = null;
+      }
+      setIsLoading(false);
+    }
+  }, [activeDevice?.deviceId, auth.isLoggedIn, selectedPeriod, selectedDate]);
+
+  // Fetch weekly sleep sessions
+  const fetchWeeklySessions = React.useCallback(async () => {
+    if (!activeDevice?.deviceId || !auth.isLoggedIn || selectedPeriod !== 'Week') {
+      return;
+    }
+
+    try {
+      setIsLoading(true);
+      setError(null);
+      
+      const weekStart = getWeekStart(selectedDate);
+      const weekEnd = getWeekEnd(selectedDate);
+      
+      const result = await getSleepSessions(activeDevice.deviceId, weekStart, weekEnd);
+
+      if (result.success && result.data) {
+        setWeeklySessions(result.data || []);
+      } else {
+        setWeeklySessions([]);
+        setError(result.message || 'No weekly sleep data available');
+      }
+    } catch (err: any) {
+      console.error('Failed to fetch weekly sessions:', err);
+      setError(err.message || 'Failed to load weekly sleep data');
+      setWeeklySessions([]);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [activeDevice?.deviceId, auth.isLoggedIn, selectedPeriod, selectedDate]);
+
+  // Fetch monthly sleep sessions
+  const fetchMonthlySessions = React.useCallback(async () => {
+    if (!activeDevice?.deviceId || !auth.isLoggedIn || selectedPeriod !== 'Month') {
+      return;
+    }
+
+    try {
+      setIsLoading(true);
+      setError(null);
+      
+      const monthStart = new Date(selectedDate.getFullYear(), selectedDate.getMonth(), 1);
+      const monthEnd = new Date(selectedDate.getFullYear(), selectedDate.getMonth() + 1, 0);
+      
+      const result = await getSleepSessions(activeDevice.deviceId, monthStart, monthEnd);
+
+      if (result.success && result.data) {
+        setMonthlySessions(result.data || []);
+      } else {
+        setMonthlySessions([]);
+        setError(result.message || 'No monthly sleep data available');
+      }
+    } catch (err: any) {
+      console.error('Failed to fetch monthly sessions:', err);
+      setError(err.message || 'Failed to load monthly sleep data');
+      setMonthlySessions([]);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [activeDevice?.deviceId, auth.isLoggedIn, selectedPeriod, selectedDate]);
+
+  // Fetch data when period or date changes
+  React.useEffect(() => {
+    if (selectedPeriod === 'Day') {
+      fetchSleepSession();
+    } else if (selectedPeriod === 'Week') {
+      fetchWeeklySessions();
+    } else if (selectedPeriod === 'Month') {
+      fetchMonthlySessions();
+    }
+  }, [selectedPeriod, selectedDate, fetchSleepSession, fetchWeeklySessions, fetchMonthlySessions]);
+
+  // Refetch when screen gains focus so we always get fresh data (e.g. today's session after wake-up)
+  useFocusEffect(
+    React.useCallback(() => {
+      if (selectedPeriod === 'Day') {
+        fetchSleepSession();
+      } else if (selectedPeriod === 'Week') {
+        fetchWeeklySessions();
+      } else if (selectedPeriod === 'Month') {
+        fetchMonthlySessions();
+      }
+    }, [selectedPeriod, fetchSleepSession, fetchWeeklySessions, fetchMonthlySessions])
+  );
+
+  // Motion bars within sleep session (same filter as chart)
+  const motionBarsInSession = React.useMemo(() => {
+    if (!sleepSession || selectedPeriod !== 'Day' || sleepMotionTimeline.length === 0) {
+      return [];
+    }
+    const sessionStartMs = new Date(sleepSession.sleepOnsetTime).getTime();
+    const sessionEndMs = new Date(sleepSession.sleepEndTime).getTime();
+    if (!Number.isFinite(sessionStartMs) || !Number.isFinite(sessionEndMs) || sessionEndMs <= sessionStartMs) {
+      return [];
+    }
+    return sleepMotionTimeline.filter(
+      (point) => point.timestamp >= sessionStartMs && point.timestamp <= sessionEndMs && point.durationSeconds > 0
+    );
+  }, [selectedPeriod, sleepSession, sleepMotionTimeline]);
+
+  // Total time of motion bars (awake duration) = sum of all bar durations
+  const totalBarDurationSeconds = React.useMemo(
+    () => motionBarsInSession.reduce((sum, point) => sum + point.durationSeconds, 0),
+    [motionBarsInSession]
+  );
+
+  // Prepare display data from sleep session
+  const displayData = React.useMemo(() => {
+    if (selectedPeriod === 'Day' && sleepSession) {
+      // Awake duration = total time of the motion bars (sum of bar durations)
+      const awakeMinutes = Math.round(totalBarDurationSeconds / 60);
+      const awakeDurationFormatted = totalBarDurationSeconds > 0
+        ? formatSleepDuration(awakeMinutes)
+        : '0m';
+      // Awakenings = total bar count in sleep duration
+      const awakeningsCount = motionBarsInSession.length;
+
+      return {
+        sleepTime: formatSleepTime(sleepSession.sleepOnsetTime),
+        duration: formatSleepDuration(sleepSession.totalSleepTime),
+        wakeupTime: formatSleepTime(sleepSession.sleepEndTime),
+        timeInBed: formatSleepDuration(sleepSession.timeInBed),
+        timeToSleep: `${sleepSession.sleepLatency} min`,
+        sleepEfficiency: `${sleepSession.sleepEfficiency.toFixed(1)}%`,
+        sleepScore: sleepSession.sleepScore,
+        awakenings: awakeningsCount,
+        restingHeartRate: sleepSession.restingHeartRate,
+        minHeartRate: sleepSession.minHeartRate,
+        wakeTime: sleepSession.wakeTime,
+        awakeDuration: awakeDurationFormatted,
+        outOfBedTime: sleepSession.outOfBedTime,
+        dataQuality: sleepSession.dataQuality,
+      };
+    }
+    
+    // Return default/empty data with "--" for display
+    return {
+      sleepTime: '--',
+      duration: '--',
+      wakeupTime: '--',
+      timeInBed: '--',
+      timeToSleep: '--',
+      sleepEfficiency: '--',
+      sleepScore: null,
+      awakenings: 0,
+      restingHeartRate: null,
+      awakeDuration: '--',
+      minHeartRate: null,
+      wakeTime: 0,
+      outOfBedTime: 0,
+      dataQuality: 0,
+    };
+  }, [selectedPeriod, sleepSession, totalBarDurationSeconds, motionBarsInSession]);
+
   // Chart dimensions
   const chartWidth = width - 64;
   const chartHeight = 220;
-  const barWidth = 32;
-  const barSpacing = 8;
-  const maxValue = 60; // Maximum minutes per hour
   const chartPadding = 20;
-  const availableWidth = chartWidth - chartPadding * 2;
-  const availableHeight = chartHeight - chartPadding * 2 - 20; // 20 for labels
+  const yAxisLabelWidth = 44;
+  const chartBottomLabelSpace = 20;
+  const plotStartX = chartPadding + yAxisLabelWidth;
+  const availableWidth = chartWidth - chartPadding * 2 - yAxisLabelWidth;
+  const availableHeight = chartHeight - chartPadding * 2 - chartBottomLabelSpace;
 
-  // Prepare chart data with stacked bars for each sleep stage
-  const chartData = React.useMemo(() => {
-    return MOCK_SLEEP_DATA.hourlyData.map((hour, index) => {
-      const total = hour.awake + hour.rem + hour.light + hour.deep;
-      
-      // Calculate positions
-      const barX = chartPadding + index * (barWidth + barSpacing);
-      const barBaseY = chartPadding + availableHeight;
-      
-      // Stack order: Deep (bottom), Light, REM, Awake (top)
-      // Calculate Y positions for each stack segment from bottom to top
-      let currentY = barBaseY;
-      const stacks = [
-        { value: hour.deep, color: '#1B3A57', y: 0, height: 0 },      // Dark Blue - Deep (bottom)
-        { value: hour.light, color: '#4A90E2', y: 0, height: 0 },     // Medium Blue - Light
-        { value: hour.rem, color: '#7EA6FF', y: 0, height: 0 },       // Light Blue - REM
-        { value: hour.awake, color: '#FFA76B', y: 0, height: 0 },     // Orange - Awake (top)
-      ];
-      
-      // Calculate Y positions and heights from bottom to top
-      stacks.forEach((stack) => {
-        stack.height = (stack.value / maxValue) * availableHeight;
-        stack.y = currentY - stack.height;
-        currentY = stack.y;
-      });
-      
+  const formatAxisTime = React.useCallback((unixMs: number): string => {
+    const date = new Date(unixMs);
+    const hours = date.getHours();
+    const minutes = date.getMinutes();
+    return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
+  }, []);
+
+  const formatYAxisLabel = React.useCallback((durationSeconds: number): string => {
+    // Duration is now in seconds (not milliseconds)
+    if (durationSeconds >= 60) {
+      const minutes = Math.floor(durationSeconds / 60);
+      const remainingSeconds = Math.round(durationSeconds % 60);
+      if (remainingSeconds === 0) {
+        return `${minutes}m`;
+      }
+      return `${minutes}m ${remainingSeconds}s`;
+    }
+    // Show seconds with decimal if less than 1 second, otherwise whole seconds
+    if (durationSeconds < 1) {
+      return `${durationSeconds.toFixed(1)}s`;
+    }
+    return `${Math.round(durationSeconds)}s`;
+  }, []);
+
+  const motionChartData = React.useMemo(() => {
+    if (!sleepSession) {
       return {
-        x: barX,
-        label: hour.time,
-        total,
-        stacks,
+        bars: [] as Array<{ x: number; y: number; width: number; height: number }>,
+        yAxisMaxSeconds: 0,
+        yAxisTicks: [] as Array<{ y: number; value: number }>,
+        xAxisTicks: [] as Array<{ x: number; label: string }>,
+      };
+    }
+
+    const sessionStartMs = new Date(sleepSession.sleepOnsetTime).getTime();
+    const sessionEndMs = new Date(sleepSession.sleepEndTime).getTime();
+    if (!Number.isFinite(sessionStartMs) || !Number.isFinite(sessionEndMs) || sessionEndMs <= sessionStartMs) {
+      return {
+        bars: [] as Array<{ x: number; y: number; width: number; height: number }>,
+        yAxisMaxSeconds: 0,
+        yAxisTicks: [] as Array<{ y: number; value: number }>,
+        xAxisTicks: [] as Array<{ x: number; label: string }>,
+      };
+    }
+
+    const motionBars = sleepMotionTimeline
+      .filter((point) => point.timestamp >= sessionStartMs && point.timestamp <= sessionEndMs && point.durationSeconds > 0)
+      .sort((a, b) => a.timestamp - b.timestamp);
+
+    // Convert duration from seconds to milliseconds for graph calculations
+    const maxDurationSeconds = motionBars.length > 0
+      ? Math.max(...motionBars.map((point) => point.durationSeconds))
+      : 0;
+    const yAxisMaxSeconds = maxDurationSeconds > 0 ? Math.ceil(maxDurationSeconds * 1.1) : 1; // Default to 1 second
+
+    const dynamicBarWidth = Math.min(12, Math.max(3, availableWidth / Math.max(motionBars.length * 1.8, 1)));
+    const sessionDurationMs = sessionEndMs - sessionStartMs;
+    const bars = motionBars.map((point) => {
+      const positionRatio = (point.timestamp - sessionStartMs) / sessionDurationMs;
+      const barCenterX = plotStartX + positionRatio * availableWidth;
+      const x = Math.max(
+        plotStartX,
+        Math.min(plotStartX + availableWidth - dynamicBarWidth, barCenterX - dynamicBarWidth / 2)
+      );
+      // Use durationSeconds for height calculation
+      const height = yAxisMaxSeconds > 0
+        ? Math.max(2, (point.durationSeconds / yAxisMaxSeconds) * availableHeight)
+        : 0;
+      const y = chartPadding + availableHeight - height;
+
+      return { x, y, width: dynamicBarWidth, height };
+    });
+
+    const yAxisTicks = Array.from({ length: 6 }, (_, index) => {
+      const ratio = index / 5;
+      const y = chartPadding + ratio * availableHeight;
+      const value = yAxisMaxSeconds * (1 - ratio); // Value in seconds
+      return { y, value };
+    });
+
+    const xTickCount = 5;
+    const xAxisTicks = Array.from({ length: xTickCount }, (_, index) => {
+      const ratio = index / (xTickCount - 1);
+      const x = plotStartX + ratio * availableWidth;
+      const tickTimestamp = sessionStartMs + ratio * sessionDurationMs;
+      return {
+        x,
+        label: formatAxisTime(tickTimestamp),
       };
     });
-  }, []);
+
+    return {
+      bars,
+      yAxisMaxSeconds,
+      yAxisTicks,
+      xAxisTicks,
+    };
+  }, [sleepSession, sleepMotionTimeline, availableWidth, availableHeight, formatAxisTime, plotStartX]);
 
   return (
     <View style={styles.container}>
@@ -183,7 +451,7 @@ export default function SleepInsightsScreen() {
         <TouchableOpacity onPress={() => router.back()} style={styles.backButton} activeOpacity={0.8}>
           <Ionicons name="arrow-back" size={24} color="#FFFFFF" />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>More Insights</Text>
+        <Text style={styles.headerTitle} numberOfLines={1}>{activeDevice?.customName || activeDevice?.deviceId || 'More Insights'}</Text>
         <View style={{ width: 40 }} />
       </View>
 
@@ -218,115 +486,234 @@ export default function SleepInsightsScreen() {
           </TouchableOpacity>
         </View>
 
-        {/* Key Sleep Metrics Grid - 2 rows x 3 columns */}
-        <View style={styles.metricsGrid}>
-          {/* Row 1 - 3 columns */}
-          <View style={styles.metricsRow}>
-            <View style={styles.metricCard}>
-              <Text style={styles.metricLabel}>Sleep Time</Text>
-              <Text style={styles.metricValue}>{MOCK_SLEEP_DATA.sleepTime}</Text>
-            </View>
-            <View style={styles.metricCard}>
-              <View style={styles.metricLabelRow}>
-                <Text style={styles.metricLabel}>Duration</Text>
-                <TouchableOpacity activeOpacity={0.6}>
-                  <Ionicons name="help-circle-outline" size={16} color="#7EA6FF" />
-                </TouchableOpacity>
+        {/* Loading State */}
+        {isLoading && (
+          <View style={styles.loadingContainer}>
+            <ActivityIndicator size="large" color="#7EA6FF" />
+            <Text style={styles.loadingText}>Loading sleep data...</Text>
+          </View>
+        )}
+
+        {/* Error State - Show message but keep UI visible */}
+        {error && !isLoading && (
+          <View style={styles.errorContainer}>
+            <Ionicons name="information-circle-outline" size={24} color="#7EA6FF" />
+            <Text style={styles.errorText}>{error}</Text>
+          </View>
+        )}
+
+        {/* Key Sleep Metrics Grid - Always show */}
+        {!isLoading && (
+          <View style={styles.metricsGrid}>
+            {/* Row 1 - Sleep Time, Duration, Wakeup Time */}
+            <View style={styles.metricsRow}>
+              <View style={styles.metricCard}>
+                <Text style={styles.metricLabel}>Sleep Time</Text>
+                <Text style={styles.metricValue}>{displayData.sleepTime}</Text>
               </View>
-              <Text style={styles.metricValue}>{MOCK_SLEEP_DATA.duration}</Text>
+              <View style={styles.metricCard}>
+                <View style={styles.metricLabelRow}>
+                  <Text style={styles.metricLabel}>Duration</Text>
+                  <TouchableOpacity activeOpacity={0.6}>
+                    <Ionicons name="help-circle-outline" size={16} color="#7EA6FF" />
+                  </TouchableOpacity>
+                </View>
+                <Text style={styles.metricValue}>{displayData.duration}</Text>
+              </View>
+              <View style={styles.metricCard}>
+                <Text style={styles.metricLabel}>Wakeup Time</Text>
+                <Text style={styles.metricValue}>{displayData.wakeupTime}</Text>
+              </View>
             </View>
-            <View style={styles.metricCard}>
-              <Text style={styles.metricLabel}>Wakeup Time</Text>
-              <Text style={styles.metricValue}>{MOCK_SLEEP_DATA.wakeupTime}</Text>
-            </View>
-          </View>
 
-          {/* Row 2 - 3 columns */}
-          <View style={[styles.metricsRow, { marginBottom: 0 }]}>
-            <View style={styles.metricCard}>
-              <Text style={styles.metricLabel}>Time to Sleep</Text>
-              <Text style={styles.metricValue}>{MOCK_SLEEP_DATA.timeToSleep}</Text>
+            {/* Row 2 - Sleep Efficiency, Awakenings, Time in Bed */}
+            <View style={styles.metricsRow}>
+              <View style={styles.metricCard}>
+                <Text style={styles.metricLabel}>Sleep Efficiency</Text>
+                <Text style={styles.metricValue}>{displayData.sleepEfficiency}</Text>
+              </View>
+              <View style={styles.metricCard}>
+                <Text style={styles.metricLabel}>Awakenings</Text>
+                <Text style={styles.metricValue}>{displayData.awakenings}</Text>
+              </View>
+              <View style={styles.metricCard}>
+                <Text style={styles.metricLabel}>Time in Bed</Text>
+                <Text style={styles.metricValue}>{displayData.timeInBed}</Text>
+              </View>
             </View>
-            <View style={styles.metricCard}>
-              <Text style={styles.metricLabel}>Snoring</Text>
-              <Text style={styles.metricValue}>{MOCK_SLEEP_DATA.snoring}</Text>
-            </View>
-            <View style={styles.metricCard}>
-              <Text style={styles.metricLabel}>Restlessness</Text>
-              <Text style={styles.metricValue}>{MOCK_SLEEP_DATA.restlessness}</Text>
-            </View>
-          </View>
-        </View>
 
-        {/* Sleep Stage Legend */}
-        <View style={styles.legendContainer}>
-          <View style={styles.legendItem}>
-            <View style={[styles.legendDot, { backgroundColor: '#FFA76B' }]} />
-            <Text style={styles.legendText}>Awake: {MOCK_SLEEP_DATA.stages.awake}min</Text>
+            {/* Row 3 - Resting HR, Min HR, Awake Duration */}
+            <View style={[styles.metricsRow, { marginBottom: 0 }]}>
+              <View style={styles.metricCard}>
+                <Text style={styles.metricLabel}>Resting HR</Text>
+                <Text style={styles.metricValue}>
+                  {displayData.restingHeartRate ? `${displayData.restingHeartRate} bpm` : 'N/A'}
+                </Text>
+              </View>
+              <View style={styles.metricCard}>
+                <Text style={styles.metricLabel}>Min HR</Text>
+                <Text style={styles.metricValue}>
+                  {displayData.minHeartRate ? `${displayData.minHeartRate} bpm` : 'N/A'}
+                </Text>
+              </View>
+              <View style={styles.metricCard}>
+                <Text style={styles.metricLabel}>Awake Duration</Text>
+                <Text style={styles.metricValue}>{displayData.awakeDuration}</Text>
+              </View>
+            </View>
           </View>
-          <View style={styles.legendItem}>
-            <View style={[styles.legendDot, { backgroundColor: '#7EA6FF' }]} />
-            <Text style={styles.legendText}>REM: {MOCK_SLEEP_DATA.stages.rem}min</Text>
-          </View>
-          <View style={styles.legendItem}>
-            <View style={[styles.legendDot, { backgroundColor: '#4A90E2' }]} />
-            <Text style={styles.legendText}>Light: {MOCK_SLEEP_DATA.stages.light}min</Text>
-          </View>
-          <View style={styles.legendItem}>
-            <View style={[styles.legendDot, { backgroundColor: '#1B3A57' }]} />
-            <Text style={styles.legendText}>Deep: {MOCK_SLEEP_DATA.stages.deep}min</Text>
-          </View>
-        </View>
+        )}
 
-        {/* Sleep Stage Graph */}
-        <View style={styles.chartContainer}>
-          <RNSvg.Svg width={chartWidth} height={chartHeight}>
-            {/* Grid lines for each hour */}
-            {chartData.map((bar, index) => {
-              const gridX = bar.x + barWidth / 2;
-              return (
-                <Rect
-                  key={`grid-${index}`}
-                  x={gridX}
-                  y={chartPadding}
-                  width={1}
-                  height={availableHeight}
-                  fill="rgba(255,255,255,0.08)"
-                />
-              );
-            })}
-            
-            {/* Stacked bars */}
-            {chartData.map((bar, barIndex) => (
-              <React.Fragment key={`bar-${barIndex}`}>
-                {bar.stacks.map((stack, stackIndex) => {
-                  if (stack.value === 0) return null; // Skip empty stacks
-                  return (
+        {/* Movement during sleep bar graph (Day view) */}
+        {!isLoading && selectedPeriod === 'Day' && (
+          <>
+            <View style={styles.legendContainer}>
+              <View style={styles.legendItem}>
+                <View style={[styles.legendDot, { backgroundColor: '#7EA6FF' }]} />
+                <Text style={styles.legendText}>Movement during sleep</Text>
+              </View>
+            </View>
+
+            <View style={styles.chartContainer}>
+              {sleepSession ? (
+                <>
+                  <RNSvg.Svg width={chartWidth} height={chartHeight}>
+                    {motionChartData.yAxisTicks.map((tick, index) => {
+                      return (
+                        <Rect
+                          key={`grid-${index}`}
+                          x={plotStartX}
+                          y={tick.y}
+                          width={availableWidth}
+                          height={1}
+                          fill="rgba(255,255,255,0.08)"
+                        />
+                      );
+                    })}
+
+                    {motionChartData.yAxisTicks.map((tick, index) => (
+                      <SvgText
+                        key={`y-label-${index}`}
+                        x={plotStartX - 8}
+                        y={tick.y + 4}
+                        fill="rgba(255,255,255,0.65)"
+                        fontSize={10}
+                        fontWeight="600"
+                        textAnchor="end"
+                      >
+                        {formatYAxisLabel(tick.value)}
+                      </SvgText>
+                    ))}
+
                     <Rect
-                      key={`stack-${barIndex}-${stackIndex}`}
-                      x={bar.x}
-                      y={stack.y}
-                      width={barWidth}
-                      height={stack.height}
-                      fill={stack.color}
-                      rx={4}
-                      ry={4}
+                      x={plotStartX}
+                      y={chartPadding}
+                      width={1}
+                      height={availableHeight}
+                      fill="rgba(255,255,255,0.2)"
                     />
-                  );
-                })}
-              </React.Fragment>
-            ))}
-          </RNSvg.Svg>
-          
-          {/* Time labels */}
-          <View style={styles.chartLabelsContainer}>
-            {chartData.map((bar, index) => (
-              <Text key={`label-${index}`} style={styles.chartLabel}>
-                {bar.label}
-              </Text>
-            ))}
+                    <Rect
+                      x={plotStartX + availableWidth}
+                      y={chartPadding}
+                      width={1}
+                      height={availableHeight}
+                      fill="rgba(255,255,255,0.2)"
+                    />
+                    <Rect
+                      x={plotStartX}
+                      y={chartPadding + availableHeight}
+                      width={availableWidth}
+                      height={1}
+                      fill="rgba(255,255,255,0.2)"
+                    />
+
+                    {motionChartData.bars.map((bar, index) => (
+                      <Rect
+                        key={`motion-bar-${index}`}
+                        x={bar.x}
+                        y={bar.y}
+                        width={bar.width}
+                        height={bar.height}
+                        fill="#7EA6FF"
+                        rx={2}
+                        ry={2}
+                      />
+                    ))}
+
+                    {motionChartData.xAxisTicks.map((tick, index) => (
+                      <React.Fragment key={`x-tick-${index}`}>
+                        <Rect
+                          x={tick.x - 0.5}
+                          y={chartPadding + availableHeight}
+                          width={1}
+                          height={5}
+                          fill="rgba(255,255,255,0.45)"
+                        />
+                        <SvgText
+                          x={tick.x}
+                          y={chartPadding + availableHeight + 16}
+                          fill="rgba(199,214,255,0.75)"
+                          fontSize={10}
+                          fontWeight="600"
+                          textAnchor="middle"
+                        >
+                          {tick.label}
+                        </SvgText>
+                      </React.Fragment>
+                    ))}
+                  </RNSvg.Svg>
+
+                </>
+              ) : (
+                <View style={styles.emptyChartContainer}>
+                  <Ionicons name="moon-outline" size={48} color="rgba(255,255,255,0.2)" />
+                  <Text style={styles.emptyChartText}>No sleep data available</Text>
+                </View>
+              )}
+            </View>
+          </>
+        )}
+
+        {/* Week/Month View - List of Sessions */}
+        {!isLoading && !error && selectedPeriod !== 'Day' && (
+          <View style={styles.sessionsList}>
+            {(selectedPeriod === 'Week' ? weeklySessions : monthlySessions).length === 0 ? (
+              <View style={styles.emptyState}>
+                <Ionicons name="moon-outline" size={48} color="rgba(255,255,255,0.3)" />
+                <Text style={styles.emptyStateText}>No sleep data available</Text>
+              </View>
+            ) : (
+              (selectedPeriod === 'Week' ? weeklySessions : monthlySessions).map((session, index) => (
+                <View key={session._id || index} style={styles.sessionCard}>
+                  <View style={styles.sessionHeader}>
+                    <Text style={styles.sessionDate}>{session.sessionDate}</Text>
+                    {session.sleepScore !== null && (
+                      <View style={[styles.scoreBadge, { backgroundColor: getSleepQualityColor(session.sleepScore) + '20' }]}>
+                        <Text style={[styles.scoreText, { color: getSleepQualityColor(session.sleepScore) }]}>
+                          {session.sleepScore}
+                        </Text>
+                      </View>
+                    )}
+                  </View>
+                  <View style={styles.sessionMetrics}>
+                    <View style={styles.sessionMetric}>
+                      <Text style={styles.sessionMetricLabel}>Duration</Text>
+                      <Text style={styles.sessionMetricValue}>{formatSleepDuration(session.totalSleepTime)}</Text>
+                    </View>
+                    <View style={styles.sessionMetric}>
+                      <Text style={styles.sessionMetricLabel}>Efficiency</Text>
+                      <Text style={styles.sessionMetricValue}>{session.sleepEfficiency.toFixed(1)}%</Text>
+                    </View>
+                    <View style={styles.sessionMetric}>
+                      <Text style={styles.sessionMetricLabel}>Awakenings</Text>
+                      <Text style={styles.sessionMetricValue}>{session.awakenings}</Text>
+                    </View>
+                  </View>
+                </View>
+              ))
+            )}
           </View>
-        </View>
+        )}
       </ScrollView>
     </View>
   );
@@ -417,6 +804,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 12,
     marginBottom: 12,
+    justifyContent: 'flex-start',
   },
   metricCard: {
     flex: 1,
@@ -483,14 +871,114 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     width: '100%',
     marginTop: 8,
-    paddingHorizontal: 20,
+    paddingHorizontal: 12,
   },
   chartLabel: {
     color: 'rgba(255,255,255,0.7)',
     fontSize: 10,
     fontWeight: '600',
-    width: 40,
+    width: 64,
     textAlign: 'center',
+  },
+  loadingContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 40,
+  },
+  loadingText: {
+    color: 'rgba(255,255,255,0.7)',
+    fontSize: 14,
+    marginTop: 12,
+    fontWeight: '600',
+  },
+  errorContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(126,166,255,0.1)',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(126,166,255,0.2)',
+  },
+  errorText: {
+    color: '#7EA6FF',
+    fontSize: 14,
+    marginLeft: 12,
+    flex: 1,
+    fontWeight: '600',
+  },
+  sessionsList: {
+    marginTop: 20,
+  },
+  sessionCard: {
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+  },
+  sessionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  sessionDate: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  scoreBadge: {
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  scoreText: {
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  sessionMetrics: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  sessionMetric: {
+    flex: 1,
+  },
+  sessionMetricLabel: {
+    color: 'rgba(255,255,255,0.7)',
+    fontSize: 11,
+    fontWeight: '600',
+    marginBottom: 4,
+  },
+  sessionMetricValue: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  emptyState: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 60,
+  },
+  emptyStateText: {
+    color: 'rgba(255,255,255,0.5)',
+    fontSize: 16,
+    fontWeight: '600',
+    marginTop: 16,
+  },
+  emptyChartContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 40,
+    minHeight: 220,
+  },
+  emptyChartText: {
+    color: 'rgba(255,255,255,0.4)',
+    fontSize: 14,
+    fontWeight: '600',
+    marginTop: 12,
   },
 });
 

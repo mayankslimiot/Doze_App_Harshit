@@ -76,8 +76,8 @@ export default function HistoryScreen() {
   // Metric tiles (same style as Home's Environment Data)
   const baseMetrics = React.useMemo(
     () => [
-      { key: 'hr', name: 'Heart Rate', value: '68', unit: 'BPM', icon: '❤️', colors: ['#2B2E57', '#1B1E3D'] as const },
-      { key: 'resp', name: 'Respiration', value: '14', unit: 'RPM', icon: '🌬️', colors: ['#24425F', '#18253A'] as const },
+      { key: 'hr', name: 'Estimated HR', value: '68', unit: 'BPM', icon: '❤️', colors: ['#2B2E57', '#1B1E3D'] as const },
+      { key: 'resp', name: 'Estimated Breathing', value: '14', unit: 'RPM', icon: '🌬️', colors: ['#24425F', '#18253A'] as const },
       { key: 'temp', name: 'Temperature', value: '36.5', unit: '°C', icon: '🌡️', colors: ['#2B3E56', '#172235'] as const },
       { key: 'hum', name: 'Humidity', value: '45', unit: '%', icon: '💧', colors: ['#2A4A3E', '#153127'] as const },
     ],
@@ -105,8 +105,8 @@ export default function HistoryScreen() {
       { key: 'etoh', label: 'ETOH' },
       { key: 'hrv', label: 'HRV' },
       { key: 'stress', label: 'Stress' },
-      { key: 'heartRate', label: 'Heart Rate' },
-      { key: 'respiration', label: 'Respiration' },
+      { key: 'heartRate', label: 'Estimated HR' },
+      { key: 'respiration', label: 'Estimated Breathing' },
       { key: 'sdnn', label: 'SDNN' },
       { key: 'rmssd', label: 'RMSSD' },
       { key: 'lfPower', label: 'LF Power' },
@@ -129,8 +129,8 @@ export default function HistoryScreen() {
       etoh: { key: 'etoh', name: 'ETOH', value: '--', unit: 'ppb', icon: '🍷', colors: ['#2B2F3F', '#161925'] as const },
       hrv: { key: 'hrv', name: 'HRV', value: '65', unit: 'ms', icon: '💓', colors: ['#2B2E57', '#1B1E3D'] as const },
       stress: { key: 'stress', name: 'Stress', value: 'Moderate', unit: '', icon: '😮‍💨', colors: ['#4A2B2B', '#1E1414'] as const },
-      heartRate: { key: 'heartRate', name: 'Heart Rate', value: '68', unit: 'BPM', icon: '❤️', colors: ['#2B2E57', '#1B1E3D'] as const },
-      respiration: { key: 'respiration', name: 'Respiration', value: '14', unit: 'RPM', icon: '🌬️', colors: ['#24425F', '#18253A'] as const },
+      heartRate: { key: 'heartRate', name: 'Estimated HR', value: '68', unit: 'BPM', icon: '❤️', colors: ['#2B2E57', '#1B1E3D'] as const },
+      respiration: { key: 'respiration', name: 'Estimated Breathing', value: '14', unit: 'RPM', icon: '🌬️', colors: ['#24425F', '#18253A'] as const },
       sdnn: { key: 'sdnn', name: 'SDNN', value: '42', unit: 'ms', icon: '📈', colors: ['#2B3054', '#161A33'] as const },
       rmssd: { key: 'rmssd', name: 'RMSSD', value: '35', unit: 'ms', icon: '📊', colors: ['#2B3054', '#161A33'] as const },
       lfPower: { key: 'lfPower', name: 'LF Power', value: '1200', unit: 'ms²', icon: '🔵', colors: ['#1C2E4A', '#0E1625'] as const },
@@ -255,7 +255,7 @@ export default function HistoryScreen() {
 
         {/* Summary tiles */}
         <View style={styles.summaryRow}>
-          <View style={styles.summaryTile}><Text style={styles.summaryTitle}>Avg HR</Text><Text style={styles.summaryValue}>72 bpm</Text></View>
+          <View style={styles.summaryTile}><Text style={styles.summaryTitle}>Avg Est. HR</Text><Text style={styles.summaryValue}>72 bpm</Text></View>
           <View style={styles.summaryTile}><Text style={styles.summaryTitle}>Sleep Time</Text><Text style={styles.summaryValue}>6h 20m</Text></View>
           <View style={styles.summaryTile}><Text style={styles.summaryTitle}>Readings</Text><Text style={styles.summaryValue}>124</Text></View>
         </View>
@@ -379,7 +379,7 @@ export default function HistoryScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#02041A' },
-  gradientBackground: { position: 'absolute', width: '100%', height: '100%' },
+  gradientBackground: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0 },
   header: { paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   headerTitle: { color: '#FFF', fontSize: 22, fontWeight: '800' },
   headerActions: { flexDirection: 'row' },

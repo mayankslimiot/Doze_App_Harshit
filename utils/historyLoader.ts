@@ -39,19 +39,42 @@ export async function loadHistory(
       }
 
       // Convert API data to DataPoint format
+      // Rule: null = gap (HV=0 or AS=0), 0 = invalid (treat as gap), valid range = 0 < value < 250
       const dataPoints: DataPoint[] = result.data
         .filter((item: any) => {
-          const value = item.heartRate || item.hr || item.bpm;
-          return value != null && value > 0 && item.timestamp;
+          // Only filter out items without timestamp
+          return item.timestamp != null;
         })
         .map((item: any) => {
           const timestamp = new Date(item.timestamp).getTime();
+          const rawValue = item.heartRate ?? item.hr ?? item.bpm ?? null;
+          
+          let processedValue: number | null = null;
+          
+          if (rawValue === null) {
+            // Explicit null from API = gap
+            processedValue = null;
+          } else if (rawValue === 0) {
+            // 0 is invalid, treat as gap (should not happen if backend is fixed)
+            processedValue = null;
+          } else if (Number.isFinite(rawValue) && rawValue > 0 && rawValue < 250) {
+            // Valid heart rate value
+            processedValue = Number(rawValue);
+          } else {
+            // Invalid value, will be filtered out
+            processedValue = null;
+          }
+          
           return {
             timestamp: isNaN(timestamp) ? Date.now() : timestamp,
-            value: Number(item.heartRate || item.hr || item.bpm || 0),
+            value: processedValue,
           };
         })
-        .filter((point: DataPoint) => point.value > 0 && point.value < 250)
+        .filter((point: DataPoint) => {
+          // Keep all points with valid timestamps
+          // Include null values (gaps) as they are important for graph visualization
+          return point.timestamp != null;
+        })
         .sort((a: DataPoint, b: DataPoint) => a.timestamp - b.timestamp); // Oldest first
 
       if (dataPoints.length === 0) {

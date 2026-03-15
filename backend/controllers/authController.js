@@ -14,6 +14,7 @@ const dbg = require("../utils/dlog");
 const mongoose = require("mongoose");
 const Account = require("../models/Account");
 const { OAuth2Client } = require("google-auth-library");
+const appleSignin = require("apple-signin-auth");
 
 // ---- simple debug helpers ----
 const DEBUG_AUTH = String(process.env.DEBUG_AUTH || 'true').toLowerCase() === 'true';
@@ -27,7 +28,7 @@ const gClient = new OAuth2Client({
   redirectUri: process.env.OAUTH_GOOGLE_REDIRECT_URI,
 });
 
-const APP_BASE_URL = ((process.env.APP_BASE_URL || "").trim() || "https://admin.dozemate.com").replace(/\/$/, "");
+const APP_BASE_URL = ((process.env.APP_BASE_URL || "").trim() || "https://dozemate.com").replace(/\/$/, "");
 const IS_LOCAL_APP = /^(https?:\/\/)?(localhost|127\.0\.0\.1)/i.test(APP_BASE_URL);
 
 function generateTempPassword() {
@@ -348,10 +349,10 @@ exports.register = async (req, res, next) => {
       elog("auth.register:link_members_error", e?.message || e);
     }
 
-        // 9.7) If Admin → create subUsers (inactive + send activation)
-    if (String(resolvedRole).toLowerCase() === "admin" 
-        && Array.isArray(req.body.subUsers) 
-        && req.body.subUsers.length) {
+    // 9.7) If Admin → create subUsers (inactive + send activation)
+    if (String(resolvedRole).toLowerCase() === "admin"
+      && Array.isArray(req.body.subUsers)
+      && req.body.subUsers.length) {
       dbg("auth.register:subUsers:create", { count: req.body.subUsers.length });
 
       for (const s of req.body.subUsers) {
@@ -423,22 +424,21 @@ exports.register = async (req, res, next) => {
     dbg("auth.register:mail:begin", {
       to: String(newUser.email),
       isTempPassword,
-      appBase: process.env.APP_BASE_URL || 'https://admin.dozemate.com',
+      appBase: process.env.APP_BASE_URL || 'https://dozemate.com',
       hasSendEmailFn: typeof sendEmail === 'function'
     });
 
     let mailAttempted = false, mailSent = false, mailError = null, mailMeta = null;
 
     try {
-      const appBase = (process.env.APP_BASE_URL || 'https://admin.dozemate.com').replace(/\/+$/, '');
+      const appBase = (process.env.APP_BASE_URL || 'https://dozemate.com').replace(/\/+$/, '');
 
 
       const subject = "Verify your Dozemate account";
       const lines = [
         `Hi ${newUser.name || 'there'},`,
         "",
-        "Thanks for registering with Dozemate.",
-        "Please verify your email by clicking the link below:",
+        "We are happy to have you on Dozemate - Please click me to verify your account and come onboard",
         verifyUrl,
         "",
         "This link will expire in 24 hours.",
@@ -461,7 +461,13 @@ exports.register = async (req, res, next) => {
             to: newUser.email,
             subject,
             text: lines.join("\n"),
-            html: lines.map(l => l ? `<p>${l}</p>` : '<br/>').join('')
+            html: lines.map(l => {
+              if (!l) return '<br/>';
+              if (l === verifyUrl) {
+                return `<p><a href="${verifyUrl}">We are happy to have you on Dozemate - Please click me to verify your account and come onboard</a></p>`;
+              }
+              return `<p>${l}</p>`;
+            }).join('')
           })
         ).then((r) => (r === false ? 'returned_false' : 'ok')),
         new Promise((_, rej) => setTimeout(() => rej(new Error('MAIL_TIMEOUT_12s')), 12000))
@@ -492,6 +498,306 @@ exports.register = async (req, res, next) => {
 
   } catch (err) {
     dbg("auth.register:error", { message: err?.message });
+    next(err);
+  }
+};
+
+// POST /api/auth/register-simple (Simplified registration for mobile app)
+exports.registerSimple = async (req, res, next) => {
+  dbg("auth.registerSimple:start", {
+    email: req.body?.email,
+    role: req.body?.role,
+  });
+
+  try {
+    const {
+      email,
+      password,
+      name,
+      address = "",
+      pincode = "",
+      mobile = "",
+      countryCode = "+91",
+      country = "India",
+      city = "",
+      organizationId,
+      organizationName,
+      role = "user",
+      devices = [],
+      weightProfile = {},
+      grid = {},
+      displayDeviceIds = [],
+      identifier
+    } = req.body;
+
+    // 1) Validate required fields (only email, name, password)
+    const missing = [];
+    if (!email) missing.push("email");
+    if (!name) missing.push("name");
+    if (!password) missing.push("password");
+
+    if (missing.length) {
+      dbg("auth.registerSimple:missing_fields", { missing });
+      return res
+        .status(400)
+        .json({ status: "fail", message: `Missing: ${missing.join(", ")}` });
+    }
+
+    // 2) Validate email format + uniqueness
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      return res.status(400).json({ status: "fail", message: "Invalid email format" });
+    }
+
+    // Check if email already exists
+    const existingUser = await User.findOne({ email: email.trim().toLowerCase() });
+    if (existingUser) {
+      return res.status(409).json({ status: "fail", message: "Email already registered" });
+    }
+
+    // 3) Resolve organization (optional)
+    let resolvedOrgId = null;
+    if (organizationId) {
+      resolvedOrgId = organizationId;
+      dbg("auth.registerSimple:org_by_id", { organizationId });
+    } else if (organizationName && organizationName.trim()) {
+      const orgName = organizationName.trim();
+      let org = await Organization.findOne({ name: orgName });
+      if (!org) org = await Organization.create({ name: orgName });
+      resolvedOrgId = org._id;
+      dbg("auth.registerSimple:org_by_name", { organizationName: orgName, resolvedOrgId });
+    }
+
+    // [IDENTIFIER] Enforce uniqueness (per-organization)
+    const identifierKey = makeIdentifierKey(identifier);
+    if (identifierKey) {
+      const dup = await User.exists({
+        identifierKey,
+        ...(resolvedOrgId ? { organizationId: resolvedOrgId } : {}),
+      });
+
+      if (dup) {
+        return res.status(409).json({ status: "fail", message: "Identifier already in use" });
+      }
+    }
+
+    // 4) Hash password
+    const hashedPassword = await bcrypt.hash(String(password).trim(), 12);
+    dbg("auth.registerSimple:password_hashed", { hashLen: hashedPassword.length });
+
+    // 5) Devices from payload (optional)
+    const incomingIds = Array.isArray(devices)
+      ? devices
+        .map((d) =>
+          d && d.deviceId ? String(d.deviceId).trim().toUpperCase() : null
+        )
+        .filter(Boolean)
+      : [];
+
+    dbg("auth.registerSimple:devices_incoming", { incomingIdsCount: incomingIds.length });
+
+    let deviceDocs = [];
+    if (incomingIds.length) {
+      deviceDocs = await Device.find(
+        { deviceId: { $in: incomingIds } },
+        { _id: 1, deviceId: 1 }
+      ).lean();
+    }
+    const deviceObjectIds = deviceDocs.map((d) => d._id);
+    const activeDevice = deviceObjectIds[0] || null;
+    dbg("auth.registerSimple:devices_found", {
+      found: deviceObjectIds.length,
+      activeDevice: activeDevice ? String(activeDevice) : null,
+    });
+
+    // 6) Auto-promote to admin if more than one device
+    const resolvedRole = deviceObjectIds.length > 1 ? "admin" : role;
+    dbg("auth.registerSimple:role_resolved", { resolvedRole });
+
+    // 7) Build displayedDevices list (only ACTIVE, capped by grid capacity)
+    const cap = Number(grid?.x || 0) * Number(grid?.y || 0);
+    let displayIds = Array.isArray(displayDeviceIds)
+      ? [...new Set(displayDeviceIds.map((s) => String(s).trim().toUpperCase()))]
+      : [];
+    let displayDocs = [];
+    if (displayIds.length) {
+      displayDocs = await Device.find(
+        { deviceId: { $in: displayIds } },
+        { _id: 1, deviceId: 1, status: 1 }
+      ).lean();
+      displayDocs = displayDocs.filter(
+        (d) => String(d.status || "").toLowerCase() === "active"
+      );
+      if (cap > 0 && displayDocs.length > cap) displayDocs = displayDocs.slice(0, cap);
+    }
+    dbg("auth.registerSimple:display_devices", {
+      requested: displayIds.length,
+      acceptedActive: displayDocs.length,
+      cap,
+    });
+
+    // 8) Create Account
+    const acctId = await allocAccountId();
+    const accountDoc = await Account.create({
+      accountId: acctId,
+      primaryEmail: email,
+      mobile: String(mobile || ''),
+      countryCode: countryCode || undefined,
+      address: address || '',
+      pincode: pincode || '',
+      country: country || '',
+      city: city || '',
+      organizationId: resolvedOrgId || null,
+      userProfiles: [],
+      defaultUser: null
+    });
+
+    // 9) Create user
+    // Convert pincode and mobile to numbers (required by schema)
+    // Use 0 as default since schema requires Number type
+    const pincodeNum = (pincode && String(pincode).trim()) ? Number(String(pincode).trim()) : 0;
+    const mobileNum = (mobile && String(mobile).trim()) ? Number(String(mobile).trim().replace(/\D/g, '')) : 0;
+
+    const newUser = await User.create({
+      email,
+      password: hashedPassword,
+      name,
+      address: address || '',
+      pincode: pincodeNum,
+      mobile: mobileNum,
+      organizationId: resolvedOrgId,
+      countryCode: countryCode || undefined,
+      country: country || '',
+      city: city || '',
+      role: resolvedRole,
+      devices: deviceObjectIds,
+      activeDevice,
+      identifier: identifier || undefined,
+      identifierKey: identifierKey || undefined,
+      dateOfBirth: weightProfile?.dob || undefined,
+      gender: weightProfile?.gender || undefined,
+      weight: weightProfile?.weight || undefined,
+      height: weightProfile?.height || undefined,
+      waist: weightProfile?.waist || undefined,
+      createdAt: new Date(),
+      grid: grid || undefined,
+      displayedDevices: displayDocs.map((d) => d._id),
+      passwordMustChange: false,
+      account: accountDoc._id,
+      accountId: accountDoc.accountId,
+      userId: `${accountDoc.accountId}a`,
+      isDefaultProfile: true,
+      isVerified: false
+    });
+    dbg("auth.registerSimple:user_created", { userId: String(newUser._id) });
+
+    await Account.updateOne(
+      { _id: accountDoc._id },
+      { $push: { userProfiles: newUser._id }, $set: { defaultUser: newUser._id } }
+    );
+
+    // 10) Reflect assignment on Device docs
+    if (deviceObjectIds.length) {
+      await Device.updateMany(
+        { _id: { $in: deviceObjectIds } },
+        { $set: { userId: newUser._id, status: "inactive" } }
+      );
+
+      if (activeDevice) {
+        await Device.updateOne(
+          { _id: activeDevice },
+          { $set: { status: "active", lastActiveAt: new Date(), profileId: newUser._id } }
+        );
+      }
+
+      dbg("auth.registerSimple:devices_assigned", {
+        count: deviceObjectIds.length,
+        activeDevice: String(activeDevice),
+      });
+    }
+
+    // 11) Generate email verification token (24h expiry)
+    const verifyToken = jwt.sign(
+      { userId: String(newUser._id) },
+      process.env.JWT_SECRET,
+      { expiresIn: "1d" }
+    );
+
+    const apiBase = process.env.API_BASE_URL || APP_BASE_URL;
+    const appBase = process.env.APP_BASE_URL || APP_BASE_URL;
+    const verifyUrl = `${apiBase}/api/auth/verify/${verifyToken}`;
+
+    dbg("auth.registerSimple:verify_token_issued", { userId: String(newUser._id) });
+
+    // 12) Send verification email
+    let mailAttempted = false, mailSent = false, mailError = null;
+
+    try {
+      const appBase = (process.env.APP_BASE_URL || 'https://dozemate.com').replace(/\/+$/, '');
+      const subject = "Verify your Dozemate account";
+      const lines = [
+        `Hi ${newUser.name || 'there'},`,
+        "",
+        "This link will expire in 24 hours.",
+        "",
+        "— Dozemate Team"
+      ];
+
+      if (typeof sendEmail !== 'function') {
+        throw new Error("sendEmail export is not a function (check ../utils/mailer)");
+      }
+
+      mailAttempted = true;
+
+      const result = await Promise.race([
+        Promise.resolve(
+          sendEmail({
+            to: newUser.email,
+            subject,
+            text: [
+              `Hi ${newUser.name || 'there'},`,
+              "",
+              "We are happy to have you on Dozemate - Please click me to verify your account and come onboard",
+              verifyUrl,
+              "",
+              "This link will expire in 24 hours.",
+              "",
+              "— Dozemate Team"
+            ].join("\n"),
+            html: [
+              `<p>Hi ${newUser.name || 'there'},</p>`,
+              `<p><a href="${verifyUrl}">We are happy to have you on Dozemate - Please click me to verify your account and come onboard</a></p>`,
+              `<p>This link will expire in 24 hours.</p>`,
+              `<p>— Dozemate Team</p>`
+            ].join('')
+          })
+        ).then((r) => (r === false ? 'returned_false' : 'ok')),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('MAIL_TIMEOUT_12s')), 12000))
+      ]);
+
+      mailSent = (result === 'ok');
+      dbg("auth.registerSimple:mail_result", { result, mailSent });
+    } catch (mailErr) {
+      mailError = mailErr?.message || String(mailErr);
+      elog("auth.registerSimple:mail_error", mailError);
+    }
+
+    return res.status(201).json({
+      status: "success",
+      message: "User registered. Verification email sent.",
+      user: {
+        id: newUser._id,
+        email: newUser.email,
+        name: newUser.name,
+        role: newUser.role
+      },
+      mailAttempted,
+      mailSent,
+      mailError
+    });
+
+  } catch (err) {
+    dbg("auth.registerSimple:error", { message: err?.message });
     next(err);
   }
 };
@@ -691,7 +997,7 @@ exports.forgotPassword = async (req, res, next) => {
     user.passwordResetExpires = new Date(Date.now() + 1000 * 60 * 30); // 30 minutes
     await user.save({ validateBeforeSave: false });
 
-    const resetUrl = `${process.env.APP_BASE_URL || 'https://admin.dozemate.com'}/reset-password/${tokenRaw}`;
+    const resetUrl = `${process.env.APP_BASE_URL || 'https://dozemate.com'}/reset-password/${tokenRaw}`;
     await sendEmail({
       to: user.email,
       subject: 'Reset your Dozemate password',
@@ -728,6 +1034,422 @@ exports.resetPassword = async (req, res, next) => {
 
     return res.status(200).json({ status: "success", message: "Password has been reset." });
   } catch (err) { next(err); }
+};
+
+// POST /api/auth/forgot-mobile - Request 6-digit reset code (mobile app)
+exports.forgotPasswordMobile = async (req, res, next) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({ status: "fail", message: "Email is required" });
+    }
+
+    const user = await User.findOne({ email: email.trim().toLowerCase() });
+    // Only send code if email exists in database
+    if (!user) {
+      return res.status(404).json({
+        status: "fail",
+        message: "Email address not found in our system."
+      });
+    }
+
+    // Generate 6-digit code
+    const resetCode = String(Math.floor(100000 + Math.random() * 900000)); // 100000-999999
+    const codeExpires = new Date(Date.now() + 1000 * 60 * 15); // 15 minutes
+
+    // Store hashed code in database
+    const codeHash = crypto.createHash("sha256").update(resetCode).digest("hex");
+    user.passwordResetCode = codeHash;
+    user.passwordResetCodeExpires = codeExpires;
+    await user.save({ validateBeforeSave: false });
+
+    // Send email with code
+    await sendEmail({
+      to: user.email,
+      subject: 'Your Dozemate Password Reset Code',
+      text: `Your password reset code is: ${resetCode}\n\nThis code will expire in 15 minutes.\n\nIf you didn't request this, please ignore this email.`,
+      html: `
+        <div style="font-family: Arial, sans-serif; padding: 20px;">
+          <h2>Password Reset Code</h2>
+          <p>Your password reset code is:</p>
+          <div style="background-color: #f0f0f0; padding: 15px; border-radius: 5px; font-size: 24px; font-weight: bold; text-align: center; letter-spacing: 5px; margin: 20px 0;">
+            ${resetCode}
+          </div>
+          <p>This code will expire in 15 minutes.</p>
+          <p>If you didn't request this, please ignore this email.</p>
+        </div>
+      `
+    });
+
+    dbg("auth.forgotPasswordMobile:code_sent", { email: user.email, expiresAt: codeExpires });
+
+    return res.status(200).json({
+      status: "success",
+      message: "A reset code has been sent to your email."
+    });
+  } catch (err) {
+    elog("auth.forgotPasswordMobile:error", err?.message || err);
+    next(err);
+  }
+};
+
+// POST /api/auth/verify-reset-code - Verify 6-digit code (mobile app)
+exports.verifyResetCode = async (req, res, next) => {
+  try {
+    const { email, code } = req.body;
+
+    if (!email || !code) {
+      return res.status(400).json({
+        status: "fail",
+        message: "Email and code are required"
+      });
+    }
+
+    // Validate code format (6 digits)
+    if (!/^\d{6}$/.test(String(code).trim())) {
+      return res.status(400).json({
+        status: "fail",
+        message: "Invalid code format. Code must be 6 digits."
+      });
+    }
+
+    const user = await User.findOne({ email: email.trim().toLowerCase() });
+    if (!user) {
+      return res.status(400).json({
+        status: "fail",
+        message: "Invalid code or code expired"
+      });
+    }
+
+    // Check if code exists and hasn't expired
+    if (!user.passwordResetCode || !user.passwordResetCodeExpires) {
+      return res.status(400).json({
+        status: "fail",
+        message: "No reset code found. Please request a new code."
+      });
+    }
+
+    if (user.passwordResetCodeExpires < new Date()) {
+      // Clear expired code
+      user.passwordResetCode = undefined;
+      user.passwordResetCodeExpires = undefined;
+      await user.save({ validateBeforeSave: false });
+
+      return res.status(400).json({
+        status: "fail",
+        message: "Code has expired. Please request a new code."
+      });
+    }
+
+    // Verify code
+    const codeHash = crypto.createHash("sha256").update(String(code).trim()).digest("hex");
+    if (user.passwordResetCode !== codeHash) {
+      return res.status(400).json({
+        status: "fail",
+        message: "Invalid code"
+      });
+    }
+
+    // Code is valid - return success (code remains valid for password reset step)
+    dbg("auth.verifyResetCode:success", { email: user.email });
+
+    return res.status(200).json({
+      status: "success",
+      message: "Code verified successfully"
+    });
+  } catch (err) {
+    elog("auth.verifyResetCode:error", err?.message || err);
+    next(err);
+  }
+};
+
+// POST /api/auth/reset-password-mobile - Reset password with verified code (mobile app)
+exports.resetPasswordMobile = async (req, res, next) => {
+  try {
+    const { email, code, newPassword } = req.body;
+
+    if (!email || !code || !newPassword) {
+      return res.status(400).json({
+        status: "fail",
+        message: "Email, code, and new password are required"
+      });
+    }
+
+    // Validate password length
+    if (newPassword.length < 8) {
+      return res.status(400).json({
+        status: "fail",
+        message: "New password must be at least 8 characters."
+      });
+    }
+
+    // Validate code format
+    if (!/^\d{6}$/.test(String(code).trim())) {
+      return res.status(400).json({
+        status: "fail",
+        message: "Invalid code format."
+      });
+    }
+
+    const user = await User.findOne({ email: email.trim().toLowerCase() }).select("+password");
+    if (!user) {
+      return res.status(400).json({
+        status: "fail",
+        message: "Invalid code or code expired"
+      });
+    }
+
+    // Verify code
+    if (!user.passwordResetCode || !user.passwordResetCodeExpires) {
+      return res.status(400).json({
+        status: "fail",
+        message: "No reset code found. Please request a new code."
+      });
+    }
+
+    if (user.passwordResetCodeExpires < new Date()) {
+      // Clear expired code
+      user.passwordResetCode = undefined;
+      user.passwordResetCodeExpires = undefined;
+      await user.save({ validateBeforeSave: false });
+
+      return res.status(400).json({
+        status: "fail",
+        message: "Code has expired. Please request a new code."
+      });
+    }
+
+    const codeHash = crypto.createHash("sha256").update(String(code).trim()).digest("hex");
+    if (user.passwordResetCode !== codeHash) {
+      return res.status(400).json({
+        status: "fail",
+        message: "Invalid code"
+      });
+    }
+
+    // Code verified - reset password
+    user.password = await bcrypt.hash(String(newPassword), 12);
+    user.passwordMustChange = false;
+    user.passwordResetCode = undefined;
+    user.passwordResetCodeExpires = undefined;
+    user.passwordChangedAt = new Date();
+    await user.save();
+
+    dbg("auth.resetPasswordMobile:success", { email: user.email });
+
+    return res.status(200).json({
+      status: "success",
+      message: "Password has been reset successfully."
+    });
+  } catch (err) {
+    elog("auth.resetPasswordMobile:error", err?.message || err);
+    next(err);
+  }
+};
+
+// POST /api/auth/google-idtoken (mobile app: send Google idToken, get JWT + user)
+exports.googleIdToken = async (req, res, next) => {
+  try {
+    const { idToken } = req.body || {};
+    if (!idToken || typeof idToken !== 'string') {
+      return res.status(400).json({ status: "fail", message: "Missing or invalid idToken" });
+    }
+
+    const audience = process.env.OAUTH_GOOGLE_CLIENT_ID;
+    if (!audience) {
+      elog("googleIdToken: OAUTH_GOOGLE_CLIENT_ID not set");
+      return res.status(500).json({ status: "fail", message: "Server misconfiguration" });
+    }
+
+    const ticket = await gClient.verifyIdToken({
+      idToken: idToken.trim(),
+      audience,
+    });
+    const p = ticket.getPayload();
+    if (!p || !p.email) {
+      return res.status(400).json({ status: "fail", message: "Invalid token payload" });
+    }
+
+    let user = await User.findOne({
+      $or: [
+        { email: p.email },
+        { "oauth.provider": "google", "oauth.providerId": p.sub },
+      ],
+    });
+
+    if (!user) {
+      const acctId = await allocAccountId();
+      const accountDoc = await Account.create({
+        accountId: acctId,
+        primaryEmail: p.email,
+        userProfiles: [],
+        defaultUser: null,
+      });
+
+      user = await User.create({
+        email: p.email,
+        name: p.name || p.email.split("@")[0],
+        profileImage: p.picture || undefined,
+        role: "user",
+        oauth: [{ provider: "google", providerId: p.sub, email: p.email }],
+        account: accountDoc._id,
+        accountId: accountDoc.accountId,
+        userId: `${accountDoc.accountId}a`,
+        isDefaultProfile: true,
+        isVerified: true,
+      });
+
+      await Account.updateOne(
+        { _id: accountDoc._id },
+        { $push: { userProfiles: user._id }, $set: { defaultUser: user._id } }
+      );
+      log("googleIdToken: created user", { email: user.email, accountId: accountDoc.accountId });
+    } else {
+      if (!user.oauth || !user.oauth.some((o) => o.provider === "google" && o.providerId === p.sub)) {
+        await User.updateOne(
+          { _id: user._id },
+          { $push: { oauth: { provider: "google", providerId: p.sub, email: p.email } } }
+        );
+      }
+    }
+
+    const token = jwt.sign(
+      { userId: user._id, role: user.role },
+      process.env.JWT_SECRET,
+      { expiresIn: "30d" }
+    );
+
+    return res.status(200).json({
+      status: "success",
+      message: "Signed in with Google",
+      token,
+      user: {
+        id: user._id,
+        email: user.email,
+        name: user.name,
+        role: user.role,
+        accountId: user.accountId || null,
+      },
+    });
+  } catch (err) {
+    elog("googleIdToken:error", err?.message || err);
+    if (err.message && err.message.includes("Token used too late")) {
+      return res.status(400).json({ status: "fail", message: "Session expired. Please sign in again." });
+    }
+    next(err);
+  }
+};
+
+// POST /api/auth/apple-idtoken
+exports.appleIdToken = async (req, res, next) => {
+  try {
+    const { identityToken, fullName } = req.body || {};
+    if (!identityToken || typeof identityToken !== 'string') {
+      return res.status(400).json({ status: "fail", message: "Missing or invalid identityToken" });
+    }
+
+    const bundleId = 'com.slimiot.dozemate1';
+
+    // Verify the Apple identity token
+    let payload;
+    try {
+      payload = await appleSignin.verifyIdToken(identityToken, {
+        audience: bundleId,
+        ignoreExpiration: false,
+      });
+    } catch (verifyErr) {
+      elog("appleIdToken: verification failed", verifyErr?.message || verifyErr);
+      return res.status(400).json({ status: "fail", message: "Invalid Apple token" });
+    }
+
+    if (!payload || !payload.sub) {
+      return res.status(400).json({ status: "fail", message: "Invalid token payload" });
+    }
+
+    const appleUserId = payload.sub;
+    const appleEmail = payload.email || null;
+
+    // Apple only sends the name on the FIRST sign-in; the client passes it as fullName
+    const appleName = fullName
+      ? [fullName.givenName, fullName.familyName].filter(Boolean).join(' ')
+      : null;
+
+    // Find user by Apple OAuth ID or by email
+    let user = await User.findOne({
+      $or: [
+        { "oauth.provider": "apple", "oauth.providerId": appleUserId },
+        ...(appleEmail ? [{ email: appleEmail }] : []),
+      ],
+    });
+
+    if (!user) {
+      // Create new account + user (same pattern as Google)
+      const email = appleEmail || `apple_${appleUserId}@privaterelay.appleid.com`;
+      const name = appleName || (appleEmail ? appleEmail.split('@')[0] : 'Apple User');
+
+      const acctId = await allocAccountId();
+      const accountDoc = await Account.create({
+        accountId: acctId,
+        primaryEmail: email,
+        userProfiles: [],
+        defaultUser: null,
+      });
+
+      user = await User.create({
+        email,
+        name,
+        role: "user",
+        oauth: [{ provider: "apple", providerId: appleUserId, email }],
+        account: accountDoc._id,
+        accountId: accountDoc.accountId,
+        userId: `${accountDoc.accountId}a`,
+        isDefaultProfile: true,
+        isVerified: true,
+      });
+
+      await Account.updateOne(
+        { _id: accountDoc._id },
+        { $push: { userProfiles: user._id }, $set: { defaultUser: user._id } }
+      );
+      log("appleIdToken: created user", { email: user.email, accountId: accountDoc.accountId });
+    } else {
+      // Link Apple OAuth if not already linked
+      if (!user.oauth || !user.oauth.some((o) => o.provider === "apple" && o.providerId === appleUserId)) {
+        await User.updateOne(
+          { _id: user._id },
+          { $push: { oauth: { provider: "apple", providerId: appleUserId, email: appleEmail || user.email } } }
+        );
+      }
+      // Update name if we received it and user doesn't have one set properly
+      if (appleName && (!user.name || user.name === 'Apple User')) {
+        await User.updateOne({ _id: user._id }, { $set: { name: appleName } });
+        user.name = appleName;
+      }
+    }
+
+    const token = jwt.sign(
+      { userId: user._id, role: user.role },
+      process.env.JWT_SECRET,
+      { expiresIn: "30d" }
+    );
+
+    return res.status(200).json({
+      status: "success",
+      message: "Signed in with Apple",
+      token,
+      user: {
+        id: user._id,
+        email: user.email,
+        name: user.name,
+        role: user.role,
+        accountId: user.accountId || null,
+      },
+    });
+  } catch (err) {
+    elog("appleIdToken:error", err?.message || err);
+    next(err);
+  }
 };
 
 // GET /api/auth/google

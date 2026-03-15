@@ -16,6 +16,8 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { BlurView } from 'expo-blur';
 import { useRouter } from 'expo-router';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useAuth } from '@/contexts/AuthContext';
+import { useBoot } from '@/contexts/BootContext';
 
 const { width, height } = Dimensions.get('window');
 const isTablet = width >= 768;
@@ -23,6 +25,8 @@ const isTablet = width >= 768;
 export default function SetupScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const { logout } = useAuth();
+  const { completeSetup } = useBoot();
   const scaleAnim = React.useRef(new Animated.Value(1)).current;
 
   const handleSetupDozemate = () => {
@@ -31,6 +35,16 @@ export default function SetupScreen() {
 
   const handleBuyDozemate = () => {
     Linking.openURL('https://www.slimiot.com/');
+  };
+
+  const handleLogout = async () => {
+    await logout();
+    router.replace('/');
+  };
+
+  const handleSkip = async () => {
+    await completeSetup();
+    router.replace('/(tabs)/home');
   };
 
   const startZoomAnimation = React.useCallback(() => {
@@ -55,7 +69,7 @@ export default function SetupScreen() {
   }, [startZoomAnimation]);
 
   return (
-    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
+    <SafeAreaView style={styles.container} edges={Platform.OS === 'ios' ? ['top'] : ['top', 'bottom']}>
       <StatusBar barStyle="light-content" backgroundColor="#02041A" />
 
       <LinearGradient
@@ -64,8 +78,16 @@ export default function SetupScreen() {
       />
 
       <TouchableOpacity
+        style={[styles.logoutButton, { top: insets.top + (Platform.OS === 'ios' ? 10 : 10) }]}
+        onPress={handleLogout}
+        activeOpacity={0.8}
+      >
+        <Text style={styles.logoutButtonText}>Logout</Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity
         style={[styles.skipButton, { top: insets.top + (Platform.OS === 'ios' ? 10 : 10) }]}
-        onPress={() => router.replace('/(tabs)/home')}
+        onPress={handleSkip}
         activeOpacity={0.8}
       >
         <Text style={styles.skipButtonText}>Skip</Text>
@@ -128,7 +150,7 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     top: 0,
-    height: '100%',
+    bottom: 0,
   },
   scrollContent: {
     flexGrow: 1,
@@ -230,15 +252,23 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: 'bold',
   },
+  logoutButton: {
+    position: 'absolute',
+    left: 16,
+    paddingVertical: 8,
+    paddingHorizontal: 4,
+    zIndex: 10,
+  },
+  logoutButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '600',
+  },
   skipButton: {
     position: 'absolute',
     right: 16,
-    backgroundColor: 'rgba(255,255,255,0.12)',
-    borderColor: 'rgba(255,255,255,0.25)',
-    borderWidth: 1,
     paddingVertical: 8,
-    paddingHorizontal: 14,
-    borderRadius: 16,
+    paddingHorizontal: 4,
     zIndex: 10,
   },
   skipButtonText: {

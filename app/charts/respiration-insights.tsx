@@ -14,19 +14,53 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Gesture } from 'react-native-gesture-handler';
-import { useFont } from '@shopify/react-native-skia';
-import { runOnJS, useAnimatedReaction, useDerivedValue } from 'react-native-reanimated';
-import { CartesianChart, Line, useChartTransformState } from 'victory-native';
+import { useFont, Circle, Group } from '@shopify/react-native-skia';
+import { runOnJS, useAnimatedReaction } from 'react-native-reanimated';
+import { CartesianChart, Line, Bar, Area, useChartTransformState } from 'victory-native';
 import { useDevice } from '@/contexts/DeviceContext';
 import { useAuth } from '@/contexts/AuthContext';
-import { getRespirationLive, getDeviceHistory } from '@/services/deviceData';
-import { connectWebSocket, removeWebSocketHandler } from '@/services/websocketService';
+import { useBoot } from '@/contexts/BootContext';
+import { getDeviceHistory, getWeeklyRespirationData, getMonthlyRespirationData, getHealthData, getDeviceDetails, getRespirationGraphForDateRange } from '@/services/deviceData';
+import { useFocusEffect } from 'expo-router';
+import { ZOOM_LEVELS } from '@/utils/zoomLevels';
+import { aggregateRespiration } from '@/utils/respirationAggregation';
+import { 
+  getRespirationGraphData, 
+  isRespirationGraphReady, 
+  subscribe as subscribeToRespirationGraph, 
+  updateZoomLevel 
+} from '@/services/respirationGraphManager';
+import { getRawPoints } from '@/services/respirationBuffer';
+import { connectWebSocket, removeWebSocketHandler, addDeviceUpdateHandler, removeDeviceUpdateHandler, type WebSocketMessageHandler, type DeviceUpdateHandler } from '@/services/websocketService';
+import HeartRateSkeleton from '@/components/HeartRateSkeleton';
 
 const { width } = Dimensions.get('window');
 
 interface RespirationDataPoint {
   timestamp: number; // Unix timestamp in milliseconds
-  value: number; // Respiration rate in BPM (breaths per minute)
+  value: number; // Respiration rate in Resp/Min (breaths per minute)
+}
+
+interface WeeklyRespirationDataPoint {
+  day: string;
+  dayIndex: number;
+  date: string;
+  avg: number | null;
+  min: number | null;
+  max: number | null;
+  isPartial: boolean;
+  count: number;
+}
+
+interface MonthlyRespirationDataPoint {
+  day: number;
+  dayIndex: number;
+  date: string;
+  avg: number | null;
+  min: number | null;
+  max: number | null;
+  isPartial: boolean;
+  count: number;
 }
 
 export default function RespirationInsightsScreen() {
@@ -35,10 +69,84 @@ export default function RespirationInsightsScreen() {
   const { activeDevice } = useDevice();
   const { auth } = useAuth();
   const [selectedPeriod, setSelectedPeriod] = React.useState<'Day' | 'Week' | 'Month'>('Day');
+  
+  const { onboardingSeen } = useBoot();
+  
+  // Log screen focus with state checks (using BootContext as single source of truth)
+  useFocusEffect(
+    React.useCallback(() => {
+      const deviceBound = activeDevice?.deviceId ? true : false;
+      
+      console.log('[RESPIRATION] Screen focus', {
+        hasSeenOnboarding: onboardingSeen,
+        isLoggedIn: auth.isLoggedIn,
+        deviceBound,
+        deviceId: activeDevice?.deviceId || null,
+        timestamp: Date.now(),
+      });
+    }, [auth.isLoggedIn, activeDevice?.deviceId, onboardingSeen])
+  );
   const [selectedDate, setSelectedDate] = React.useState(new Date());
   const [isLoading, setIsLoading] = React.useState(false);
+  const [isLoadingHistoricalDay, setIsLoadingHistoricalDay] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [respirationData, setRespirationData] = React.useState<RespirationDataPoint[]>([]);
+
+  // True when Day view is showing today (same calendar day). Past date = historical fetch from API; today = buffer + live.
+  const isTodaySelected = React.useMemo(() => {
+    if (selectedPeriod !== 'Day') return true;
+    const today = new Date();
+    return (
+      selectedDate.getFullYear() === today.getFullYear() &&
+      selectedDate.getMonth() === today.getMonth() &&
+      selectedDate.getDate() === today.getDate()
+    );
+  }, [selectedPeriod, selectedDate]);
+  
+  // Day view: Use pre-built graph data from RespirationGraphManager (prepared on Home screen) when today; historical ref when past date
+  const [zoomIndex, setZoomIndex] = React.useState(0); // Start with 10min zoom
+  const [graphData, setGraphData] = React.useState<{
+    points: Array<{ x: number; y: number | null }>;
+    xDomain: [number, number];
+    yDomain: [number, number];
+    zoomLevel: { index: number; label: string; rangeSec: number };
+  } | null>(null);
+  const [respirationGraphReady, setRespirationGraphReady] = React.useState(false);
+  // Trigger re-run of Day metrics when historical raw points are set (refs don't trigger re-renders)
+  const [historicalDayRawPointsKey, setHistoricalDayRawPointsKey] = React.useState(0);
+  
+  // State for top tooltip showing value and time above the graph
+  const [topTooltipData, setTopTooltipData] = React.useState<{
+    timestamp: number;
+    respiration: number | null;
+  } | null>(null);
+  
+  const [weeklyRespirationData, setWeeklyRespirationData] = React.useState<WeeklyRespirationDataPoint[]>([]);
+  const [isLoadingWeekly, setIsLoadingWeekly] = React.useState(false);
+  const [weeklyError, setWeeklyError] = React.useState<string | null>(null);
+  
+  const [monthlyRespirationData, setMonthlyRespirationData] = React.useState<MonthlyRespirationDataPoint[]>([]);
+  const [isLoadingMonthly, setIsLoadingMonthly] = React.useState(false);
+  const [monthlyError, setMonthlyError] = React.useState<string | null>(null);
+  
+  // Bed status tracking (backend is single source of truth)
+  const [bedStatus, setBedStatus] = React.useState<'Occupied' | 'Vacant' | 'Waiting'>('Vacant');
+  const [isLoadingBedStatus, setIsLoadingBedStatus] = React.useState<boolean>(true);
+  
+  // Cache for weekly data: key = deviceId + weekStart date string
+  const weeklyDataCache = React.useRef<Map<string, WeeklyRespirationDataPoint[]>>(new Map());
+  
+  // Cache for monthly data: key = deviceId + monthStart date string
+  const monthlyDataCache = React.useRef<Map<string, MonthlyRespirationDataPoint[]>>(new Map());
+  
+  // Historical day: raw points for selected past date (24hr of that day). Zoom changes re-aggregate from this, no re-fetch.
+  const historicalDayRawPointsRef = React.useRef<Array<{ timestamp: number; value: number | null }>>([]);
+  const historicalDayDateRef = React.useRef<string | null>(null); // 'YYYY-MM-DD' for which date we have raw points
+
+  // Refs for request management
+  const socketInstanceRef = React.useRef<any>(null);
+  const prevDeviceIdForResetRef = React.useRef<string | null>(null);
+  
   const activeDeviceIdRef = React.useRef<string | null>(activeDevice?.deviceId ?? null);
   React.useEffect(() => {
     activeDeviceIdRef.current = activeDevice?.deviceId ?? null;
@@ -53,12 +161,23 @@ export default function RespirationInsightsScreen() {
   const MAX_WINDOW_MS = 24 * 60 * 60 * 1000; // 24 hours max zoom window (matches fetched range)
 
   const CHART_PADDING = React.useMemo(
-    // Smaller left padding brings the Y-axis closer to the phone edge,
-    // giving more room to the plot area while keeping labels readable.
     () => ({ left: 28, right: 8, top: 18, bottom: 40 }),
     [],
   );
 
+  // Padding for weekly bar chart - more left padding for first bar visibility
+  const WEEKLY_CHART_PADDING = React.useMemo(
+    () => ({ left: 40, right: 40, top: 18, bottom: 40 }),
+    [],
+  );
+
+  // Padding for monthly bar chart
+  const MONTHLY_CHART_PADDING = React.useMemo(
+    () => ({ left: 40, right: 40, top: 18, bottom: 40 }),
+    [],
+  );
+
+  // Load font asynchronously to avoid blocking initial render
   const skiaFont = useFont(require('../../assets/fonts/SpaceMono-Regular.ttf'), 9);
 
   const [isLive, setIsLive] = React.useState(true);
@@ -79,15 +198,14 @@ export default function RespirationInsightsScreen() {
     [],
   );
 
-  const respirationDataRef = React.useRef(respirationData);
-  React.useEffect(() => {
-    respirationDataRef.current = respirationData;
-  }, [respirationData]);
-
   // Domain ref for continuous updates without re-renders
   const domainRef = React.useRef<[number, number] | null>(null);
   const lastPanX = React.useRef(0);
   const lastScale = React.useRef(1);
+  const lastDomainUpdateRef = React.useRef<number>(0);
+  const DOMAIN_UPDATE_THROTTLE_MS = 1000; // Update domain every 1 second in live mode
+  const prevZoomIndexRef = React.useRef<number>(zoomIndex);
+  const hasUserInteractedRef = React.useRef<boolean>(false);
 
   const inactivityTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const clearInactivityTimer = React.useCallback(() => {
@@ -105,45 +223,83 @@ export default function RespirationInsightsScreen() {
   const returnToLive = React.useCallback(() => {
     clearInactivityTimer();
     resetTransform();
-    // Reset tracking refs when returning to live
     lastPanX.current = 0;
     lastScale.current = 1;
     setIsLive(true);
+    hasUserInteractedRef.current = false;
   }, [clearInactivityTimer, resetTransform]);
 
+  // Domain computation - uses graphData for Day view (prepared by RespirationGraphManager)
   const computeLiveDomain = React.useCallback((): [number, number] | null => {
-    const data = respirationDataRef.current;
-    if (!data.length) return null;
-    const latest = data[data.length - 1]!.timestamp;
-    return [latest - DEFAULT_WINDOW_MS, latest];
-  }, [DEFAULT_WINDOW_MS]);
+    if (selectedPeriod === 'Day') {
+      // Use graphData from RespirationGraphManager
+      if (graphData && graphData.xDomain) {
+        return graphData.xDomain;
+      }
+      return null;
+    } else {
+      // For Week/Month views, use existing logic
+      if (respirationData.length === 0) return null;
+      const latest = respirationData[respirationData.length - 1].timestamp;
+      const oldest = respirationData[0].timestamp;
+      return [oldest, latest];
+    }
+  }, [selectedPeriod, graphData, respirationData]);
 
-  // Clamp ONLY to data bounds - allow window to grow/shrink freely
+  // Clamp to data bounds
   const clampToData = React.useCallback(
     ([start, end]: [number, number]): [number, number] => {
-      const data = respirationDataRef.current;
-      if (!data.length) return [start, end];
+      if (selectedPeriod === 'Day') {
+        if (hasUserInteractedRef.current && !isLive && xDomain) {
+          console.log('[RespirationInsights] clampToData: Preserving user domain', xDomain);
+          return xDomain;
+        }
+        // Use graphData from RespirationGraphManager for Day view
+        if (!graphData || !graphData.points || graphData.points.length === 0) return [start, end];
+        
+        const timestamps = graphData.points.map(p => p.x).filter(t => Number.isFinite(t));
+        if (timestamps.length === 0) {
+          return [start, end];
+        }
+        
+        const dataMin = Math.min(...timestamps);
+        const dataMax = Math.max(...timestamps);
+        
+        if (!Number.isFinite(start) || !Number.isFinite(end)) {
+          const liveDomain = computeLiveDomain();
+          return liveDomain || [dataMin, dataMax];
+        }
 
-      const dataMin = data[0]!.timestamp;
-      const dataMax = data[data.length - 1]!.timestamp;
+        const span = end - start;
+        if (start < dataMin) {
+          return [dataMin, dataMin + span];
+        }
+        if (end > dataMax) {
+          return [dataMax - span, dataMax];
+        }
 
-      if (!Number.isFinite(start) || !Number.isFinite(end)) {
-        return [dataMax - DEFAULT_WINDOW_MS, dataMax];
+        return [start, end];
+      } else {
+        if (respirationData.length === 0) return [start, end];
+        const dataMin = respirationData[0].timestamp;
+        const dataMax = respirationData[respirationData.length - 1].timestamp;
+
+        if (!Number.isFinite(start) || !Number.isFinite(end)) {
+          return [dataMin, dataMax];
+        }
+
+        const span = end - start;
+        if (start < dataMin) {
+          return [dataMin, dataMin + span];
+        }
+        if (end > dataMax) {
+          return [dataMax - span, dataMax];
+        }
+
+        return [start, end];
       }
-
-      const span = end - start;
-
-      // Only clamp to data bounds - don't restrict window size
-      if (start < dataMin) {
-        return [dataMin, dataMin + span];
-      }
-      if (end > dataMax) {
-        return [dataMax - span, dataMax];
-      }
-
-      return [start, end];
     },
-    [DEFAULT_WINDOW_MS],
+    [selectedPeriod, graphData, respirationData, computeLiveDomain, isLive, xDomain],
   );
 
   // Pan domain: convert translateX to domain shift
@@ -175,10 +331,8 @@ export default function RespirationInsightsScreen() {
       const center = (start + end) / 2;
       const currentSpan = end - start;
 
-      // Calculate scale delta from last scale
       const scaleDelta = currentScale / lastScale.current;
       
-      // Apply scale delta to window size (inverse: larger scale = smaller window)
       let newSpan = currentSpan / scaleDelta;
       newSpan = Math.max(MIN_WINDOW_MS, Math.min(MAX_WINDOW_MS, newSpan));
 
@@ -191,32 +345,28 @@ export default function RespirationInsightsScreen() {
       domainRef.current = clamped;
       setXDomain(clamped);
       
-      // Update lastScale after applying zoom
       lastScale.current = currentScale;
     },
     [clampToData, MIN_WINDOW_MS, MAX_WINDOW_MS],
   );
 
   const onGestureStart = React.useCallback(() => {
-    // Enter explore mode immediately (no auto-scroll while user is interacting)
     setIsLive(false);
+    hasUserInteractedRef.current = true;
     clearInactivityTimer();
     
-    // Initialize domainRef with current domain
     const base = xDomain ?? computeLiveDomain();
     if (base) {
       domainRef.current = base;
       setXDomain(base);
     }
     
-    // Reset tracking refs for new gesture
     lastPanX.current = 0;
     lastScale.current = 1;
   }, [clearInactivityTimer, xDomain, computeLiveDomain]);
 
   const onGestureEnd = React.useCallback(() => {
     clearInactivityTimer();
-    // Reset tracking refs for next gesture (but don't reset transform)
     lastPanX.current = 0;
     lastScale.current = 1;
     inactivityTimerRef.current = setTimeout(() => {
@@ -229,7 +379,7 @@ export default function RespirationInsightsScreen() {
     () => {
       if (isLive) return null;
       const matrix = transformState.matrix.value;
-      return matrix?.[12] ?? 0; // translateX
+      return matrix?.[12] ?? 0;
     },
     (translateX) => {
       if (translateX === null) return;
@@ -238,7 +388,6 @@ export default function RespirationInsightsScreen() {
       lastPanX.current = translateX;
 
       if (Math.abs(dx) > 0.1) {
-        // Only update if there's meaningful movement
         runOnJS(panDomain)(dx);
       }
     },
@@ -250,12 +399,10 @@ export default function RespirationInsightsScreen() {
     () => {
       if (isLive) return null;
       const matrix = transformState.matrix.value;
-      // scaleX is at index 0 (m11) in 4x4 row-major matrix
       return matrix?.[0] ?? 1;
     },
     (scale) => {
       if (!scale || !domainRef.current) return;
-      // Only update if scale changed meaningfully
       if (Math.abs(scale - lastScale.current) > 0.01) {
         runOnJS(zoomDomain)(scale);
       }
@@ -263,8 +410,7 @@ export default function RespirationInsightsScreen() {
     [isLive, zoomDomain],
   );
 
-  // Track transform matrix changes to update tooltip position when panning
-  // Also track offset separately for more accurate pan tracking
+  // Track transform matrix changes
   useAnimatedReaction(
     () => {
       const matrix = transformState.matrix.value;
@@ -273,12 +419,10 @@ export default function RespirationInsightsScreen() {
     },
     (transform) => {
       if (transform.matrix && Array.isArray(transform.matrix)) {
-        // Combine matrix and offset for complete transform
         const combined = [...transform.matrix];
         if (transform.offset && Array.isArray(transform.offset) && transform.offset.length >= 16) {
-          // Add offset to translation components
-          combined[12] = (combined[12] || 0) + (transform.offset[12] || 0); // translateX
-          combined[13] = (combined[13] || 0) + (transform.offset[13] || 0); // translateY
+          combined[12] = (combined[12] || 0) + (transform.offset[12] || 0);
+          combined[13] = (combined[13] || 0) + (transform.offset[13] || 0);
         }
         runOnJS(setTransformMatrix)(combined);
       }
@@ -286,7 +430,7 @@ export default function RespirationInsightsScreen() {
     [transformState.matrix, transformState.offset],
   );
 
-  // Track built-in Victory transform gestures to implement "10s no gesture -> live".
+  // Track built-in Victory transform gestures
   useAnimatedReaction(
     () => transformState.panActive.value || transformState.zoomActive.value,
     (active, prev) => {
@@ -299,109 +443,313 @@ export default function RespirationInsightsScreen() {
     [onGestureEnd, onGestureStart],
   );
 
-  // Keep xDomain in sync with live auto-scroll
+  // Prevent automatic reset when zoom level changes if user has panned/zoomed
+  React.useEffect(() => {
+    if (prevZoomIndexRef.current !== zoomIndex) {
+      prevZoomIndexRef.current = zoomIndex;
+      
+      if (hasUserInteractedRef.current && !isLive && domainRef.current) {
+        console.log('[RespirationInsights] Zoom changed but preserving user view');
+        return;
+      }
+      
+      if (isLive && !hasUserInteractedRef.current) {
+        console.log('[RespirationInsights] Zoom changed in live mode, will update domain');
+      }
+    }
+  }, [zoomIndex, isLive]);
+
+  // Domain updates immediately when data or zoom changes (in live mode)
   React.useEffect(() => {
     if (!isLive) {
-      // In explore mode, domain is controlled by gestures (pan/zoom)
       return;
     }
     
-    // Live mode: auto-scroll to latest data
-    const live = computeLiveDomain();
-    if (!live) return;
-    
-    domainRef.current = live;
-    setXDomain(live);
-  }, [computeLiveDomain, isLive, respirationData]);
+    const liveDomain = computeLiveDomain();
+    if (liveDomain) {
+      domainRef.current = liveDomain;
+      setXDomain(liveDomain);
+    }
+  }, [computeLiveDomain, isLive, respirationData, zoomIndex]);
 
-  // Cleanup timer on unmount
+  // Cleanup timers on unmount
   React.useEffect(() => {
-    return () => clearInactivityTimer();
+    return () => {
+      clearInactivityTimer();
+    };
   }, [clearInactivityTimer]);
 
-  // Fetch respiration data (last 24 hours to show historical data in Victory Native chart)
-  const fetchRespirationData = React.useCallback(async () => {
+  // Get start of week (Monday) for a given date
+  const getWeekStartDate = React.useCallback((date: Date): Date => {
+    const d = new Date(date);
+    const day = d.getDay();
+    const diff = d.getDate() - day + (day === 0 ? -6 : 1);
+    const weekStart = new Date(d.setDate(diff));
+    weekStart.setHours(0, 0, 0, 0);
+    return weekStart;
+  }, []);
+
+  // Get start of month for a given date
+  const getMonthStartDate = React.useCallback((date: Date): Date => {
+    const monthStart = new Date(date.getFullYear(), date.getMonth(), 1);
+    monthStart.setHours(0, 0, 0, 0);
+    return monthStart;
+  }, []);
+
+  // Fetch monthly respiration data (30 days aggregated)
+  const fetchMonthlyRespirationData = React.useCallback(async () => {
     if (!activeDevice?.deviceId || !auth.isLoggedIn) {
-      setRespirationData([]);
+      setMonthlyRespirationData([]);
       return;
     }
 
     try {
-      setIsLoading(true);
-      setError(null);
+      setIsLoadingMonthly(true);
+      setMonthlyError(null);
       
-      const now = new Date();
-      const twentyFourHoursAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000); // Last 24 hours
+      const monthStart = getMonthStartDate(selectedDate);
+      
+      const cacheKey = `${activeDevice.deviceId}_${monthStart.toISOString()}`;
+      const cachedData = monthlyDataCache.current.get(cacheKey);
+      
+      if (cachedData) {
+        console.log('[RespirationInsights] Using cached monthly data');
+        setMonthlyRespirationData(cachedData);
+        setIsLoadingMonthly(false);
+        return;
+      }
 
-      // Use getDeviceHistory for last 24 hours (to match chart's MAX_WINDOW_MS)
-      const result = await getDeviceHistory(activeDevice.deviceId, {
-        from: twentyFourHoursAgo,
-        to: now,
-        limit: 2000, // Get enough points for 24 hours (every 6 seconds = ~14400 points, but limit to 2000 for performance)
-      });
+      const result = await getMonthlyRespirationData(activeDevice.deviceId, monthStart);
 
       if (result.success && result.data && Array.isArray(result.data)) {
-        // Transform API data to RespirationDataPoint format (same pattern as heart rate)
-        const dataPoints: RespirationDataPoint[] = result.data
-          .filter((item: any) => {
-            const value = item.respiration || item.resp || item.bpm;
-            return value && value > 0 && item.timestamp;
-          })
-          .map((item: any) => {
-            const timestamp = new Date(item.timestamp);
-            return {
-              timestamp: isNaN(timestamp.getTime()) ? Date.now() : timestamp.getTime(), // Convert to milliseconds
-              value: item.respiration || item.resp || item.bpm || 0,
-            };
-          })
-          .filter((point: RespirationDataPoint) => point.value > 0 && point.value < 50) // Filter invalid values
-          .sort((a: RespirationDataPoint, b: RespirationDataPoint) => a.timestamp - b.timestamp); // Sort by timestamp
-
-        // Merge with existing data instead of replacing (to preserve websocket updates)
-        setRespirationData((prev) => {
-          // Create a map of existing points by timestamp for quick lookup
-          const existingMap = new Map<number, RespirationDataPoint>();
-          prev.forEach((point) => {
-            existingMap.set(point.timestamp, point);
-          });
-
-          // Add/update points from fetched data
-          dataPoints.forEach((point) => {
-            existingMap.set(point.timestamp, point);
-          });
-
-          // Convert back to array and sort
-          const merged = Array.from(existingMap.values()).sort((a, b) => a.timestamp - b.timestamp);
-
-          // Keep only last 24 hours
-          const nowMs = Date.now();
-          const twentyFourHoursAgo = nowMs - (24 * 60 * 60 * 1000);
-          return merged.filter((point) => point.timestamp >= twentyFourHoursAgo);
-        });
+        monthlyDataCache.current.set(cacheKey, result.data);
+        setMonthlyRespirationData(result.data);
       } else {
-        setRespirationData([]);
-        setError('No respiration data available');
+        setMonthlyRespirationData([]);
+        setMonthlyError(result.message || 'No monthly respiration data available');
       }
     } catch (err: any) {
-      console.error('Failed to fetch respiration data:', err);
-      setError(err.message || 'Failed to load respiration data');
-      setRespirationData([]);
+      console.error('Failed to fetch monthly respiration data:', err);
+      setMonthlyError(err.message || 'Failed to load monthly respiration data');
+      setMonthlyRespirationData([]);
     } finally {
-      setIsLoading(false);
+      setIsLoadingMonthly(false);
     }
-  }, [activeDevice?.deviceId, auth.isLoggedIn]);
+  }, [activeDevice?.deviceId, auth.isLoggedIn, selectedDate, getMonthStartDate]);
 
-  // Extract timestamp helper (moved outside to avoid recreation)
+  // Fetch weekly respiration data (7 days aggregated)
+  const fetchWeeklyRespirationData = React.useCallback(async () => {
+    if (!activeDevice?.deviceId || !auth.isLoggedIn) {
+      setWeeklyRespirationData([]);
+      return;
+    }
+
+    try {
+      setIsLoadingWeekly(true);
+      setWeeklyError(null);
+      
+      const weekStart = getWeekStartDate(selectedDate);
+      
+      const cacheKey = `${activeDevice.deviceId}_${weekStart.toISOString()}`;
+      const cachedData = weeklyDataCache.current.get(cacheKey);
+      
+      if (cachedData) {
+        console.log('[RespirationInsights] Using cached weekly data');
+        setWeeklyRespirationData(cachedData);
+        setIsLoadingWeekly(false);
+        return;
+      }
+
+      const result = await getWeeklyRespirationData(activeDevice.deviceId, weekStart);
+
+      if (result.success && result.data && Array.isArray(result.data)) {
+        weeklyDataCache.current.set(cacheKey, result.data);
+        setWeeklyRespirationData(result.data);
+      } else {
+        setWeeklyRespirationData([]);
+        setWeeklyError(result.message || 'No weekly respiration data available');
+      }
+    } catch (err: any) {
+      console.error('Failed to fetch weekly respiration data:', err);
+      setWeeklyError(err.message || 'Failed to load weekly respiration data');
+      setWeeklyRespirationData([]);
+    } finally {
+      setIsLoadingWeekly(false);
+    }
+  }, [activeDevice?.deviceId, auth.isLoggedIn, selectedDate, getWeekStartDate]);
+
+  // Day tab - today only: subscribe to RespirationGraphManager (buffer + live). Past date: use historical fetch effect below.
+  React.useEffect(() => {
+    if (!activeDevice?.deviceId || selectedPeriod !== 'Day' || !isTodaySelected) {
+      return;
+    }
+
+    console.log('[RespirationInsights] Setting up Respiration graph subscription for device (today):', activeDevice.deviceId);
+    import('@/services/respirationGraphManager').then(({ prepareRespirationGraph }) => {
+      prepareRespirationGraph(activeDevice.deviceId).catch((err) => {
+        console.error('[RespirationInsights] Failed to prepare Respiration graph:', err);
+      });
+    });
+
+    const unsubscribe = subscribeToRespirationGraph(activeDevice.deviceId, (data) => {
+      if (!isTodaySelected) return;
+      if (data) {
+        setGraphData(data);
+        setRespirationGraphReady(true);
+        setIsLoading(false);
+        setError(null);
+      } else {
+        setGraphData(null);
+        setRespirationGraphReady(true);
+        setIsLoading(false);
+      }
+    });
+
+    const initialData = getRespirationGraphData(activeDevice.deviceId);
+    const ready = isRespirationGraphReady(activeDevice.deviceId);
+    if (initialData) {
+      setGraphData(initialData);
+      setRespirationGraphReady(true);
+    } else if (ready) {
+      setGraphData(null);
+      setRespirationGraphReady(true);
+    } else {
+      import('@/services/respirationGraphManager').then(({ prepareRespirationGraph }) => {
+        prepareRespirationGraph(activeDevice.deviceId).catch((error) => {
+          console.error('[RespirationInsights] Failed to prepare Respiration graph:', error);
+        });
+      });
+    }
+
+    return unsubscribe;
+  }, [activeDevice?.deviceId, selectedPeriod, isTodaySelected]);
+
+  // Helper: aggregate from historical raw points and set graphData (used after fetch and on zoom change).
+  const applyHistoricalAggregation = React.useCallback(
+    (rawPoints: Array<{ timestamp: number; value: number | null }>, startMs: number, endMs: number, zoomIdx: number) => {
+      const zoomLevel = ZOOM_LEVELS[zoomIdx] || ZOOM_LEVELS[0];
+      const rangeMs = zoomLevel.rangeSec * 1000;
+      const viewportEnd = endMs;
+      const viewportStart = Math.max(startMs, endMs - rangeMs);
+      const aggregated = aggregateRespiration(rawPoints, zoomIdx, viewportStart, viewportEnd);
+      const hasValid = aggregated.points.some((p) => p.y != null && p.y > 0);
+      if (!hasValid) {
+        setGraphData(null);
+      } else {
+        setGraphData({
+          points: aggregated.points,
+          xDomain: aggregated.xDomain,
+          yDomain: aggregated.yDomain,
+          zoomLevel: { index: zoomIdx, label: zoomLevel.label, rangeSec: zoomLevel.rangeSec },
+        });
+      }
+      setRespirationGraphReady(true);
+      setIsLoadingHistoricalDay(false);
+    },
+    []
+  );
+
+  // Day view + past date: fill ref with raw points from API only when date changes. 24hr of that day.
+  React.useEffect(() => {
+    if (!activeDevice?.deviceId || selectedPeriod !== 'Day' || isTodaySelected || !auth.isLoggedIn) {
+      return;
+    }
+    const dayStart = new Date(selectedDate);
+    dayStart.setHours(0, 0, 0, 0);
+    const dayEnd = new Date(selectedDate);
+    dayEnd.setHours(23, 59, 59, 999);
+    const startMs = dayStart.getTime();
+    const endMs = dayEnd.getTime();
+    const dateKey = `${selectedDate.getFullYear()}-${String(selectedDate.getMonth() + 1).padStart(2, '0')}-${String(selectedDate.getDate()).padStart(2, '0')}`;
+
+    if (historicalDayDateRef.current === dateKey && historicalDayRawPointsRef.current.length > 0) {
+      applyHistoricalAggregation(historicalDayRawPointsRef.current, startMs, endMs, 0);
+      return;
+    }
+
+    let cancelled = false;
+    setIsLoadingHistoricalDay(true);
+    setRespirationGraphReady(false);
+    setGraphData(null);
+
+    getRespirationGraphForDateRange(activeDevice.deviceId, startMs, endMs, true)
+      .then((res) => {
+        if (cancelled) return;
+        if (!res.success || !res.data?.points) {
+          historicalDayRawPointsRef.current = [];
+          historicalDayDateRef.current = null;
+          setGraphData(null);
+          setRespirationGraphReady(true);
+          setIsLoadingHistoricalDay(false);
+          return;
+        }
+        const rawPoints = res.data.points
+          .filter((p) => p.x >= startMs && p.x <= endMs)
+          .map((p) => ({ timestamp: p.x, value: p.y }));
+        historicalDayRawPointsRef.current = rawPoints;
+        historicalDayDateRef.current = dateKey;
+        setHistoricalDayRawPointsKey((k) => k + 1); // trigger metrics re-run after ref is populated
+        applyHistoricalAggregation(rawPoints, startMs, endMs, 0);
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          console.error('[RespirationInsights] Historical day fetch failed:', err);
+          historicalDayRawPointsRef.current = [];
+          historicalDayDateRef.current = null;
+          setGraphData(null);
+          setRespirationGraphReady(true);
+          setIsLoadingHistoricalDay(false);
+        }
+      });
+
+    return () => { cancelled = true; };
+  }, [activeDevice?.deviceId, selectedPeriod, selectedDate, isTodaySelected, auth.isLoggedIn, applyHistoricalAggregation]);
+
+  // When zoom changes on historical day: re-aggregate from ref only (no re-fetch).
+  React.useEffect(() => {
+    if (!activeDevice?.deviceId || selectedPeriod !== 'Day' || isTodaySelected) return;
+    const dateKey = `${selectedDate.getFullYear()}-${String(selectedDate.getMonth() + 1).padStart(2, '0')}-${String(selectedDate.getDate()).padStart(2, '0')}`;
+    if (historicalDayDateRef.current !== dateKey || historicalDayRawPointsRef.current.length === 0) return;
+    const dayStart = new Date(selectedDate);
+    dayStart.setHours(0, 0, 0, 0);
+    const dayEnd = new Date(selectedDate);
+    dayEnd.setHours(23, 59, 59, 999);
+    const startMs = dayStart.getTime();
+    const endMs = dayEnd.getTime();
+    applyHistoricalAggregation(historicalDayRawPointsRef.current, startMs, endMs, zoomIndex);
+  }, [zoomIndex, selectedPeriod, selectedDate, isTodaySelected, activeDevice?.deviceId, applyHistoricalAggregation]);
+
+  // When back to today: clear historical refs.
+  React.useEffect(() => {
+    if (isTodaySelected) {
+      historicalDayRawPointsRef.current = [];
+      historicalDayDateRef.current = null;
+    }
+  }, [isTodaySelected]);
+
+  // Default zoom: 10 min when on Day view (today or previous day).
+  const ZOOM_INDEX_10M = 0;
+  React.useEffect(() => {
+    if (selectedPeriod !== 'Day') return;
+    setZoomIndex(ZOOM_INDEX_10M);
+  }, [selectedPeriod, selectedDate, isTodaySelected]);
+
+  // Update zoom level in RespirationGraphManager when today is selected (past date uses local aggregation)
+  React.useEffect(() => {
+    if (!activeDevice?.deviceId || selectedPeriod !== 'Day' || !isTodaySelected) {
+      return;
+    }
+    updateZoomLevel(activeDevice.deviceId, zoomIndex).catch((error) => {
+      console.error('[RespirationInsights] Failed to update zoom level:', error);
+    });
+  }, [activeDevice?.deviceId, selectedPeriod, zoomIndex, isTodaySelected]);
+
+  // Extract timestamp helper
   const extractTimestampMs = React.useCallback((data: any): number => {
-    // Prefer backend timestamp (matches DB) so the chart point aligns with stored data.
-    // Model examples:
-    // - timestamp: "2025-12-29T05:26:09.234Z"
-    // - timestampSeconds: 1766985969
     if (typeof data?.timestampSeconds === 'number' && Number.isFinite(data.timestampSeconds)) {
       return data.timestampSeconds * 1000;
     }
     if (typeof data?.timestamp === 'number' && Number.isFinite(data.timestamp)) {
-      // If backend ever sends ms or seconds, we assume ms when it's large enough.
       return data.timestamp < 10_000_000_000 ? data.timestamp * 1000 : data.timestamp;
     }
     if (typeof data?.timestamp === 'string' || data?.timestamp instanceof Date) {
@@ -411,126 +759,216 @@ export default function RespirationInsightsScreen() {
     return Date.now();
   }, []);
 
-  // Setup message handler for WebSocket (useCallback to keep reference stable)
+  // Setup message handler for WebSocket (real-time data updates)
+  // Note: Day view updates are handled by RespirationGraphManager via buffer subscription
+  // This handler is kept for Week/Month views if needed in the future
   const messageHandler = React.useCallback((data: any) => {
-    console.log('[RespirationInsights] ✅ WebSocket message received:', {
-      deviceId: data.deviceId,
-      respiration: data.respiration,
-      timestamp: data.timestamp,
-      timestampSeconds: data.timestampSeconds,
-      allFields: Object.keys(data)
-    });
-    
-    // Extract respiration value (handle multiple formats like home screen)
+    if (!activeDeviceIdRef.current || data.deviceId !== activeDeviceIdRef.current) {
+      return;
+    }
+
+    // Day view is handled by RespirationGraphManager - no manual updates needed
+    if (selectedPeriod === 'Day') {
+      return;
+    }
+
+    // Extract respiration value for Week/Month views (if needed in future)
     const respirationValue = data.respiration ?? data.resp ?? data.bpm ?? data.breathing ?? null;
-    
-    console.log('[RespirationInsights] Extracted respiration value:', respirationValue);
     
     if (respirationValue != null && respirationValue > 0 && respirationValue < 50) {
       const updateTimestamp = extractTimestampMs(data);
-      console.log('[RespirationInsights] Extracted timestamp (ms):', updateTimestamp, 'Date:', new Date(updateTimestamp).toISOString());
       
       const newDataPoint: RespirationDataPoint = {
         timestamp: updateTimestamp,
         value: Number(respirationValue),
       };
 
-      console.log('[RespirationInsights] Adding new data point:', newDataPoint);
-
-      // Add new data point to existing data (keep last 24 hours) - same pattern as home screen
+      // Add new data point to existing data (keep last 24 hours)
       setRespirationData((prev) => {
         const nowMs = Date.now();
         const twentyFourHoursAgo = nowMs - (24 * 60 * 60 * 1000);
         
-        // Filter out old data points
         const filteredData = prev.filter((point) => point.timestamp >= twentyFourHoursAgo);
         
-        // Check if we already have a point at (approximately) this timestamp (avoid duplicates)
         const existingIndex = filteredData.findIndex(
-          (point) => Math.abs(point.timestamp - updateTimestamp) < 1000 // within 1 second
+          (point) => Math.abs(point.timestamp - updateTimestamp) < 1000
         );
         
         let newData;
         if (existingIndex >= 0) {
-          console.log('[RespirationInsights] Updating existing point at index:', existingIndex);
-          // Update existing point
           newData = [...filteredData];
           newData[existingIndex] = newDataPoint;
         } else {
-          console.log('[RespirationInsights] Adding new point. Previous count:', filteredData.length);
-          // Add new point
           newData = [...filteredData, newDataPoint];
         }
         
-        console.log('[RespirationInsights] New data count:', newData.length);
-        // Sort by timestamp
         return newData.sort((a, b) => a.timestamp - b.timestamp);
       });
-    } else {
-      console.log('[RespirationInsights] Respiration value rejected:', {
-        respirationValue,
-        reason: respirationValue == null ? 'null/undefined' : 
-                respirationValue <= 0 ? '<= 0' : 
-                respirationValue >= 50 ? '>= 50' : 'unknown'
-      });
     }
-  }, [extractTimestampMs]);
+  }, [extractTimestampMs, selectedPeriod]);
 
-  // Setup WebSocket connection for real-time updates
+  // Fetch latest health data on mount to set initial bed status
   React.useEffect(() => {
     if (!activeDevice?.deviceId || !auth.isLoggedIn) {
-      console.log('[RespirationInsights] Skipping WebSocket setup - no device or not logged in');
       return;
     }
 
-    // Connect to WebSocket server
-    const currentDeviceId = activeDevice.deviceId;
-    console.log('[RespirationInsights] 🔌 Connecting WebSocket for device:', currentDeviceId);
-    
-    connectWebSocket(currentDeviceId, messageHandler)
-      .then((socket) => {
-        console.log('[RespirationInsights] WebSocket connected:', socket ? '✅ success' : '❌ failed');
-        // Check if device hasn't changed during connection
-        if (activeDeviceIdRef.current !== currentDeviceId) {
-          console.log('[RespirationInsights] Device changed during connection, cleaning up');
-          if (socket) {
-            removeWebSocketHandler(messageHandler);
-          }
-          return;
+    const deviceId = activeDevice.deviceId;
+
+    // ✅ Fetch device details to get current bedStatus from backend (single source of truth)
+    const fetchInitialBedStatus = async () => {
+      setIsLoadingBedStatus(true);
+      try {
+        const result = await getDeviceDetails(deviceId);
+        
+        if (result.success && result.data) {
+          const deviceData = result.data;
+          const currentBedStatus = deviceData.bedStatus || 'Vacant';
+          
+          console.log('[RespirationInsights] Initial bed status from backend:', {
+            bedStatus: currentBedStatus,
+            absenceStart: deviceData.absenceStart,
+            HV: deviceData.HV,
+            isLive: deviceData.isLive
+          });
+
+          // Set bedStatus directly from backend (backend handles all logic)
+          setBedStatus(currentBedStatus as 'Occupied' | 'Vacant' | 'Waiting');
+        } else {
+          console.warn('[RespirationInsights] Failed to fetch device details, defaulting to Vacant');
+          setBedStatus('Vacant');
         }
-        console.log('[RespirationInsights] ✅ WebSocket handler registered successfully');
-      })
-      .catch((error) => {
-        console.error('[RespirationInsights] ❌ WebSocket connection error:', error);
+      } catch (error) {
+        console.error('[RespirationInsights] Failed to fetch initial bed status:', error);
+        setBedStatus('Vacant');
+      } finally {
+        setIsLoadingBedStatus(false);
+      }
+    };
+
+    fetchInitialBedStatus();
+  }, [activeDevice?.deviceId, auth.isLoggedIn]);
+
+  // ✅ WebSocket connection for bed status tracking (backend is single source of truth)
+  React.useEffect(() => {
+    if (!activeDevice?.deviceId || !auth.isLoggedIn) {
+      return;
+    }
+
+    const deviceId = activeDevice.deviceId;
+    let isMounted = true;
+
+    // ✅ Device update handler - receives bedStatus directly from backend
+    const deviceUpdateHandler: DeviceUpdateHandler = (data) => {
+      if (!isMounted || data.deviceId !== deviceId) {
+        return;
+      }
+
+      console.log('[RespirationInsights] Device update received:', {
+        bedStatus: data.bedStatus,
+        isLive: data.isLive,
+        source: data.source,
+        absenceStart: data.absenceStart,
+        HV: data.HV
       });
 
-    // Cleanup on unmount or device change
+      // ✅ Update bedStatus directly from backend (backend handles all logic)
+      setBedStatus(data.bedStatus);
+    };
+
+    // Handle real-time respiration data updates (for Week/Month views)
+    const statusHandler: WebSocketMessageHandler = (data) => {
+      if (!isMounted || data.deviceId !== deviceId) {
+        return;
+      }
+
+      // Handle real-time respiration data updates
+      messageHandler(data);
+    };
+
+    // Connect WebSocket and add device update handler
+    connectWebSocket(deviceId, statusHandler).catch((error) => {
+      console.error('[RespirationInsights] Failed to connect WebSocket:', error);
+    });
+
+    // Add device update handler
+    addDeviceUpdateHandler(deviceUpdateHandler);
+
     return () => {
-      console.log('[RespirationInsights] 🧹 Cleaning up WebSocket handler');
-      removeWebSocketHandler(messageHandler);
+      isMounted = false;
+      removeWebSocketHandler(statusHandler);
+      removeDeviceUpdateHandler(deviceUpdateHandler);
     };
   }, [activeDevice?.deviceId, auth.isLoggedIn, messageHandler]);
 
-  // Fetch data on mount and when period/date changes (for historical data)
-  // Using polling (6 seconds like heart rate) + websocket for real-time updates
+  // Reset graph state when device changes
   React.useEffect(() => {
-    // Initial fetch
-    fetchRespirationData();
+    const currentDeviceId = activeDevice?.deviceId || null;
+    const prevDeviceId = prevDeviceIdForResetRef.current;
     
-    // Poll every 6 seconds to get latest data (same as heart rate graph)
-    const interval = setInterval(() => {
-      fetchRespirationData();
-    }, 6000); // 6 seconds (same as heart rate)
+    if (prevDeviceId !== null && prevDeviceId !== currentDeviceId) {
+      console.log('[RespirationInsights] 🔄 Device changed, resetting state:', { from: prevDeviceId, to: currentDeviceId });
+      setRespirationData([]);
+    }
+    
+    prevDeviceIdForResetRef.current = currentDeviceId;
+  }, [activeDevice?.deviceId]);
 
-    return () => clearInterval(interval);
-  }, [fetchRespirationData, selectedPeriod, selectedDate]);
+  // Fetch data on mount and when period/date changes
+  React.useEffect(() => {
+    if (selectedPeriod === 'Week') {
+      fetchWeeklyRespirationData();
+    } else if (selectedPeriod === 'Month') {
+      fetchMonthlyRespirationData();
+    }
+    // Day view is handled by RespirationGraphManager subscription - no polling needed
+  }, [fetchWeeklyRespirationData, fetchMonthlyRespirationData, selectedPeriod, selectedDate]);
 
-  // Calculate metrics from data
+  // Clear caches when device changes
+  React.useEffect(() => {
+    weeklyDataCache.current.clear();
+    monthlyDataCache.current.clear();
+  }, [activeDevice?.deviceId]);
+
+  // Calculate metrics from data (Day view) - RAW points in visible zoom window (today + past days). Fallback: aggregated points for past days.
   const metrics = React.useMemo(() => {
-    if (respirationData.length === 0) {
+    if (selectedPeriod !== 'Day') {
       return { min: 0, average: 0, max: 0 };
     }
-    const values = respirationData.map((d) => d.value).filter((v) => !isNaN(v) && isFinite(v) && v > 0);
+    if (!graphData || !graphData.xDomain) {
+      return { min: 0, average: 0, max: 0 };
+    }
+    const [windowStart, windowEnd] = graphData.xDomain;
+    let dataToUse: RespirationDataPoint[];
+    if (isTodaySelected && activeDevice?.deviceId) {
+      const rawPoints = getRawPoints(activeDevice.deviceId);
+      const filtered = rawPoints.filter(
+        (p) => p.timestamp >= windowStart && p.timestamp <= windowEnd && p.value !== null && p.value > 0
+      );
+      dataToUse = filtered.map((p) => ({ timestamp: p.timestamp, value: p.value! }));
+    } else {
+      const rawPoints = historicalDayRawPointsRef.current;
+      const filtered = rawPoints.filter(
+        (p) => p.timestamp >= windowStart && p.timestamp <= windowEnd && p.value !== null && p.value > 0
+      );
+      dataToUse = filtered.map((p) => ({ timestamp: p.timestamp, value: p.value! }));
+      // Fallback: use aggregated graphData.points (viewport first, then any) so metrics show when chart has data
+      if (dataToUse.length === 0 && graphData.points?.length) {
+        let agg = graphData.points
+          .filter((p) => p.x >= windowStart && p.x <= windowEnd && p.y != null && p.y > 0)
+          .map((p) => ({ timestamp: p.x, value: p.y as number }));
+        if (agg.length === 0) {
+          agg = graphData.points
+            .filter((p) => p.y != null && p.y > 0)
+            .map((p) => ({ timestamp: p.x, value: p.y as number }));
+        }
+        if (agg.length > 0) dataToUse = agg;
+      }
+    }
+    if (dataToUse.length === 0) {
+      return { min: 0, average: 0, max: 0 };
+    }
+    const values = dataToUse.map((d) => d.value).filter((v) => !isNaN(v) && isFinite(v) && v > 0);
     if (values.length === 0) {
       return { min: 0, average: 0, max: 0 };
     }
@@ -539,43 +977,227 @@ export default function RespirationInsightsScreen() {
       max: Math.round(Math.max(...values)),
       average: Math.round(values.reduce((sum, val) => sum + val, 0) / values.length),
     };
-  }, [respirationData]);
+  }, [selectedPeriod, graphData, activeDevice?.deviceId, isTodaySelected, historicalDayRawPointsKey]);
 
-  // Format data for Victory Native chart
+  // Calculate metrics from weekly data (Week view)
+  const weeklyMetrics = React.useMemo(() => {
+    if (weeklyRespirationData.length === 0) {
+      return { min: 0, average: 0, max: 0 };
+    }
+    const validDays = weeklyRespirationData.filter((d) => d.avg !== null && d.avg > 0);
+    if (validDays.length === 0) {
+      return { min: 0, average: 0, max: 0 };
+    }
+    const averages = validDays.map((d) => d.avg!);
+    const mins = validDays.map((d) => d.min).filter((v) => v !== null && v > 0) as number[];
+    const maxs = validDays.map((d) => d.max).filter((v) => v !== null && v > 0) as number[];
+    
+    return {
+      min: mins.length > 0 ? Math.round(Math.min(...mins)) : Math.round(Math.min(...averages)),
+      max: maxs.length > 0 ? Math.round(Math.max(...maxs)) : Math.round(Math.max(...averages)),
+      average: Math.round(averages.reduce((sum, val) => sum + val, 0) / averages.length),
+    };
+  }, [weeklyRespirationData]);
+
+  // Calculate metrics from monthly data (Month view)
+  const monthlyMetrics = React.useMemo(() => {
+    if (monthlyRespirationData.length === 0) {
+      return { min: 0, average: 0, max: 0 };
+    }
+    const validDays = monthlyRespirationData.filter((d) => d.avg !== null && d.avg > 0);
+    if (validDays.length === 0) {
+      return { min: 0, average: 0, max: 0 };
+    }
+    const averages = validDays.map((d) => d.avg!);
+    const mins = validDays.map((d) => d.min).filter((v) => v !== null && v > 0) as number[];
+    const maxs = validDays.map((d) => d.max).filter((v) => v !== null && v > 0) as number[];
+    
+    return {
+      min: mins.length > 0 ? Math.round(Math.min(...mins)) : Math.round(Math.min(...averages)),
+      max: maxs.length > 0 ? Math.round(Math.max(...maxs)) : Math.round(Math.max(...averages)),
+      average: Math.round(averages.reduce((sum, val) => sum + val, 0) / averages.length),
+    };
+  }, [monthlyRespirationData]);
+
+  // Use appropriate metrics based on selected period
+  const displayMetrics = selectedPeriod === 'Week' ? weeklyMetrics : 
+                         selectedPeriod === 'Month' ? monthlyMetrics : metrics;
+
+  // Chart data - Day view uses graphData from RespirationGraphManager
   const chartData = React.useMemo(() => {
+    if (selectedPeriod === 'Day') {
+      // Use graphData from RespirationGraphManager
+      if (!graphData || !graphData.points || graphData.points.length === 0) return [];
+      return graphData.points;
+    }
+
+    // Week/Month views use respirationData (legacy, but kept for consistency)
     if (respirationData.length === 0) return [];
-    
-    const formatted = respirationData.map((point) => ({
-      x: point.timestamp, // Time in milliseconds
-      y: point.value, // BPM value
+    return respirationData.map((point) => ({
+      x: point.timestamp,
+      y: point.value,
     }));
+  }, [selectedPeriod, graphData, respirationData]);
+
+  // Format weekly data for Victory Native Bar chart (Week view)
+  const weeklyChartData = React.useMemo(() => {
+    if (weeklyRespirationData.length === 0) return [];
     
-    console.log('[RespirationInsights] Chart data updated. Points:', formatted.length, 'Latest:', formatted[formatted.length - 1]);
+    const dayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    const formatted = [];
+    
+    for (let i = 0; i < 7; i++) {
+      const dayData = weeklyRespirationData.find((d) => d.dayIndex === i);
+      if (dayData) {
+        formatted.push({
+          x: i,
+          y: dayData.avg !== null && dayData.avg > 0 ? dayData.avg : 0,
+          day: dayData.day,
+          date: dayData.date,
+          isPartial: dayData.isPartial,
+          min: dayData.min,
+          max: dayData.max,
+          hasData: dayData.avg !== null && dayData.avg > 0,
+        });
+      } else {
+        formatted.push({
+          x: i,
+          y: 0,
+          day: dayNames[i],
+          date: '',
+          isPartial: false,
+          min: null,
+          max: null,
+          hasData: false,
+        });
+      }
+    }
+    
+    console.log('[RespirationInsights] Weekly chart data updated. All 7 days:', formatted.length);
     
     return formatted;
-  }, [respirationData]);
+  }, [weeklyRespirationData]);
 
-  // Get latest point for tooltip
+  // Format monthly data for Victory Native Bar chart (Month view)
+  const monthlyChartData = React.useMemo(() => {
+    if (monthlyRespirationData.length === 0) return [];
+    
+    const formatted = [];
+    const daysInMonth = monthlyRespirationData.length;
+    
+    for (let i = 0; i < daysInMonth; i++) {
+      const dayData = monthlyRespirationData.find((d) => d.dayIndex === i);
+      if (dayData) {
+        formatted.push({
+          x: i,
+          y: dayData.avg !== null && dayData.avg > 0 ? dayData.avg : 0,
+          day: dayData.day,
+          date: dayData.date,
+          isPartial: dayData.isPartial,
+          min: dayData.min,
+          max: dayData.max,
+          hasData: dayData.avg !== null && dayData.avg > 0,
+        });
+      } else {
+        formatted.push({
+          x: i,
+          y: 0,
+          day: i + 1,
+          date: '',
+          isPartial: false,
+          min: null,
+          max: null,
+          hasData: false,
+        });
+      }
+    }
+    
+    console.log('[RespirationInsights] Monthly chart data updated. Days:', formatted.length);
+    
+    return formatted;
+  }, [monthlyRespirationData]);
+
+  // Y-axis domain for monthly view - dynamic based on max value + 10 padding
+  const monthlyYDomain = React.useMemo<[number, number] | undefined>(() => {
+    if (monthlyChartData.length === 0) return [0, 20];
+    
+    const values = monthlyChartData.map((d) => d.y).filter((v) => v > 0);
+    if (values.length === 0) return [0, 20];
+    
+    const max = Math.max(...values);
+    // Add 10 to the max value for padding, but ensure minimum of 20
+    const maxWithPadding = Math.max(max + 10, 20);
+    
+    return [0, Math.ceil(maxWithPadding)];
+  }, [monthlyChartData]);
+
+  // Format X-axis labels for monthly view
+  const formatMonthDayLabel = React.useCallback((label: string | number) => {
+    const dayNum = typeof label === 'number' ? Math.round(label) : parseInt(String(label), 10);
+    if (dayNum % 5 === 0 || dayNum === 0) {
+      return String(dayNum + 1);
+    }
+    return '';
+  }, []);
+
+  // Get latest valid point for top tooltip (last point with valid non-null value)
   const latestPoint = React.useMemo(() => {
+    if (selectedPeriod === 'Day') {
+      // Use graphData from RespirationGraphManager
+      if (graphData && graphData.points && graphData.points.length > 0) {
+        // Find last valid point (iterate backwards to find first point with valid y value)
+        for (let i = graphData.points.length - 1; i >= 0; i--) {
+          const point = graphData.points[i];
+          if (point && point.y !== null && point.y !== undefined && Number.isFinite(point.y) && point.y > 0) {
+            return { timestamp: point.x, value: point.y };
+          }
+        }
+        return null;
+      }
+      return null;
+    }
+    // Week/Month views: Find last valid point in respirationData
     if (respirationData.length === 0) return null;
-    return respirationData[respirationData.length - 1];
-  }, [respirationData]);
+    for (let i = respirationData.length - 1; i >= 0; i--) {
+      const point = respirationData[i];
+      if (point && point.value !== null && point.value !== undefined && Number.isFinite(point.value) && point.value > 0) {
+        return point;
+      }
+    }
+    return null;
+  }, [selectedPeriod, graphData, respirationData]);
+
+
+  // Update top tooltip data when latest point changes (Day view only)
+  React.useEffect(() => {
+    if (selectedPeriod === 'Day' && latestPoint) {
+      setTopTooltipData({
+        timestamp: latestPoint.timestamp,
+        respiration: latestPoint.value !== null ? latestPoint.value : null,
+      });
+    } else {
+      setTopTooltipData(null);
+    }
+  }, [latestPoint, selectedPeriod]);
 
   // Get start of week (Monday)
-  const getWeekStart = (date: Date): Date => {
+  const getWeekStart = React.useCallback((date: Date): Date => {
     const d = new Date(date);
     const day = d.getDay();
     const diff = d.getDate() - day + (day === 0 ? -6 : 1);
-    return new Date(d.setDate(diff));
-  };
+    const weekStart = new Date(d.setDate(diff));
+    weekStart.setHours(0, 0, 0, 0);
+    return weekStart;
+  }, []);
 
   // Get end of week (Sunday)
-  const getWeekEnd = (date: Date): Date => {
+  const getWeekEnd = React.useCallback((date: Date): Date => {
     const weekStart = getWeekStart(date);
     const weekEnd = new Date(weekStart);
     weekEnd.setDate(weekEnd.getDate() + 6);
+    weekEnd.setHours(23, 59, 59, 999);
     return weekEnd;
-  };
+  }, [getWeekStart]);
 
   // Format date for display based on period
   const formattedDate = React.useMemo(() => {
@@ -626,6 +1248,21 @@ export default function RespirationInsightsScreen() {
     setSelectedDate(newDate);
   };
 
+  // Check if next button should be disabled (already at or past today)
+  const canGoNext = React.useMemo(() => {
+    const today = new Date();
+    today.setHours(23, 59, 59, 999);
+    const testDate = new Date(selectedDate);
+    if (selectedPeriod === 'Day') {
+      testDate.setDate(testDate.getDate() + 1);
+    } else if (selectedPeriod === 'Week') {
+      testDate.setDate(testDate.getDate() + 7);
+    } else {
+      testDate.setMonth(testDate.getMonth() + 1);
+    }
+    return testDate <= today;
+  }, [selectedDate, selectedPeriod]);
+
   // Reset to today when period changes
   React.useEffect(() => {
     setSelectedDate(new Date());
@@ -639,93 +1276,134 @@ export default function RespirationInsightsScreen() {
     return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
   };
 
+  // X-axis domain
   const resolvedXDomain = React.useMemo<[number, number] | null>(() => {
-    // Always use xDomain if set (for pan/zoom), otherwise compute live domain
+    if (selectedPeriod === 'Day') {
+      if (!isLive && xDomain) {
+        const clamped = clampToData(xDomain);
+        return clamped;
+      }
+      const live = computeLiveDomain();
+      return live ? clampToData(live) : null;
+    }
+    
     if (xDomain) {
       return clampToData(xDomain);
     }
     const live = computeLiveDomain();
     return live ? clampToData(live) : null;
-  }, [clampToData, computeLiveDomain, xDomain]);
+  }, [clampToData, computeLiveDomain, xDomain, selectedPeriod, isLive]);
 
-  // Default Y-axis domain: 5-30 Resp/Min (can be panned up/down)
-  const yDomain = React.useMemo<[number, number] | undefined>(() => {
-    // Default range for respiration rate: 5-30 breaths per minute
-    // User can pan Y-axis up/down to see different ranges
-    return [5, 30];
-  }, []);
-
-  // Calculate tooltip position based on latest point (after resolvedXDomain and yDomain are computed)
-  // Apply transform matrix to follow point when panning
-  const tooltipPosition = React.useMemo(() => {
-    if (!latestPoint || !resolvedXDomain || !yDomain) return null;
-    
-    const chartWidth = width - CHART_PADDING.left - CHART_PADDING.right;
-    const chartHeight = 280 - CHART_PADDING.top - CHART_PADDING.bottom;
-    
-    // Calculate base X position (time-based) - relative to domain
-    const [xStart, xEnd] = resolvedXDomain;
-    const xRange = xEnd - xStart;
-    const baseXPosition = CHART_PADDING.left + ((latestPoint.timestamp - xStart) / xRange) * chartWidth;
-    
-    // Calculate base Y position (value-based)
-    const [yMin, yMax] = yDomain;
-    const yRange = yMax - yMin;
-    const baseYPosition = CHART_PADDING.top + chartHeight - ((latestPoint.value - yMin) / yRange) * chartHeight;
-    
-    // Apply transform matrix if available (for pan/zoom)
-    let xPosition = baseXPosition;
-    let yPosition = baseYPosition;
-    
-    if (transformMatrix && Array.isArray(transformMatrix) && transformMatrix.length >= 16) {
-      // Victory Native uses 4x4 transform matrix in row-major format
-      // [m11, m12, m13, m14, m21, m22, m23, m24, m31, m32, m33, m34, m41, m42, m43, m44]
-      // For 2D transforms: 
-      // - translateX = m41 (index 12)
-      // - translateY = m42 (index 13)  
-      // - scaleX = m11 (index 0)
-      // - scaleY = m22 (index 5)
-      
-      const translateX = transformMatrix[12] || 0;
-      const translateY = transformMatrix[13] || 0;
-      const scaleX = transformMatrix[0] || 1;
-      const scaleY = transformMatrix[5] || 1;
-      
-      // Calculate chart center for transform origin
-      const chartCenterX = CHART_PADDING.left + chartWidth / 2;
-      const chartCenterY = CHART_PADDING.top + chartHeight / 2;
-      
-      // Apply transform: translate to origin, scale, translate back, then apply pan
-      // This matches how Victory Native applies transforms
-      const relativeX = baseXPosition - chartCenterX;
-      const relativeY = baseYPosition - chartCenterY;
-      
-      xPosition = relativeX * scaleX + chartCenterX + translateX;
-      yPosition = relativeY * scaleY + chartCenterY + translateY;
+  // Dynamic Y-axis calculation for Respiration (Day view only, all zoom levels)
+  // Calculates domain based on visible data points with 10% padding
+  const calculateDynamicYDomain = React.useCallback((
+    points: Array<{ x: number; y: number | null }>,
+    xDomain: [number, number] | null
+  ): [number, number] => {
+    // Step 1: Filter visible points within X domain
+    let visiblePoints = points;
+    if (xDomain) {
+      visiblePoints = points.filter(p => 
+        p.x >= xDomain[0] && p.x <= xDomain[1]
+      );
     }
     
-    // Tooltip dimensions
-    const tooltipWidth = 90;
-    const tooltipHeight = 50;
+    // Step 2: Collect valid Respiration values (ignore null, zero, NaN)
+    const validValues = visiblePoints
+      .map(p => p.y)
+      .filter((y): y is number => 
+        y !== null && 
+        y !== undefined && 
+        !isNaN(y) && 
+        isFinite(y) && 
+        y > 0
+      );
     
-    // Position tooltip above the point, centered horizontally
-    let tooltipX = xPosition - tooltipWidth / 2;
+    // Step 3: Calculate min/max
+    if (validValues.length === 0) {
+      // No valid points - use default domain
+      return [0, 20];
+    }
     
-    // Keep tooltip within chart bounds
-    const minX = CHART_PADDING.left + 5;
-    const maxX = width - CHART_PADDING.right - tooltipWidth - 5;
-    tooltipX = Math.max(minX, Math.min(maxX, tooltipX));
+    const minResp = Math.min(...validValues);
+    const maxResp = Math.max(...validValues);
     
-    // Position above the point
-    const tooltipY = yPosition - tooltipHeight - 10;
+    // Step 4: Apply 10% padding
+    const paddingMin = minResp * 0.10;
+    const paddingMax = maxResp * 0.10;
     
+    let yMin = minResp - paddingMin;
+    let yMax = maxResp + paddingMax;
+    
+    // Step 5: Safety guards
+    if (minResp === maxResp) {
+      // Single data point or all same value
+      yMin = Math.max(0, minResp - 1);
+      yMax = maxResp + 1;
+    }
+    
+    if (minResp <= 0) {
+      yMin = 0;
+      yMax = maxResp + 2;
+    }
+    
+    if (validValues.length < 2) {
+      // Less than 2 visible points - use last known domain or default
+      return [0, 20];
+    }
+    
+    // Ensure reasonable bounds for respiration (0-30 Resp/Min max)
+    yMin = Math.max(0, Math.floor(yMin));
+    yMax = Math.min(30, Math.ceil(yMax)); // Cap at 30 Resp/Min
+    
+    return [yMin, yMax];
+  }, []);
+
+
+  // Y-axis domain - dynamic for Day view, fixed for Week/Month views
+  const yDomain = React.useMemo<[number, number] | undefined>(() => {
+    if (selectedPeriod === 'Day') {
+      // Dynamic Y-axis based on visible data points
+      if (chartData && chartData.length > 0 && resolvedXDomain) {
+        return calculateDynamicYDomain(chartData, resolvedXDomain);
+      }
+      // Fallback to default if no data
+      return [0, 20];
+    }
+    // Default: 0-20 Resp/Min for Week/Month views
+    return [0, 20];
+  }, [selectedPeriod, chartData, resolvedXDomain, calculateDynamicYDomain]);
+
+  // Chart domain object
+  const chartDomain = React.useMemo(() => {
+    if (!resolvedXDomain || !yDomain) return undefined;
     return {
-      x: tooltipX,
-      y: Math.max(CHART_PADDING.top, tooltipY),
-      pointX: xPosition,
-      pointY: yPosition,
+      x: [...resolvedXDomain] as [number, number],
+      y: [...yDomain] as [number, number],
     };
-  }, [latestPoint, resolvedXDomain, yDomain, width, transformMatrix]);
+  }, [resolvedXDomain, yDomain]);
+
+  // Y-axis domain for weekly view - dynamic based on max value + 10 padding
+  const weeklyYDomain = React.useMemo<[number, number] | undefined>(() => {
+    if (weeklyChartData.length === 0) return [0, 20];
+    
+    const values = weeklyChartData.map((d) => d.y).filter((v) => v > 0);
+    if (values.length === 0) return [0, 20];
+    
+    const max = Math.max(...values);
+    // Add 10 to the max value for padding, but ensure minimum of 20
+    const maxWithPadding = Math.max(max + 10, 20);
+    
+    return [0, Math.ceil(maxWithPadding)];
+  }, [weeklyChartData]);
+
+  // Format X-axis labels for weekly view
+  const formatWeekDayLabel = React.useCallback((label: string | number) => {
+    const dayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    const index = typeof label === 'number' ? label : parseInt(String(label), 10);
+    return dayNames[index] || String(label);
+  }, []);
+
 
   const doubleTapGesture = React.useMemo(() => {
     return Gesture.Tap()
@@ -738,6 +1416,12 @@ export default function RespirationInsightsScreen() {
   }, [returnToLive]);
 
   const customGestures = React.useMemo(() => Gesture.Race(doubleTapGesture), [doubleTapGesture]);
+
+  // Show skeleton only when we have a device and are loading. When no device, show "No data available".
+  const isInitialLoading = 
+    (selectedPeriod === 'Day' && activeDevice?.deviceId && (isTodaySelected ? (isLoading && respirationData.length === 0) : isLoadingHistoricalDay)) ||
+    (selectedPeriod === 'Week' && isLoadingWeekly && weeklyRespirationData.length === 0) ||
+    (selectedPeriod === 'Month' && isLoadingMonthly && monthlyRespirationData.length === 0);
 
   return (
     <View style={styles.container}>
@@ -753,7 +1437,7 @@ export default function RespirationInsightsScreen() {
         <TouchableOpacity onPress={() => router.back()} style={styles.backButton} activeOpacity={0.8}>
           <Ionicons name="arrow-back" size={24} color="#FFFFFF" />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>More Insights</Text>
+        <Text style={styles.headerTitle} numberOfLines={1}>Estimated Breathing Trends</Text>
         <View style={{ width: 40 }} />
       </View>
 
@@ -783,198 +1467,509 @@ export default function RespirationInsightsScreen() {
             <Ionicons name="chevron-back" size={20} color="#C7D6FF" />
           </TouchableOpacity>
           <Text style={styles.dateText}>{formattedDate}</Text>
-          <TouchableOpacity onPress={goToNext} style={styles.dateNavButton} activeOpacity={0.8}>
-            <Ionicons name="chevron-forward" size={20} color="#C7D6FF" />
+          <TouchableOpacity
+            onPress={goToNext}
+            style={[styles.dateNavButton, !canGoNext && styles.dateNavButtonDisabled]}
+            disabled={!canGoNext}
+            activeOpacity={0.8}
+          >
+            <Ionicons name="chevron-forward" size={20} color={canGoNext ? '#C7D6FF' : 'rgba(199,214,255,0.35)'} />
           </TouchableOpacity>
         </View>
 
-        {/* Key Respiration Metrics */}
-        <View style={styles.metricsRow}>
-          <View style={styles.metricCard}>
-            <Text style={styles.metricLabel}>Min</Text>
-            <Text style={styles.metricValue}>{metrics.min || '--'}</Text>
-            <Text style={styles.metricUnit}>Resp/Min</Text>
-          </View>
-          <View style={styles.metricCard}>
-            <Text style={styles.metricLabel}>Average</Text>
-            <Text style={styles.metricValue}>{metrics.average || '--'}</Text>
-            <Text style={styles.metricUnit}>Resp/Min</Text>
-          </View>
-          <View style={styles.metricCard}>
-            <Text style={styles.metricLabel}>Max</Text>
-            <Text style={styles.metricValue}>{metrics.max || '--'}</Text>
-            <Text style={styles.metricUnit}>Resp/Min</Text>
-          </View>
-        </View>
-
-        {/* Healthy Range Information */}
-        <View style={styles.healthyRangeContainer}>
-          <View style={styles.healthyRangeRow}>
-            <Text style={styles.healthyRangeText}>Out of your healthy range</Text>
-            <TouchableOpacity activeOpacity={0.6}>
-              <Ionicons name="help-circle-outline" size={16} color="#7EA6FF" />
-            </TouchableOpacity>
-          </View>
-          <Text style={styles.outOfRangeMinutes}>
-            {respirationData.length > 0
-              ? Math.round(
-                  respirationData.filter(
-                    (d) => d.value < 10 || d.value > 22
-                  ).length * 1 // Each point represents ~1 minute
-                )
-              : 0}{' '}
-            Minutes
-          </Text>
-        </View>
-
-        {/* Last Sync Time */}
-        <View style={styles.lastSyncContainer}>
-          <Text style={styles.lastSyncText}>
-            Last sync: {respirationData.length > 0 
-              ? (() => {
-                  const lastTimestamp = respirationData[respirationData.length - 1].timestamp;
-                  const now = Date.now();
-                  // Use current time if timestamp is in the future (timezone/server time issues)
-                  const displayTime = lastTimestamp > now ? now : lastTimestamp;
-                  return new Date(displayTime).toLocaleTimeString('en-US', { 
-                    hour: 'numeric', 
-                    minute: '2-digit',
-                    hour12: true 
-                  });
-                })()
-              : 'No data'}
-          </Text>
-        </View>
-
-        {/* Respiration Graph with Victory Native */}
-        {isLoading && respirationData.length === 0 ? (
-          <View style={styles.loadingContainer}>
-            <ActivityIndicator size="large" color="#FF0000" />
-            <Text style={styles.loadingText}>Loading respiration data...</Text>
-          </View>
-        ) : error && respirationData.length === 0 ? (
-          <View style={styles.errorContainer}>
-            <Ionicons name="alert-circle-outline" size={48} color="rgba(255,255,255,0.3)" />
-            <Text style={styles.errorText}>{error}</Text>
-            <TouchableOpacity onPress={fetchRespirationData} style={styles.retryButton}>
-              <Text style={styles.retryButtonText}>Retry</Text>
-            </TouchableOpacity>
-          </View>
-        ) : respirationData.length === 0 ? (
-          <View style={styles.emptyContainer}>
-            <Ionicons name="pulse-outline" size={48} color="rgba(255,255,255,0.3)" />
-            <Text style={styles.emptyText}>No respiration data available</Text>
-            <Text style={styles.emptySubtext}>Data will appear here when available</Text>
-          </View>
+        {/* Show skeleton when loading, otherwise show content */}
+        {isInitialLoading ? (
+          <HeartRateSkeleton />
         ) : (
-          <View style={styles.chartContainer}>
-            {/* Healthy Range Legend */}
-            <View style={styles.legendContainer}>
-              <View style={styles.legendItem}>
-                <View style={[styles.legendRectangle, { backgroundColor: 'rgba(126,166,255,0.3)' }]} />
-                <Text style={styles.legendText}>Your healthy range</Text>
+          <>
+            {/* Key Respiration Metrics */}
+            <View style={styles.metricsRow}>
+              <View style={styles.metricCard}>
+                <Text style={styles.metricLabel}>Min Breathing</Text>
+                <Text style={styles.metricValue}>{displayMetrics.min}</Text>
+                <Text style={styles.metricUnit}>Resp/Min</Text>
+              </View>
+              <View style={styles.metricCard}>
+                <Text style={styles.metricLabel}>Avg Breathing</Text>
+                <Text style={styles.metricValue}>{displayMetrics.average}</Text>
+                <Text style={styles.metricUnit}>Resp/Min</Text>
+              </View>
+              <View style={styles.metricCard}>
+                <Text style={styles.metricLabel}>Max Breathing</Text>
+                <Text style={styles.metricValue}>{displayMetrics.max}</Text>
+                <Text style={styles.metricUnit}>Resp/Min</Text>
               </View>
             </View>
 
-            {/* Victory Native Chart */}
-            <View style={styles.chartWrapper}>
-              <CartesianChart
-                data={chartData}
-                xKey="x"
-                yKeys={['y']}
-                padding={CHART_PADDING}
-                domain={
-                  resolvedXDomain
-                    ? {
-                        x: resolvedXDomain,
-                        y: yDomain,
-                      }
-                    : undefined
-                }
-                xAxis={{
-                  font: skiaFont,
-                  tickCount: 5,
-                  labelColor: 'rgba(199,214,255,0.75)',
-                  lineColor: 'rgba(255,255,255,0.08)',
-                  labelOffset: 4,
-                  enableRescaling: true,
-                  formatXLabel: (label) => formatTime(Number(label)),
-                }}
-                yAxis={[
-                  {
-                    font: skiaFont,
-                    tickCount: 4,
-                    labelColor: 'rgba(199,214,255,0.75)',
-                    lineColor: 'rgba(255,255,255,0.08)',
-                    labelOffset: 4,
-                    enableRescaling: true,
-                    formatYLabel: (label) => `${Math.round(Number(label))}`,
-                  },
-                ]}
-                transformState={transformState}
-                transformConfig={{
-                  pinch: { dimensions: 'x' },
-                  pan: { dimensions: ['x', 'y'], activateAfterLongPress: 100 },
-                }}
-                customGestures={customGestures}
-              >
-                {({ points }) => (
-                  <Line
-                    points={points.y}
-                    color="#FF0000"
-                    strokeWidth={1.5}
-                    strokeCap="round"
-                    strokeJoin="round"
-                    animate={{ type: 'timing', duration: 250 }}
-                  />
-                )}
-              </CartesianChart>
-
-              {/* Tooltip for latest point (similar to heart rate graph) */}
-              {latestPoint && tooltipPosition !== null && (
-                <View
-                  style={[
-                    styles.tooltipContainer,
-                    {
-                      left: tooltipPosition?.x ?? 0,
-                      top: tooltipPosition?.y ?? 0,
-                    },
-                  ]}
-                  pointerEvents="none"
-                >
-                  {/* Tooltip box */}
-                  <View style={styles.tooltipBox}>
-                    {/* Value text (e.g., "13 Resp/Min") */}
-                    <Text style={styles.tooltipValue}>
-                      {Math.round(latestPoint.value)} Resp/Min
-                    </Text>
-                    {/* Time text */}
-                    <Text style={styles.tooltipTime}>
-                      {formatTime(latestPoint.timestamp)}
-                    </Text>
-                  </View>
-                  {/* Tooltip arrow pointing to point */}
-                  {tooltipPosition && (
-                    <View
-                      style={[
-                        styles.tooltipArrow,
-                        {
-                          left: (tooltipPosition.pointX - tooltipPosition.x - 5),
-                        },
-                      ]}
-                    />
-                  )}
-                </View>
-              )}
-            </View>
-
-            {/* Chart hint */}
-            <View style={styles.hintContainer}>
-              <Text style={styles.hintText}>
-                👆 Pinch to zoom (X) • Long-press + drag to pan • Double-tap to return to Live (10s idle auto-live)
+            {/* Last Sync Time */}
+            <View style={styles.lastSyncContainer}>
+              <Text style={styles.lastSyncText}>
+                Last sync: {(() => {
+                  // Use latestPoint which already finds the last valid point
+                  if (latestPoint && latestPoint.timestamp) {
+                    const lastTimestamp = latestPoint.timestamp;
+                    const now = Date.now();
+                    const displayTime = lastTimestamp > now ? now : lastTimestamp;
+                    return new Date(displayTime).toLocaleTimeString('en-US', { 
+                      hour: '2-digit', 
+                      minute: '2-digit',
+                      hour12: false 
+                    });
+                  }
+                  return 'No data';
+                })()}
               </Text>
             </View>
-          </View>
+
+            {/* Respiration Graph with Victory Native */}
+            {selectedPeriod === 'Month' ? (
+              // Monthly Bar Chart View
+              monthlyError && monthlyRespirationData.length === 0 ? (
+                <View style={styles.errorContainer}>
+                  <Ionicons name="alert-circle-outline" size={48} color="rgba(255,255,255,0.3)" />
+                  <Text style={styles.errorText}>{monthlyError}</Text>
+                  <TouchableOpacity onPress={fetchMonthlyRespirationData} style={styles.retryButton}>
+                    <Text style={styles.retryButtonText}>Retry</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : monthlyChartData.length === 0 ? (
+                <View style={styles.emptyContainer}>
+                  <Ionicons name="pulse-outline" size={48} color="rgba(255,255,255,0.3)" />
+                  <Text style={styles.emptyText}>No monthly respiration data available</Text>
+                  <Text style={styles.emptySubtext}>Data will appear here when available</Text>
+                </View>
+              ) : (
+                <View style={styles.chartContainer}>
+                  {/* Healthy Range Legend */}
+                  <View style={styles.legendContainer}>
+                    <View style={styles.legendItem}>
+                      <View style={[styles.legendRectangle, { backgroundColor: 'rgba(126,166,255,0.3)' }]} />
+                      <Text style={styles.legendText}>Your healthy range</Text>
+                    </View>
+                  </View>
+
+                  {/* Victory Native Bar Chart */}
+                  <View style={styles.chartWrapper}>
+                    <CartesianChart
+                      data={monthlyChartData}
+                      xKey="x"
+                      yKeys={['y']}
+                      padding={MONTHLY_CHART_PADDING}
+                      domain={{
+                        x: [-0.5, monthlyChartData.length - 0.5],
+                        y: monthlyYDomain,
+                      }}
+                      xAxis={{
+                        font: skiaFont,
+                        tickCount: 7,
+                        labelColor: 'rgba(199,214,255,0.75)',
+                        lineColor: 'rgba(255,255,255,0.08)',
+                        labelOffset: 4,
+                        formatXLabel: formatMonthDayLabel,
+                      }}
+                      yAxis={[
+                        {
+                          font: skiaFont,
+                          tickCount: 4,
+                          labelColor: 'rgba(199,214,255,0.75)',
+                          lineColor: 'rgba(255,255,255,0.08)',
+                          labelOffset: 4,
+                          formatYLabel: (label) => `${Math.round(Number(label))}`,
+                        },
+                      ]}
+                      transformConfig={{
+                        pinch: { enabled: false },
+                        pan: { enabled: false },
+                      }}
+                    >
+                      {({ points, chartBounds }) => {
+                        if (!points?.y || !chartBounds || !Array.isArray(points.y)) {
+                          return null;
+                        }
+                        
+                        const chartData = monthlyChartData;
+                        if (!chartData?.length) {
+                          return null;
+                        }
+                        
+                        const pointsWithData = points.y.filter((p: any, index: number) => {
+                          if (!p || index >= chartData.length) return false;
+                          const dayData = chartData[index];
+                          return dayData?.hasData === true && dayData.y > 0;
+                        });
+                        
+                        if (pointsWithData.length === 0) {
+                          return null;
+                        }
+                        
+                        const todayData = chartData.find((d) => d.isPartial && d.hasData);
+                        const todayPoint = todayData ? 
+                          pointsWithData.find((p: any) => {
+                            return p && Math.abs(p.x - todayData.x) < 0.5;
+                          }) : null;
+                        
+                        const allBars = (
+                          <Bar
+                            points={pointsWithData}
+                            chartBounds={chartBounds}
+                            color="#FFD700"
+                            roundedCorners={{ topLeft: 8, topRight: 8 }}
+                            innerPadding={0.5}
+                            barCount={monthlyChartData.length}
+                          />
+                        );
+
+                        if (todayPoint) {
+                          return (
+                            <>
+                              {allBars}
+                              <Bar
+                                points={[todayPoint]}
+                                chartBounds={chartBounds}
+                                color="rgba(255, 215, 0, 0.6)"
+                                roundedCorners={{ topLeft: 8, topRight: 8 }}
+                                innerPadding={0.5}
+                                barCount={monthlyChartData.length}
+                              />
+                            </>
+                          );
+                        }
+
+                        return allBars;
+                      }}
+                    </CartesianChart>
+                  </View>
+
+                </View>
+              )
+            ) : selectedPeriod === 'Week' ? (
+              // Weekly Bar Chart View
+              weeklyError && weeklyRespirationData.length === 0 ? (
+                <View style={styles.errorContainer}>
+                  <Ionicons name="alert-circle-outline" size={48} color="rgba(255,255,255,0.3)" />
+                  <Text style={styles.errorText}>{weeklyError}</Text>
+                  <TouchableOpacity onPress={fetchWeeklyRespirationData} style={styles.retryButton}>
+                    <Text style={styles.retryButtonText}>Retry</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : weeklyChartData.length === 0 ? (
+                <View style={styles.emptyContainer}>
+                  <Ionicons name="pulse-outline" size={48} color="rgba(255,255,255,0.3)" />
+                  <Text style={styles.emptyText}>No weekly respiration data available</Text>
+                  <Text style={styles.emptySubtext}>Data will appear here when available</Text>
+                </View>
+              ) : (
+                <View style={styles.chartContainer}>
+                  {/* Healthy Range Legend */}
+                  <View style={styles.legendContainer}>
+                    <View style={styles.legendItem}>
+                      <View style={[styles.legendRectangle, { backgroundColor: 'rgba(126,166,255,0.3)' }]} />
+                      <Text style={styles.legendText}>Your healthy range</Text>
+                    </View>
+                  </View>
+
+                  {/* Victory Native Bar Chart */}
+                  <View style={styles.chartWrapper}>
+                    <CartesianChart
+                      data={weeklyChartData}
+                      xKey="x"
+                      yKeys={['y']}
+                      padding={WEEKLY_CHART_PADDING}
+                      domain={{
+                        x: [-0.5, 6.5],
+                        y: weeklyYDomain,
+                      }}
+                      xAxis={{
+                        font: skiaFont,
+                        tickCount: 7,
+                        labelColor: 'rgba(199,214,255,0.75)',
+                        lineColor: 'rgba(255,255,255,0.08)',
+                        labelOffset: 4,
+                        formatXLabel: formatWeekDayLabel,
+                      }}
+                      yAxis={[
+                        {
+                          font: skiaFont,
+                          tickCount: 4,
+                          labelColor: 'rgba(199,214,255,0.75)',
+                          lineColor: 'rgba(255,255,255,0.08)',
+                          labelOffset: 4,
+                          formatYLabel: (label) => `${Math.round(Number(label))}`,
+                        },
+                      ]}
+                      transformConfig={{
+                        pinch: { enabled: false },
+                        pan: { enabled: false },
+                      }}
+                    >
+                      {({ points, chartBounds }) => {
+                        if (!points || !points.y || !chartBounds || !Array.isArray(points.y)) {
+                          return null;
+                        }
+                        
+                        const chartData = weeklyChartData;
+                        if (!chartData || chartData.length === 0) {
+                          return null;
+                        }
+                        
+                        const pointsWithData = points.y.filter((p: any, index: number) => {
+                          if (!p || index >= chartData.length) return false;
+                          const dayData = chartData[index];
+                          return dayData && dayData.hasData === true && dayData.y > 0;
+                        });
+                        
+                        if (pointsWithData.length === 0) {
+                          return null;
+                        }
+                        
+                        const todayData = chartData.find((d) => d.isPartial && d.hasData);
+                        const todayPoint = todayData ? 
+                          pointsWithData.find((p: any) => {
+                            return p && Math.abs(p.x - todayData.x) < 0.5;
+                          }) : null;
+                        
+                        const allBars = (
+                          <Bar
+                            points={pointsWithData}
+                            chartBounds={chartBounds}
+                            color="#FFD700"
+                            roundedCorners={{ topLeft: 8, topRight: 8 }}
+                            innerPadding={0.5}
+                            barCount={7}
+                          />
+                        );
+
+                        if (todayPoint) {
+                          return (
+                            <>
+                              {allBars}
+                              <Bar
+                                points={[todayPoint]}
+                                chartBounds={chartBounds}
+                                color="rgba(255, 215, 0, 0.6)"
+                                roundedCorners={{ topLeft: 8, topRight: 8 }}
+                                innerPadding={0.5}
+                                barCount={7}
+                              />
+                            </>
+                          );
+                        }
+
+                        return allBars;
+                      }}
+                    </CartesianChart>
+                  </View>
+
+                </View>
+              )
+            ) : (
+              // Day Line Chart View — when no device show "No data available" (no stuck skeleton)
+              !activeDevice?.deviceId ? (
+                <View style={styles.emptyContainer}>
+                  <Ionicons name="pulse-outline" size={48} color="rgba(255,255,255,0.3)" />
+                  <Text style={styles.emptyText}>No data available</Text>
+                  <Text style={styles.emptySubtext}>Data will appear here when available</Text>
+                </View>
+              ) : !respirationGraphReady ? (
+                <HeartRateSkeleton />
+              ) : !graphData || graphData.points.length === 0 ? (
+                <View style={styles.emptyContainer}>
+                  <Ionicons name="pulse-outline" size={48} color="rgba(255,255,255,0.3)" />
+                  <Text style={styles.emptyText}>No data available</Text>
+                  <Text style={styles.emptySubtext}>Data will appear here when available</Text>
+                </View>
+              ) : (
+                <View style={styles.chartContainer}>
+                  {/* Healthy Range Legend with Zoom Controls and Top Tooltip */}
+                  <View style={styles.legendContainer}>
+                    <View style={styles.legendItem}>
+                      <View style={[styles.legendRectangle, { backgroundColor: 'rgba(126,166,255,0.3)' }]} />
+                      <Text style={styles.legendText}>Your healthy range</Text>
+                    </View>
+                    
+                    {/* Top Tooltip - Shows value and time above the graph */}
+                    {selectedPeriod === 'Day' && topTooltipData && respirationGraphReady && (
+                      <View style={styles.topTooltipInline} pointerEvents="none">
+                        <View style={styles.topTooltipBoxInline}>
+                          {/* Value - First line */}
+                          <Text style={[styles.topTooltipValueInline, { color: '#FFD700' }]}>
+                            {topTooltipData.respiration !== null ? Math.round(topTooltipData.respiration) : '--'}
+                          </Text>
+                          {/* Time - Second line */}
+                          <Text style={styles.topTooltipTimeInline}>
+                            {formatTime(topTooltipData.timestamp)}
+                          </Text>
+                        </View>
+                      </View>
+                    )}
+                    
+                    {/* Zoom Controls - Only for Day view */}
+                    {selectedPeriod === 'Day' && (
+                      <View style={styles.zoomButtonsInline}>
+                        <TouchableOpacity
+                          style={[styles.zoomButtonSmall, zoomIndex === 0 && styles.zoomButtonDisabled]}
+                          onPress={() => {
+                            const newIndex = Math.max(0, zoomIndex - 1);
+                            setZoomIndex(newIndex);
+                          }}
+                          disabled={zoomIndex === 0}
+                          activeOpacity={0.7}
+                        >
+                          <Ionicons name="remove" size={14} color={zoomIndex === 0 ? '#666' : '#FFFFFF'} />
+                        </TouchableOpacity>
+                        <Text style={styles.zoomLabelSmall}>
+                          {ZOOM_LEVELS[zoomIndex].label}
+                        </Text>
+                        <TouchableOpacity
+                          style={[
+                            styles.zoomButtonSmall,
+                            zoomIndex === ZOOM_LEVELS.length - 1 && styles.zoomButtonDisabled,
+                          ]}
+                          onPress={() => {
+                            const newIndex = Math.min(ZOOM_LEVELS.length - 1, zoomIndex + 1);
+                            setZoomIndex(newIndex);
+                          }}
+                          disabled={zoomIndex === ZOOM_LEVELS.length - 1}
+                          activeOpacity={0.7}
+                        >
+                          <Ionicons
+                            name="add"
+                            size={14}
+                            color={zoomIndex === ZOOM_LEVELS.length - 1 ? '#666' : '#FFFFFF'}
+                          />
+                        </TouchableOpacity>
+                      </View>
+                    )}
+                  </View>
+
+                  {/* Victory Native Chart */}
+                  <View style={styles.chartWrapper}>
+                    {chartData && chartData.length > 0 && resolvedXDomain ? (
+                      <CartesianChart
+                        key={`chart-${selectedPeriod}`}
+                        data={chartData}
+                        xKey="x"
+                        yKeys={['y']}
+                        padding={CHART_PADDING}
+                        domain={chartDomain}
+                        xAxis={{
+                          font: skiaFont,
+                          tickCount: 5,
+                          labelColor: 'rgba(199,214,255,0.75)',
+                          lineColor: 'rgba(255,255,255,0.08)',
+                          labelOffset: 4,
+                          enableRescaling: true,
+                          formatXLabel: (label) => formatTime(Number(label)),
+                        }}
+                        yAxis={[
+                          {
+                            font: skiaFont,
+                            tickCount: 6,
+                            labelColor: 'rgba(199,214,255,0.75)',
+                            lineColor: 'rgba(255,255,255,0.08)',
+                            labelOffset: 4,
+                            enableRescaling: true,
+                            formatYLabel: (label) => `${Math.round(Number(label))}`,
+                          },
+                        ]}
+                        transformState={transformState}
+                        transformConfig={{
+                          pinch: { dimensions: 'x' },
+                          pan: { dimensions: ['x', 'y'], activateAfterLongPress: 100 },
+                        }}
+                        customGestures={customGestures}
+                      >
+                        {({ points, chartBounds }) => {
+                          // Split points into segments at gaps (null values)
+                          // This creates vacant gaps in the line like heart rate graph
+                          const segments: any[][] = [];
+                          let currentSegment: any[] = [];
+                          
+                          points.y?.forEach((point: any) => {
+                            if (!point) return;
+                            // If point has null/undefined y value, it's a gap - start new segment
+                            if (point.y === null || point.y === undefined) {
+                              if (currentSegment.length > 0) {
+                                segments.push(currentSegment);
+                                currentSegment = [];
+                              }
+                            } else {
+                              currentSegment.push(point);
+                            }
+                          });
+                          
+                          // Add last segment if it has points
+                          if (currentSegment.length > 0) {
+                            segments.push(currentSegment);
+                          }
+                          
+                          const pathAnimate = { type: 'timing' as const, duration: 250 };
+                          
+                          return (
+                            <>
+                              {/* Yellow shadow/area under respiration line - render for each segment */}
+                              {segments.map((segment, segmentIndex) => (
+                                <Area
+                                  key={`area-segment-${segmentIndex}-${zoomIndex}-${chartData.length}`}
+                                  points={segment}
+                                  y0={chartBounds.bottom}
+                                  color="rgba(255, 215, 0, 0.28)"
+                                  curveType="linear"
+                                  connectMissingData={false}
+                                  animate={pathAnimate}
+                                />
+                              ))}
+                              {/* Render each segment as a separate line to create gaps */}
+                              {segments.map((segment, segmentIndex) => (
+                                <Line
+                                  key={`line-segment-${segmentIndex}-${zoomIndex}-${chartData.length}`}
+                                  points={segment}
+                                  color="#FFD700"
+                                  strokeWidth={2.5}
+                                  strokeCap="round"
+                                  strokeJoin="round"
+                                  curveType="linear"
+                                  connectMissingData={false}
+                                  animate={pathAnimate}
+                                />
+                              ))}
+                            </>
+                          );
+                        }}
+                      </CartesianChart>
+                    ) : (
+                      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 }}>
+                        <ActivityIndicator size="small" color="#FFD700" />
+                        <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 12, textAlign: 'center', marginTop: 8 }}>
+                          Preparing chart...
+                        </Text>
+                      </View>
+                    )}
+                  </View>
+
+                  {/* Bed Status Indicator - Only show after API call completes */}
+                  {!isLoadingBedStatus && (
+                    <View style={styles.bedStatusContainer}>
+                      <View style={[
+                        styles.bedStatusIndicator, 
+                        bedStatus === 'Occupied' && styles.bedStatusOccupied,
+                        bedStatus === 'Waiting' && styles.bedStatusWaiting
+                      ]}>
+                        <View style={[
+                          styles.bedStatusDot, 
+                          bedStatus === 'Occupied' && styles.bedStatusDotOccupied,
+                          bedStatus === 'Waiting' && styles.bedStatusDotWaiting
+                        ]} />
+                        <Text style={styles.bedStatusText}>
+                          Bed {bedStatus}
+                        </Text>
+                      </View>
+                    </View>
+                  )}
+                </View>
+              )
+            )}
+          </>
         )}
       </ScrollView>
     </View>
@@ -1050,6 +2045,9 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     backgroundColor: 'rgba(255,255,255,0.08)',
   },
+  dateNavButtonDisabled: {
+    opacity: 0.5,
+  },
   dateText: {
     color: '#FFFFFF',
     fontSize: 16,
@@ -1061,57 +2059,57 @@ const styles = StyleSheet.create({
   metricsRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginBottom: 20,
-    gap: 12,
+    marginBottom: 12,
+    gap: 8,
   },
   metricCard: {
     flex: 1,
     backgroundColor: 'rgba(255,255,255,0.06)',
     borderRadius: 12,
-    padding: 12,
+    padding: 8,
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.08)',
     alignItems: 'center',
   },
   metricLabel: {
     color: 'rgba(255,255,255,0.7)',
-    fontSize: 11,
+    fontSize: 10,
     fontWeight: '600',
-    marginBottom: 6,
+    marginBottom: 4,
   },
   metricValue: {
     color: '#FFFFFF',
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: '800',
   },
   metricUnit: {
     color: 'rgba(255,255,255,0.7)',
-    fontSize: 10,
+    fontSize: 9,
     fontWeight: '600',
     marginTop: 2,
   },
   healthyRangeContainer: {
     backgroundColor: 'rgba(255,255,255,0.06)',
     borderRadius: 12,
-    padding: 12,
-    marginBottom: 12,
+    padding: 10,
+    marginBottom: 8,
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.08)',
   },
   healthyRangeRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 6,
+    marginBottom: 4,
   },
   healthyRangeText: {
     color: 'rgba(255,255,255,0.85)',
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '700',
     marginRight: 6,
   },
   outOfRangeMinutes: {
     color: '#FFFFFF',
-    fontSize: 16,
+    fontSize: 14,
     fontWeight: '800',
   },
   lastSyncContainer: {
@@ -1121,6 +2119,40 @@ const styles = StyleSheet.create({
     color: 'rgba(255,255,255,0.7)',
     fontSize: 12,
     fontWeight: '600',
+  },
+  loadingContainer: {
+    height: 320,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.03)',
+    borderRadius: 12,
+    marginTop: 10,
+  },
+  loadingText: {
+    color: 'rgba(255,255,255,0.7)',
+    fontSize: 14,
+    fontWeight: '600',
+    marginTop: 12,
+  },
+  emptyContainer: {
+    height: 320,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.03)',
+    borderRadius: 12,
+    marginTop: 10,
+  },
+  emptyText: {
+    color: 'rgba(255,255,255,0.7)',
+    fontSize: 16,
+    fontWeight: '700',
+    marginTop: 16,
+  },
+  emptySubtext: {
+    color: 'rgba(255,255,255,0.5)',
+    fontSize: 12,
+    fontWeight: '600',
+    marginTop: 8,
   },
   chartContainer: {
     backgroundColor: 'rgba(255,255,255,0.04)',
@@ -1135,6 +2167,7 @@ const styles = StyleSheet.create({
   legendContainer: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'space-between',
     marginBottom: 12,
     width: '100%',
     paddingHorizontal: 14,
@@ -1158,20 +2191,6 @@ const styles = StyleSheet.create({
     width: '100%',
     height: 320,
     marginTop: 8,
-  },
-  loadingContainer: {
-    height: 320,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: 'rgba(255,255,255,0.03)',
-    borderRadius: 12,
-    marginTop: 10,
-  },
-  loadingText: {
-    color: 'rgba(255,255,255,0.7)',
-    fontSize: 14,
-    fontWeight: '600',
-    marginTop: 12,
   },
   errorContainer: {
     height: 320,
@@ -1201,26 +2220,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '700',
   },
-  emptyContainer: {
-    height: 320,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: 'rgba(255,255,255,0.03)',
-    borderRadius: 12,
-    marginTop: 10,
-  },
-  emptyText: {
-    color: 'rgba(255,255,255,0.7)',
-    fontSize: 16,
-    fontWeight: '700',
-    marginTop: 16,
-  },
-  emptySubtext: {
-    color: 'rgba(255,255,255,0.5)',
-    fontSize: 12,
-    fontWeight: '600',
-    marginTop: 8,
-  },
   hintContainer: {
     alignItems: 'center',
     paddingTop: 8,
@@ -1232,42 +2231,98 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontStyle: 'italic',
   },
-  tooltipContainer: {
-    position: 'absolute',
-    zIndex: 10,
-  },
-  tooltipBox: {
-    backgroundColor: 'rgba(0, 0, 0, 0.85)',
-    borderRadius: 6,
-    paddingHorizontal: 8,
-    paddingVertical: 6,
-    borderWidth: 1,
-    borderColor: '#FF0000',
+  zoomButtonsInline: {
+    flexDirection: 'row',
     alignItems: 'center',
-    minWidth: 90,
+    gap: 4,
   },
-  tooltipValue: {
+  zoomButtonSmall: {
+    width: 24,
+    height: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 6,
+    backgroundColor: 'rgba(126,166,255,0.2)',
+    borderWidth: 1,
+    borderColor: 'rgba(126,166,255,0.3)',
+  },
+  zoomButtonDisabled: {
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    borderColor: 'rgba(255,255,255,0.1)',
+    opacity: 0.5,
+  },
+  zoomLabelSmall: {
+    color: 'rgba(255,255,255,0.85)',
+    fontSize: 10,
+    fontWeight: '600',
+    minWidth: 32,
+    textAlign: 'center',
+  },
+  topTooltipInline: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  topTooltipBoxInline: {
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderRadius: 4,
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    alignItems: 'center',
+    minWidth: 50,
+  },
+  topTooltipValueInline: {
     color: '#FFFFFF',
-    fontSize: 11,
-    fontWeight: '700',
-    marginBottom: 2,
+    fontSize: 12,
+    fontWeight: '800',
+    textAlign: 'center',
   },
-  tooltipTime: {
+  topTooltipTimeInline: {
     color: 'rgba(255,255,255,0.7)',
-    fontSize: 9,
-    fontWeight: '500',
+    fontSize: 8,
+    fontWeight: '600',
+    marginTop: 1,
+    textAlign: 'center',
   },
-  tooltipArrow: {
-    position: 'absolute',
-    bottom: -5,
-    width: 0,
-    height: 0,
-    borderLeftWidth: 5,
-    borderRightWidth: 5,
-    borderTopWidth: 5,
-    borderLeftColor: 'transparent',
-    borderRightColor: 'transparent',
-    borderTopColor: '#FF0000',
+  bedStatusContainer: {
+    alignItems: 'center',
+    paddingTop: 12,
+    paddingBottom: 4,
+    marginTop: 8,
+  },
+  bedStatusIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.15)',
+  },
+  bedStatusOccupied: {
+    backgroundColor: 'rgba(255, 152, 0, 0.2)',
+    borderColor: 'rgba(255, 152, 0, 0.5)',
+  },
+  bedStatusWaiting: {
+    backgroundColor: 'rgba(158, 158, 158, 0.2)',
+    borderColor: 'rgba(158, 158, 158, 0.4)',
+  },
+  bedStatusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: 'rgba(255,255,255,0.5)',
+    marginRight: 8,
+  },
+  bedStatusDotOccupied: {
+    backgroundColor: '#FF9800',
+  },
+  bedStatusDotWaiting: {
+    backgroundColor: '#9E9E9E',
+  },
+  bedStatusText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '700',
   },
 });
-

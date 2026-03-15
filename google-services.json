@@ -1,0 +1,47 @@
+{
+  "project_info": {
+    "project_number": "1034636618673",
+    "project_id": "dozemate-8766c",
+    "storage_bucket": "dozemate-8766c.appspot.com"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1034636618673:android:android_app_id",
+        "android_client_info": {
+          "package_name": "com.slimiot.dozemate1"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "1034636618673-4rk3ei9m4qsvs0s0gvpuisgr587qrs1t.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.slimiot.dozemate1",
+            "certificate_hash": []
+          }
+        },
+        {
+          "client_id": "1034636618673-54oca3ie06ok9q4jbbvkf1ogf13b4kp3.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyC9TCRg2H2kw1rAXZH88OQrzwgqWdDOQj8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "1034636618673-54oca3ie06ok9q4jbbvkf1ogf13b4kp3.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

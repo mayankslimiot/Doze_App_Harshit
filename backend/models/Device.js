@@ -28,7 +28,23 @@ const DeviceSchema = new mongoose.Schema({
   },                                                          // WiFi Connection Status
   wifiConnectedAt: { type: Date },                          // Last successful WiFi connection timestamp
   wifiLastAttempt: { type: Date },                          // Last WiFi connection attempt timestamp
-  customName: { type: String, trim: true, maxlength: 50 }   // User-defined custom name for the device
+  customName: { type: String, trim: true, maxlength: 50 },   // User-defined custom name for the device
+  defaultName: { type: String, trim: true, maxlength: 50 },  // Permanent default name (e.g. Dozemate_1)
+  bleMac: { type: String, trim: true },                    // BLE MAC address (e.g. CF5585A050D2) for device matching during scan
+  // Bed Status fields (real-time bed occupancy state)
+  bedStatus: {
+    type: String,
+    enum: ["Vacant", "Occupied", "Waiting"],
+    default: "Vacant"
+  },                                                          // Bed occupancy status
+  absenceStart: { type: Number },                            // AS field from device stream (0 = Vacant, 1 = Occupied)
+  HV: { type: Number },                                      // Human Validity field from device stream
+  isLive: { type: Boolean, default: false },                // Whether device is actively sending data
+  // Caretaker / shared device: one owner (userId), multiple read-only caretakers
+  sharedWith: [{
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+    email: { type: String }
+  }]
 });
 
 DeviceSchema.index({ profileId: 1 });

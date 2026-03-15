@@ -2,7 +2,14 @@ const express = require("express");
 const User = require("../models/User");
 const Device = require("../models/Device");
 const HealthData = require("../models/HealthData");
-const SleepData = require("../models/SleepData");
+const HealthData180s = require("../models/HealthData180s");
+const SleepSession = require("../models/SleepSession");
+const {
+  calculateSleepSession,
+  storeSleepSession,
+  getSleepSession,
+  getSleepSessions
+} = require("../services/sleepAnalyticsService");
 // Adjust paths/file names to your project
 const Manufacturer = require('../models/Manufacturer');
 const DeviceModel = require('../models/DeviceModel');
@@ -122,98 +129,176 @@ router.post('/devices/assign', authMiddleware, async (req, res) => {
 });
 
 
-// ✅ Remove a Device from User Profile
+// ✅ Remove a Device from app (owner only)
+// Deletes the Device document (and its customName) from the devices collection.
+// Health data in healthdata_new is intentionally preserved.
 router.delete("/devices/remove/:deviceId", authMiddleware, async (req, res) => {
   try {
-    // Find the device by deviceId
-    const device = await Device.findOne({ deviceId: req.params.deviceId });
+    const deviceIdParam = String(req.params.deviceId || "").trim().toUpperCase();
+    const device = await Device.findOne({ deviceId: deviceIdParam });
 
     if (!device) {
       return res.status(404).json({ message: "Device not found" });
     }
 
-    // Remove device reference from user
-    const user = await User.findByIdAndUpdate(
-      req.user.userId,
-      { $pull: { devices: device._id } },
-      { new: true }
-    );
+    if (device.userId && device.userId.toString() !== req.user.userId.toString()) {
+      return res.status(403).json({ message: "Only the device owner can remove it" });
+    }
 
-    if (!user) return res.status(404).json({ message: "User not found" });
+    // Remove deviceId from every caretaker's sharedDevices
+    if (device.sharedWith && device.sharedWith.length > 0) {
+      const caretakerIds = device.sharedWith.map((e) => e.userId).filter(Boolean);
+      await User.updateMany(
+        { _id: { $in: caretakerIds } },
+        { $pull: { sharedDevices: device.deviceId } }
+      );
+    }
 
-    // Delete the actual device document from DB
+    // Remove from owner's devices (ObjectId) and ownedDevices (deviceId string)
+    await User.findByIdAndUpdate(req.user.userId, {
+      $pull: { devices: device._id, ownedDevices: device.deviceId }
+    });
+
+    // Also clear this device from the owner's activeDevices if present
+    await User.findByIdAndUpdate(req.user.userId, {
+      $pull: { activeDevices: device._id }
+    });
+
+    // Delete the device document entirely (customName deleted with it).
+    // HealthData (healthdata_new) is NOT touched — data is preserved.
     await Device.deleteOne({ _id: device._id });
 
-    res.json({ message: `Device ${device.deviceId} removed completely` });
+    res.json({ message: `Device ${device.deviceId} removed from your account` });
   } catch (error) {
     console.error("Error removing device:", error);
     res.status(500).json({ message: "Server error" });
   }
 });
 
-// ✅ Get weekly aggregated heart rate data (7 days, one per day)
+// ✅ Get weekly aggregated health data (7 days, one per day)
+// Supports both heart-rate (default) and respiration metrics via ?metric=respiration
 // IMPORTANT: This route must come BEFORE /data/health/:deviceId to avoid route conflicts
 router.get("/data/health/weekly/:deviceId", authMiddleware, async (req, res) => {
     try {
         const { deviceId } = req.params;
-        const { weekStart } = req.query; // Optional: ISO date string for week start (defaults to current week)
+        const { weekStart, metric } = req.query; // Optional: ISO date string for week start (defaults to current week), metric: 'heart-rate' (default) or 'respiration'
 
-        // Calculate week boundaries (Monday to Sunday)
-        let weekStartDate;
-        if (weekStart) {
-            const inputDate = new Date(weekStart);
-            const day = inputDate.getDay();
-            const diff = inputDate.getDate() - day + (day === 0 ? -6 : 1); // Adjust when day is Sunday
-            weekStartDate = new Date(inputDate);
-            weekStartDate.setDate(diff);
-        } else {
-            // Default to current week (Monday)
-            const now = new Date();
-            const day = now.getDay();
-            const diff = now.getDate() - day + (day === 0 ? -6 : 1);
-            weekStartDate = new Date(now);
-            weekStartDate.setDate(diff);
+        // Import timezone helper for IST calendar math
+        const {
+            getWeekStartIST,
+            getWeekEndIST,
+            getDayStartIST,
+            getDayEndIST,
+            isTodayIST,
+            formatISTDate
+        } = require('../utils/timezoneHelper');
+
+        // Calculate week boundaries in IST, then convert to UTC for MongoDB queries
+        let weekStartUTC, weekEndUTC;
+        try {
+            weekStartUTC = weekStart 
+                ? getWeekStartIST(weekStart)  // Parse weekStart as IST date
+                : getWeekStartIST(new Date()); // Current week in IST
+            
+            // Validate weekStartUTC
+            if (!weekStartUTC || isNaN(weekStartUTC.getTime())) {
+                throw new Error(`Invalid weekStartUTC calculated from weekStart: ${weekStart}`);
+            }
+            
+            weekEndUTC = getWeekEndIST(weekStartUTC);
+            
+            // Validate weekEndUTC
+            if (!weekEndUTC || isNaN(weekEndUTC.getTime())) {
+                throw new Error(`Invalid weekEndUTC calculated from weekStartUTC`);
+            }
+        } catch (error) {
+            console.error(`[WeeklyHeartRate] Error calculating week boundaries:`, error);
+            console.error(`  weekStart input: ${weekStart}`);
+            throw error;
         }
 
-        // Set to start of Monday (00:00:00)
-        weekStartDate.setHours(0, 0, 0, 0);
-        
-        // Calculate week end (Sunday 23:59:59)
-        const weekEndDate = new Date(weekStartDate);
-        weekEndDate.setDate(weekEndDate.getDate() + 6);
-        weekEndDate.setHours(23, 59, 59, 999);
-
-        // Today's date for isPartial flag
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-
-        console.log(`[WeeklyHeartRate] Fetching weekly data for ${deviceId} from ${weekStartDate} to ${weekEndDate}`);
+        // Defensive logging: Log IST ranges and UTC conversions
+        try {
+            const weekStartISTStr = formatISTDate(weekStartUTC);
+            const weekEndISTStr = formatISTDate(weekEndUTC);
+            console.log(`[WeeklyHeartRate] Device: ${deviceId}`);
+            console.log(`  IST Range: ${weekStartISTStr} (Mon 00:00 IST) to ${weekEndISTStr} (Sun 23:59 IST)`);
+            console.log(`  UTC Range: ${weekStartUTC.toISOString()} to ${weekEndUTC.toISOString()}`);
+        } catch (error) {
+            console.error(`[WeeklyHeartRate] Error formatting dates for logging:`, error);
+            console.log(`[WeeklyHeartRate] Device: ${deviceId}`);
+            console.log(`  UTC Range: ${weekStartUTC?.toISOString()} to ${weekEndUTC?.toISOString()}`);
+        }
 
         // Generate array of 7 days (Mon-Sun)
         const weekData = [];
         const dayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
+        // Determine which metric to query based on metric parameter
+        const isRespiration = metric === 'respiration';
+        const isStress = metric === 'stress';
+        const fieldNames = isRespiration 
+            ? { primary: 'respiration', secondary: 'resp' }
+            : { primary: 'heartRate', secondary: 'hr' };
+
         for (let i = 0; i < 7; i++) {
-            const dayStart = new Date(weekStartDate);
-            dayStart.setDate(dayStart.getDate() + i);
-            dayStart.setHours(0, 0, 0, 0);
+            // Calculate day boundaries in IST, convert to UTC
+            const dayStartUTC = getDayStartIST(weekStartUTC, i);
+            const dayEndUTC = getDayEndIST(weekStartUTC, i);
 
-            const dayEnd = new Date(dayStart);
-            dayEnd.setHours(23, 59, 59, 999);
+            // Check if this is today in IST (for isPartial flag)
+            const isToday = isTodayIST(dayStartUTC);
+            const isPartial = isToday && new Date() < dayEndUTC;
 
-            // Check if this is today (for isPartial flag)
-            const isToday = dayStart.getTime() === today.getTime();
-            const isPartial = isToday && new Date() < dayEnd;
-
-            // Aggregate heart rate data for this day
-            const dayData = await HealthData.aggregate([
+            // Aggregate health data for this day (using UTC Date objects)
+            let dayData;
+            if (isStress) {
+                // For stress, query HealthData180s and extract payload.stress_level
+                dayData = await HealthData180s.aggregate([
+                    {
+                        $match: {
+                            deviceId: deviceId,
+                            timestamp: { $gte: dayStartUTC, $lte: dayEndUTC },
+                            "payload.stress_level": { $exists: true, $ne: null, $ne: "" }
+                        }
+                    },
+                    {
+                        $addFields: {
+                            stressLevel: {
+                                $convert: {
+                                    input: "$payload.stress_level",
+                                    to: "double",
+                                    onError: null,
+                                    onNull: null
+                                }
+                            }
+                        }
+                    },
+                    {
+                        $match: {
+                            stressLevel: { $gte: 0, $lte: 100 }
+                        }
+                    },
+                    {
+                        $group: {
+                            _id: null,
+                            avg: { $avg: { $cond: [{ $gt: ["$stressLevel", 5] }, "$stressLevel", null] } },
+                            min: { $min: "$stressLevel" },
+                            max: { $max: "$stressLevel" },
+                            count: { $sum: 1 }
+                        }
+                    }
+                ]);
+            } else {
+                // For heart-rate and respiration, use HealthData
+                dayData = await HealthData.aggregate([
                 {
                     $match: {
                         deviceId: deviceId,
-                        timestamp: { $gte: dayStart, $lte: dayEnd },
+                        timestamp: { $gte: dayStartUTC, $lte: dayEndUTC },
                         $or: [
-                            { heartRate: { $gt: 0 } },
-                            { hr: { $gt: 0 } }
+                            { [fieldNames.primary]: { $gt: 0 } },
+                            { [fieldNames.secondary]: { $gt: 0 } }
                         ]
                     }
                 },
@@ -222,31 +307,35 @@ router.get("/data/health/weekly/:deviceId", authMiddleware, async (req, res) => 
                         _id: null,
                         avg: {
                             $avg: {
-                                $ifNull: ["$heartRate", "$hr"]
+                                $ifNull: [`$${fieldNames.primary}`, `$${fieldNames.secondary}`]
                             }
                         },
                         min: {
                             $min: {
-                                $ifNull: ["$heartRate", "$hr"]
+                                $ifNull: [`$${fieldNames.primary}`, `$${fieldNames.secondary}`]
                             }
                         },
                         max: {
                             $max: {
-                                $ifNull: ["$heartRate", "$hr"]
+                                $ifNull: [`$${fieldNames.primary}`, `$${fieldNames.secondary}`]
                             }
                         },
                         count: { $sum: 1 }
                     }
                 }
-            ]);
+                ]);
+            }
 
             const result = dayData[0] || null;
+
+            // Format date as IST date string (YYYY-MM-DD)
+            const dateStr = formatISTDate(dayStartUTC);
 
             weekData.push({
                 day: dayNames[i],
                 dayIndex: i,
-                date: dayStart.toISOString().split('T')[0], // YYYY-MM-DD
-                avg: result ? Math.round(result.avg * 10) / 10 : null, // Round to 1 decimal
+                date: dateStr, // YYYY-MM-DD in IST
+                avg: result && result.avg != null ? Math.round(result.avg * 10) / 10 : null, // Round to 1 decimal (null when all stress ≤5)
                 min: result ? Math.round(result.min) : null,
                 max: result ? Math.round(result.max) : null,
                 isPartial: isPartial,
@@ -254,11 +343,15 @@ router.get("/data/health/weekly/:deviceId", authMiddleware, async (req, res) => 
             });
         }
 
+        // Log query results for validation
+        const totalRecords = weekData.reduce((sum, day) => sum + day.count, 0);
+        console.log(`  Records found: ${totalRecords} total across 7 days`);
+
         res.json({
             success: true,
             deviceId,
-            weekStart: weekStartDate.toISOString(),
-            weekEnd: weekEndDate.toISOString(),
+            weekStart: weekStartUTC.toISOString(),
+            weekEnd: weekEndUTC.toISOString(),
             data: weekData
         });
 
@@ -272,64 +365,109 @@ router.get("/data/health/weekly/:deviceId", authMiddleware, async (req, res) => 
     }
 });
 
-// ✅ Get monthly aggregated heart rate data (30 days, one per day)
+// ✅ Get monthly aggregated health data (30 days, one per day)
+// Supports both heart-rate (default) and respiration metrics via ?metric=respiration
 // IMPORTANT: This route must come BEFORE /data/health/:deviceId to avoid route conflicts
 router.get("/data/health/monthly/:deviceId", authMiddleware, async (req, res) => {
     try {
         const { deviceId } = req.params;
-        const { monthStart } = req.query; // Optional: ISO date string for month start (defaults to current month)
+        const { monthStart, metric } = req.query; // Optional: ISO date string for month start (defaults to current month), metric: 'heart-rate' (default) or 'respiration'
 
-        // Calculate month boundaries (first day to last day of month)
-        let monthStartDate;
-        if (monthStart) {
-            monthStartDate = new Date(monthStart);
-            monthStartDate.setDate(1); // First day of month
-        } else {
-            // Default to current month
-            const now = new Date();
-            monthStartDate = new Date(now.getFullYear(), now.getMonth(), 1);
-        }
+        // Import timezone helper for IST calendar math
+        const {
+            getMonthStartIST,
+            getMonthEndIST,
+            getDaysInMonthIST,
+            getDayStartIST,
+            getDayEndIST,
+            isTodayIST,
+            formatISTDate
+        } = require('../utils/timezoneHelper');
 
-        // Set to start of first day (00:00:00)
-        monthStartDate.setHours(0, 0, 0, 0);
+        // Calculate month boundaries in IST, then convert to UTC for MongoDB queries
+        const monthStartUTC = monthStart
+            ? getMonthStartIST(monthStart)  // Parse monthStart as IST date
+            : getMonthStartIST(new Date()); // Current month in IST
         
-        // Calculate month end (last day of month 23:59:59)
-        const monthEndDate = new Date(monthStartDate.getFullYear(), monthStartDate.getMonth() + 1, 0);
-        monthEndDate.setHours(23, 59, 59, 999);
+        const monthEndUTC = getMonthEndIST(monthStartUTC);
+        const daysInMonth = getDaysInMonthIST(monthStartUTC);
 
-        // Get number of days in month
-        const daysInMonth = monthEndDate.getDate();
+        // Defensive logging: Log IST ranges and UTC conversions
+        const monthStartISTStr = formatISTDate(monthStartUTC);
+        const monthEndISTStr = formatISTDate(monthEndUTC);
+        console.log(`[MonthlyHeartRate] Device: ${deviceId}`);
+        console.log(`  IST Range: ${monthStartISTStr} (1st 00:00 IST) to ${monthEndISTStr} (last 23:59 IST)`);
+        console.log(`  UTC Range: ${monthStartUTC.toISOString()} to ${monthEndUTC.toISOString()}`);
+        console.log(`  Days in month: ${daysInMonth}`);
 
-        // Today's date for isPartial flag
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-
-        console.log(`[MonthlyHeartRate] Fetching monthly data for ${deviceId} from ${monthStartDate} to ${monthEndDate} (${daysInMonth} days)`);
+        // Determine which metric to query based on metric parameter
+        const isRespiration = metric === 'respiration';
+        const isStress = metric === 'stress';
+        const fieldNames = isRespiration 
+            ? { primary: 'respiration', secondary: 'resp' }
+            : { primary: 'heartRate', secondary: 'hr' };
 
         // Generate array of days in month
         const monthData = [];
 
         for (let i = 0; i < daysInMonth; i++) {
-            const dayStart = new Date(monthStartDate);
-            dayStart.setDate(dayStart.getDate() + i);
-            dayStart.setHours(0, 0, 0, 0);
+            // Calculate day boundaries in IST, convert to UTC
+            const dayStartUTC = getDayStartIST(monthStartUTC, i);
+            const dayEndUTC = getDayEndIST(monthStartUTC, i);
 
-            const dayEnd = new Date(dayStart);
-            dayEnd.setHours(23, 59, 59, 999);
+            // Check if this is today in IST (for isPartial flag)
+            const isToday = isTodayIST(dayStartUTC);
+            const isPartial = isToday && new Date() < dayEndUTC;
 
-            // Check if this is today (for isPartial flag)
-            const isToday = dayStart.getTime() === today.getTime();
-            const isPartial = isToday && new Date() < dayEnd;
-
-            // Aggregate heart rate data for this day
-            const dayData = await HealthData.aggregate([
+            // Aggregate health data for this day (using UTC Date objects)
+            let dayData;
+            if (isStress) {
+                // For stress, query HealthData180s and extract payload.stress_level
+                dayData = await HealthData180s.aggregate([
+                    {
+                        $match: {
+                            deviceId: deviceId,
+                            timestamp: { $gte: dayStartUTC, $lte: dayEndUTC },
+                            "payload.stress_level": { $exists: true, $ne: null, $ne: "" }
+                        }
+                    },
+                    {
+                        $addFields: {
+                            stressLevel: {
+                                $convert: {
+                                    input: "$payload.stress_level",
+                                    to: "double",
+                                    onError: null,
+                                    onNull: null
+                                }
+                            }
+                        }
+                    },
+                    {
+                        $match: {
+                            stressLevel: { $gte: 0, $lte: 100 }
+                        }
+                    },
+                    {
+                        $group: {
+                            _id: null,
+                            avg: { $avg: { $cond: [{ $gt: ["$stressLevel", 5] }, "$stressLevel", null] } },
+                            min: { $min: "$stressLevel" },
+                            max: { $max: "$stressLevel" },
+                            count: { $sum: 1 }
+                        }
+                    }
+                ]);
+            } else {
+                // For heart-rate and respiration, use HealthData
+                dayData = await HealthData.aggregate([
                 {
                     $match: {
                         deviceId: deviceId,
-                        timestamp: { $gte: dayStart, $lte: dayEnd },
+                        timestamp: { $gte: dayStartUTC, $lte: dayEndUTC },
                         $or: [
-                            { heartRate: { $gt: 0 } },
-                            { hr: { $gt: 0 } }
+                            { [fieldNames.primary]: { $gt: 0 } },
+                            { [fieldNames.secondary]: { $gt: 0 } }
                         ]
                     }
                 },
@@ -338,31 +476,35 @@ router.get("/data/health/monthly/:deviceId", authMiddleware, async (req, res) =>
                         _id: null,
                         avg: {
                             $avg: {
-                                $ifNull: ["$heartRate", "$hr"]
+                                $ifNull: [`$${fieldNames.primary}`, `$${fieldNames.secondary}`]
                             }
                         },
                         min: {
                             $min: {
-                                $ifNull: ["$heartRate", "$hr"]
+                                $ifNull: [`$${fieldNames.primary}`, `$${fieldNames.secondary}`]
                             }
                         },
                         max: {
                             $max: {
-                                $ifNull: ["$heartRate", "$hr"]
+                                $ifNull: [`$${fieldNames.primary}`, `$${fieldNames.secondary}`]
                             }
                         },
                         count: { $sum: 1 }
                     }
                 }
-            ]);
+                ]);
+            }
 
             const result = dayData[0] || null;
+
+            // Format date as IST date string (YYYY-MM-DD)
+            const dateStr = formatISTDate(dayStartUTC);
 
             monthData.push({
                 day: i + 1, // Day of month (1-31)
                 dayIndex: i, // Index (0-30)
-                date: dayStart.toISOString().split('T')[0], // YYYY-MM-DD
-                avg: result ? Math.round(result.avg * 10) / 10 : null, // Round to 1 decimal
+                date: dateStr, // YYYY-MM-DD in IST
+                avg: result && result.avg != null ? Math.round(result.avg * 10) / 10 : null, // Round to 1 decimal (null when all stress ≤5)
                 min: result ? Math.round(result.min) : null,
                 max: result ? Math.round(result.max) : null,
                 isPartial: isPartial,
@@ -370,11 +512,15 @@ router.get("/data/health/monthly/:deviceId", authMiddleware, async (req, res) =>
             });
         }
 
+        // Log query results for validation
+        const totalRecords = monthData.reduce((sum, day) => sum + day.count, 0);
+        console.log(`  Records found: ${totalRecords} total across ${daysInMonth} days`);
+
         res.json({
             success: true,
             deviceId,
-            monthStart: monthStartDate.toISOString(),
-            monthEnd: monthEndDate.toISOString(),
+            monthStart: monthStartUTC.toISOString(),
+            monthEnd: monthEndUTC.toISOString(),
             daysInMonth: daysInMonth,
             data: monthData
         });
@@ -452,8 +598,8 @@ router.get("/data/health/raw/:deviceId", authMiddleware, async (req, res) => {
 router.get("/data/health/heart-rate/graph/:deviceId", authMiddleware, async (req, res) => {
     try {
         const { deviceId } = req.params;
-        const { zoomLevel = '0' } = req.query; // Default to zoom level 0 (10m)
-        
+        const { zoomLevel = '0', raw = 'false', start, end } = req.query; // start/end = ms for date range (e.g. previous day)
+
         const zoomIndex = parseInt(zoomLevel, 10);
         if (isNaN(zoomIndex) || zoomIndex < 0 || zoomIndex > 7) {
             return res.status(400).json({
@@ -471,14 +617,17 @@ router.get("/data/health/heart-rate/graph/:deviceId", authMiddleware, async (req
             });
         }
 
-        // Check user access
-        const user = await User.findById(req.user.userId);
+        // Check user access (owner, account, admin, devices array, OR shared/caretaker)
+        const user = await User.findById(req.user.userId).select("devices accountId sharedDevices");
+        const deviceIdUpper = deviceId.trim().toUpperCase();
         const hasAccess = 
             (device.userId && device.userId.toString() === req.user.userId) ||
-            (device.accountId && device.accountId === user?.accountId) ||
+            (device.accountId && user?.accountId && device.accountId === user.accountId) ||
             req.user.role === "admin" ||
             req.user.role === "superadmin" ||
-            (user && user.devices && user.devices.some(d => d.toString() === device._id.toString()));
+            (user && user.devices && user.devices.some(d => d.toString() === device._id.toString())) ||
+            (user && user.sharedDevices && user.sharedDevices.some(id => String(id).trim().toUpperCase() === deviceIdUpper)) ||
+            (Array.isArray(device.sharedWith) && device.sharedWith.some(e => e.userId && String(e.userId) === String(req.user.userId)));
 
         if (!hasAccess) {
             return res.status(403).json({
@@ -487,35 +636,88 @@ router.get("/data/health/heart-rate/graph/:deviceId", authMiddleware, async (req
             });
         }
 
-        // Get time window for zoom level (for viewport)
-        const { getTimeWindow } = require('../config/zoomLevels');
-        const viewportWindow = getTimeWindow(zoomIndex);
-        
-        // Always fetch last 24 hours of data for initial load
-        // Zoom level controls viewport (what's visible) and aggregation interval, not data fetch range
-        const twentyFourHoursAgo = Date.now() - (24 * 60 * 60 * 1000);
         const now = Date.now();
+        const twentyFourHoursAgo = now - (24 * 60 * 60 * 1000);
+        let queryStart = twentyFourHoursAgo;
+        let queryEnd = now;
+        if (start != null && end != null) {
+            const startMs = parseInt(start, 10);
+            const endMs = parseInt(end, 10);
+            if (Number.isFinite(startMs) && Number.isFinite(endMs) && startMs < endMs) {
+                queryStart = startMs;
+                queryEnd = endMs;
+            }
+        }
 
-        // Fetch raw health data for the last 24 hours
+        // ✅ CRITICAL: Fetch raw health data including null values (gaps)
+        // Include records with heartRate=null (gaps) AND valid heartRate values
+        // Exclude only invalid values (heartRate=0)
         const rawData = await HealthData.find({
             deviceId: deviceId,
             timestamp: {
-                $gte: new Date(twentyFourHoursAgo),
-                $lte: new Date(now)
+                $gte: new Date(queryStart),
+                $lte: new Date(queryEnd)
             },
             $or: [
-                { heartRate: { $exists: true, $ne: null, $gt: 0 } },
-                { hr: { $exists: true, $ne: null, $gt: 0 } },
-                { bpm: { $exists: true, $ne: null, $gt: 0 } }
+                { heartRate: null }, // Include null gaps
+                { heartRate: { $gt: 0, $lt: 250 } }, // Include valid heart rates
+                { hr: { $gt: 0, $lt: 250 } }, // Legacy field
+                { bpm: { $gt: 0, $lt: 250 } } // Legacy field
             ]
         })
         .sort({ timestamp: 1 }) // Oldest first
         .select("timestamp heartRate hr bpm")
         .lean();
 
-        // Aggregate data using backend logic
-        // Pass viewport window separately so aggregation can use zoom level for interval/viewport
-        // but process all 24h of data
+        // ✅ If raw=true, return raw data points without aggregation (for buffer hydration)
+        if (raw === 'true') {
+            // Convert raw data to graph format (x: timestamp, y: heartRate value)
+            const rawPoints = rawData.map(item => {
+                const timestamp = new Date(item.timestamp).getTime();
+                // Use heartRate, hr, or bpm (in that order)
+                const value = item.heartRate !== undefined ? item.heartRate : 
+                             (item.hr !== undefined ? item.hr : 
+                             (item.bpm !== undefined ? item.bpm : null));
+                
+                return {
+                    x: timestamp,
+                    y: value // Can be null for gaps
+                };
+            });
+
+            // Calculate domain from raw data
+            const timestamps = rawPoints.map(p => p.x).filter(t => Number.isFinite(t));
+            const values = rawPoints.map(p => p.y).filter(v => v !== null && v > 0 && v < 250);
+            
+            const xDomain = timestamps.length > 0 
+                ? [Math.min(...timestamps), Math.max(...timestamps)]
+                : [queryStart, queryEnd];
+            
+            const yDomain = values.length > 0
+                ? [Math.max(40, Math.min(...values) - 10), Math.min(150, Math.max(...values) + 10)]
+                : [40, 150];
+
+            const { getZoomLevel } = require('../config/zoomLevels');
+            const zoomLevelConfig = getZoomLevel(zoomIndex);
+
+            return res.json({
+                success: true,
+                data: {
+                    points: rawPoints,
+                    xDomain: xDomain,
+                    yDomain: yDomain,
+                    zoomLevel: {
+                        index: zoomIndex,
+                        label: zoomLevelConfig.label,
+                        rangeSec: zoomLevelConfig.rangeSec
+                    }
+                }
+            });
+        }
+
+        // ✅ Default: Aggregate data using backend logic (for graph display)
+        const { getTimeWindow } = require('../config/zoomLevels');
+        const viewportWindow = getTimeWindow(zoomIndex);
         const { aggregateHeartRateGraph } = require('../utils/graphAggregation');
         const graphData = aggregateHeartRateGraph(rawData, zoomIndex, null, viewportWindow);
 
@@ -533,12 +735,243 @@ router.get("/data/health/heart-rate/graph/:deviceId", authMiddleware, async (req
     }
 });
 
+// ✅ Get respiration graph data for a specific device (optimized endpoint for pre-loading)
+router.get("/data/health/respiration/graph/:deviceId", authMiddleware, async (req, res) => {
+    try {
+        const { deviceId } = req.params;
+        const { zoomLevel = '0', raw = 'false', start, end } = req.query; // start/end = ms for date range (e.g. previous day)
+
+        const zoomIndex = parseInt(zoomLevel, 10);
+        if (isNaN(zoomIndex) || zoomIndex < 0 || zoomIndex > 7) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid zoomLevel. Must be between 0 and 7"
+            });
+        }
+
+        // Verify device access
+        const device = await Device.findOne({ deviceId });
+        if (!device) {
+            return res.status(404).json({
+                success: false,
+                message: "Device not found"
+            });
+        }
+
+        // Check user access (owner, account, admin, devices array, OR shared/caretaker)
+        const user = await User.findById(req.user.userId).select("devices accountId sharedDevices");
+        const deviceIdUpper = deviceId.trim().toUpperCase();
+        const hasAccess = 
+            (device.userId && device.userId.toString() === req.user.userId) ||
+            (device.accountId && user?.accountId && device.accountId === user.accountId) ||
+            req.user.role === "admin" ||
+            req.user.role === "superadmin" ||
+            (user && user.devices && user.devices.some(d => d.toString() === device._id.toString())) ||
+            (user && user.sharedDevices && user.sharedDevices.some(id => String(id).trim().toUpperCase() === deviceIdUpper)) ||
+            (Array.isArray(device.sharedWith) && device.sharedWith.some(e => e.userId && String(e.userId) === String(req.user.userId)));
+
+        if (!hasAccess) {
+            return res.status(403).json({
+                success: false,
+                message: "Access denied to this device"
+            });
+        }
+
+        const now = Date.now();
+        const twentyFourHoursAgo = now - (24 * 60 * 60 * 1000);
+        let queryStart = twentyFourHoursAgo;
+        let queryEnd = now;
+        if (start != null && end != null) {
+            const startMs = parseInt(start, 10);
+            const endMs = parseInt(end, 10);
+            if (Number.isFinite(startMs) && Number.isFinite(endMs) && startMs < endMs) {
+                queryStart = startMs;
+                queryEnd = endMs;
+            }
+        }
+
+        // ✅ CRITICAL: Fetch raw health data including null values (gaps)
+        // Include records with respiration=null (gaps) AND valid respiration values
+        const rawData = await HealthData.find({
+            deviceId: deviceId,
+            timestamp: {
+                $gte: new Date(queryStart),
+                $lte: new Date(queryEnd)
+            },
+            $or: [
+                { respiration: null }, // Include null gaps
+                { respiration: { $gt: 0, $lt: 50 } }, // Include valid respiration rates
+                { resp: { $gt: 0, $lt: 50 } } // Legacy field
+            ]
+        })
+        .sort({ timestamp: 1 }) // Oldest first
+        .select("timestamp respiration resp")
+        .lean();
+
+        // ✅ If raw=true, return raw data points without aggregation (for buffer hydration)
+        if (raw === 'true') {
+            // Convert raw data to graph format (x: timestamp, y: respiration value)
+            const rawPoints = rawData.map(item => {
+                const timestamp = new Date(item.timestamp).getTime();
+                // Use respiration or resp (in that order)
+                const value = item.respiration !== undefined ? item.respiration : 
+                             (item.resp !== undefined ? item.resp : null);
+                
+                return {
+                    x: timestamp,
+                    y: value // Can be null for gaps
+                };
+            });
+
+            // Calculate domain from raw data
+            const timestamps = rawPoints.map(p => p.x).filter(t => Number.isFinite(t));
+            const values = rawPoints.map(p => p.y).filter(v => v !== null && v > 0 && v < 50);
+            
+            const xDomain = timestamps.length > 0 
+                ? [Math.min(...timestamps), Math.max(...timestamps)]
+                : [queryStart, queryEnd];
+            
+            const yDomain = values.length > 0
+                ? [Math.max(0, Math.min(...values) - 2), Math.min(20, Math.max(...values) + 2)]
+                : [0, 20];
+
+            const { getZoomLevel } = require('../config/zoomLevels');
+            const zoomLevelConfig = getZoomLevel(zoomIndex);
+
+            return res.json({
+                success: true,
+                data: {
+                    points: rawPoints,
+                    xDomain: xDomain,
+                    yDomain: yDomain,
+                    zoomLevel: {
+                        index: zoomIndex,
+                        label: zoomLevelConfig.label,
+                        rangeSec: zoomLevelConfig.rangeSec
+                    }
+                }
+            });
+        }
+
+        // ✅ Default: Aggregate data using backend logic (for graph display)
+        const { getTimeWindow } = require('../config/zoomLevels');
+        const viewportWindow = getTimeWindow(zoomIndex);
+        const { aggregateRespirationGraph } = require('../utils/graphAggregation');
+        const graphData = aggregateRespirationGraph(rawData, zoomIndex, null, viewportWindow);
+
+        res.json({
+            success: true,
+            data: graphData
+        });
+    } catch (error) {
+        console.error("Error fetching respiration graph data:", error);
+        res.status(500).json({
+            success: false,
+            message: "Server error",
+            error: error.message
+        });
+    }
+});
+
+// ✅ Get stress graph data for a specific device (Day view - returns raw points, no aggregation)
+router.get("/data/health/stress/graph/:deviceId", authMiddleware, async (req, res) => {
+    try {
+        const { deviceId } = req.params;
+        const { from, to } = req.query; // Date range: from and to ISO strings
+        
+        // Verify device access
+        const device = await Device.findOne({ deviceId });
+        if (!device) {
+            return res.status(404).json({
+                success: false,
+                message: "Device not found"
+            });
+        }
+
+        // Check user access (owner, account, admin, devices array, OR shared/caretaker)
+        const user = await User.findById(req.user.userId).select("devices accountId sharedDevices");
+        const deviceIdUpper = deviceId.trim().toUpperCase();
+        const hasAccess = 
+            (device.userId && device.userId.toString() === req.user.userId) ||
+            (device.accountId && user?.accountId && device.accountId === user.accountId) ||
+            req.user.role === "admin" ||
+            req.user.role === "superadmin" ||
+            (user && user.devices && user.devices.some(d => d.toString() === device._id.toString())) ||
+            (user && user.sharedDevices && user.sharedDevices.some(id => String(id).trim().toUpperCase() === deviceIdUpper)) ||
+            (Array.isArray(device.sharedWith) && device.sharedWith.some(e => e.userId && String(e.userId) === String(req.user.userId)));
+
+        if (!hasAccess) {
+            return res.status(403).json({
+                success: false,
+                message: "Access denied to this device"
+            });
+        }
+
+        // Build query for HealthData180s collection
+        const query = {
+            deviceId: deviceId,
+            "payload.stress_level": { $exists: true, $ne: null, $ne: "" } // Only documents with stress_level
+        };
+
+        // Add timestamp filter if from/to provided
+        if (from && to) {
+            query.timestamp = {
+                $gte: new Date(from),
+                $lte: new Date(to)
+            };
+        } else {
+            // Default to last 24 hours if no date range provided
+            const twentyFourHoursAgo = new Date(Date.now() - (24 * 60 * 60 * 1000));
+            const now = new Date();
+            query.timestamp = {
+                $gte: twentyFourHoursAgo,
+                $lte: now
+            };
+        }
+
+        // Fetch raw stress data from healthdata_180s collection
+        const rawData = await HealthData180s.find(query)
+            .sort({ timestamp: 1 }) // Oldest first
+            .select("timestamp payload.stress_level")
+            .lean();
+
+        // Transform to API response format: [{timestamp, stress_level}, ...]
+        const points = rawData
+            .map(doc => {
+                const stressLevel = doc.payload?.stress_level;
+                // Only include if stress_level exists and is not empty
+                if (stressLevel == null || stressLevel === "") {
+                    return null;
+                }
+                return {
+                    timestamp: doc.timestamp, // ISO date string
+                    stress_level: stressLevel // String like "51.05"
+                };
+            })
+            .filter(p => p !== null); // Remove null entries
+
+        console.log(`[Stress Graph API] Device: ${deviceId}, Points: ${points.length}, From: ${from || '24h ago'}, To: ${to || 'now'}`);
+
+        res.json({
+            success: true,
+            points: points
+        });
+    } catch (error) {
+        console.error("Error fetching stress graph data:", error);
+        res.status(500).json({
+            success: false,
+            message: "Server error",
+            error: error.message
+        });
+    }
+});
+
 // ✅ Get health data for a specific device
 // NOTE: This general route must come AFTER specific routes (weekly, monthly, raw, graph) to avoid conflicts
 router.get("/data/health/:deviceId", authMiddleware, async (req, res) => {
     try {
         // Get query parameters for filtering
-        const { start, end, limit } = req.query;
+        const { start, end, limit, fields, order } = req.query;
 
         // Build query
         const query = { deviceId: req.params.deviceId };
@@ -549,11 +982,27 @@ router.get("/data/health/:deviceId", authMiddleware, async (req, res) => {
             };
         }
 
+        const parsedLimit = Number.parseInt(limit, 10);
+        const limitNumber = Number.isFinite(parsedLimit) && parsedLimit > 0
+            ? Math.min(parsedLimit, 10000)
+            : 1000;
+
+        const requestedFields = typeof fields === "string" ? fields.toLowerCase() : "";
+        const isMotionOnly = requestedFields === "motion";
+        const projection = isMotionOnly
+            ? "timestamp motionStart motionEndReason"
+            : "+metrics +signals +raw";
+
+        // Determine sort order: 'asc' for chronological (oldest first), default is 'desc' (newest first)
+        // Motion data needs ASC order for proper pairing
+        const sortOrder = order === "asc" ? 1 : -1;
+
         // Query with optional limit and sorting
         const healthData = await HealthData.find(query)
-            .sort({ timestamp: -1 }) // Newest first
-            .limit(limit ? parseInt(limit) : 1000)
-            .select("+metrics +signals +raw");
+            .sort({ timestamp: sortOrder }) // ASC for motion pairing, DESC for general queries
+            .limit(limitNumber)
+            .select(projection)
+            .lean();
 
         res.json(healthData);
     } catch (error) {
@@ -562,7 +1011,254 @@ router.get("/data/health/:deviceId", authMiddleware, async (req, res) => {
     }
 });
 
-// ✅ Get sleep data for a specific device
+// ✅ Get sleep session for a specific device and date
+router.get("/sleep/session/:deviceId", authMiddleware, async (req, res) => {
+    try {
+        const { deviceId } = req.params;
+        const { date } = req.query; // YYYY-MM-DD format
+
+        // Verify device access
+        const device = await Device.findOne({ deviceId });
+        if (!device) {
+            return res.status(404).json({
+                success: false,
+                message: "Device not found"
+            });
+        }
+
+        // Check user access (owner, account, admin, devices array, OR shared/caretaker)
+        const user = await User.findById(req.user.userId).select("devices accountId sharedDevices");
+        const hasAccess = 
+            (device.userId && device.userId.toString() === req.user.userId) ||
+            (device.accountId && user?.accountId && device.accountId === user.accountId) ||
+            req.user.role === "admin" ||
+            req.user.role === "superadmin" ||
+            (user && user.devices && user.devices.some(d => d.toString() === device._id.toString())) ||
+            (user && user.sharedDevices && user.sharedDevices.some(id => String(id).trim().toUpperCase() === device.deviceId)) ||
+            (Array.isArray(device.sharedWith) && device.sharedWith.some(e => e.userId && String(e.userId) === String(req.user.userId)));
+
+        if (!hasAccess) {
+            return res.status(403).json({
+                success: false,
+                message: "Access denied to this device"
+            });
+        }
+
+        // Use provided date or default to today (IST)
+        // Sleep spans 2 days: for "date D" we want sleep that ends on D (night of D-1 → morning of D).
+        // Query window: (D-1) 12:00 IST (noon) → D 23:59:59.999 IST (end of D) so we include all of 12th and 13th.
+        const { formatISTDate, getISTComponents, createFromISTComponents, parseISTDate, getDayEndIST } = require('../utils/timezoneHelper');
+        // Interpret query date as IST calendar date
+        const targetDate = date ? parseISTDate(date) : new Date();
+
+        // Start: (selectedDate - 1 day) 12:00 PM IST (noon of previous day)
+        const previousDay = new Date(targetDate.getTime() - 24 * 60 * 60 * 1000);
+        const previousDayComponents = getISTComponents(previousDay);
+        const dayStartUTC = createFromISTComponents(
+            previousDayComponents.year,
+            previousDayComponents.month,
+            previousDayComponents.date,
+            12, 0, 0  // 12:00 PM (noon)
+        );
+
+        // End: end of selected date in IST (23:59:59.999) so we get full 13th including sleep that ends after noon
+        const dayEndUTC = getDayEndIST(targetDate, 0);
+
+        const sessionDate = date || formatISTDate(new Date());
+        const resolvedDeviceId = device.deviceId;
+
+        // For "today" (IST), always recalculate so we get fresh data (e.g. after wake-up).
+        // Past dates use cache to avoid redundant work.
+        const todayIST = formatISTDate(new Date());
+        const isToday = sessionDate === todayIST;
+
+        let session = null;
+        if (!isToday) {
+            session = await getSleepSession(resolvedDeviceId, sessionDate);
+        }
+
+        // If no session (past date cache miss) or requested date is today, calculate and store/update
+        if (!session) {
+            const calculatedSession = await calculateSleepSession(resolvedDeviceId, dayStartUTC, dayEndUTC, sessionDate);
+
+            if (calculatedSession) {
+                session = await storeSleepSession(calculatedSession, req.user.userId);
+            }
+        }
+
+        if (!session) {
+            return res.json({
+                success: true,
+                data: null,
+                message: "No valid sleep session found for this date"
+            });
+        }
+
+        res.json({
+            success: true,
+            data: session
+        });
+    } catch (error) {
+        console.error("Error fetching sleep session:", error);
+        res.status(500).json({
+            success: false,
+            message: "Server error",
+            error: error.message
+        });
+    }
+});
+
+// ✅ Get sleep sessions for a date range
+router.get("/sleep/sessions/:deviceId", authMiddleware, async (req, res) => {
+    try {
+        const { deviceId } = req.params;
+        const { start, end } = req.query; // ISO date strings
+
+        // Verify device access
+        const device = await Device.findOne({ deviceId });
+        if (!device) {
+            return res.status(404).json({
+                success: false,
+                message: "Device not found"
+            });
+        }
+
+        // Check user access (owner, account, admin, devices array, OR shared/caretaker)
+        const user = await User.findById(req.user.userId).select("devices accountId sharedDevices");
+        const hasAccess = 
+            (device.userId && device.userId.toString() === req.user.userId) ||
+            (device.accountId && user?.accountId && device.accountId === user.accountId) ||
+            req.user.role === "admin" ||
+            req.user.role === "superadmin" ||
+            (user && user.devices && user.devices.some(d => d.toString() === device._id.toString())) ||
+            (user && user.sharedDevices && user.sharedDevices.some(id => String(id).trim().toUpperCase() === device.deviceId)) ||
+            (Array.isArray(device.sharedWith) && device.sharedWith.some(e => e.userId && String(e.userId) === String(req.user.userId)));
+
+        if (!hasAccess) {
+            return res.status(403).json({
+                success: false,
+                message: "Access denied to this device"
+            });
+        }
+
+        // Default to last 7 days if no range provided
+        const endDate = end ? new Date(end) : new Date();
+        const startDate = start ? new Date(start) : new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+
+        const sessions = await getSleepSessions(deviceId, startDate, endDate);
+
+        res.json({
+            success: true,
+            data: sessions,
+            count: sessions.length
+        });
+    } catch (error) {
+        console.error("Error fetching sleep sessions:", error);
+        res.status(500).json({
+            success: false,
+            message: "Server error",
+            error: error.message
+        });
+    }
+});
+
+// ✅ Calculate and store sleep session for a specific date
+router.post("/sleep/calculate/:deviceId", authMiddleware, async (req, res) => {
+    try {
+        const { deviceId } = req.params;
+        const { date } = req.body; // YYYY-MM-DD format (optional, defaults to today)
+
+        // Verify device access
+        const device = await Device.findOne({ deviceId });
+        if (!device) {
+            return res.status(404).json({
+                success: false,
+                message: "Device not found"
+            });
+        }
+
+        // Check user access (owner, account, admin, devices array, OR shared/caretaker)
+        const user = await User.findById(req.user.userId).select("devices accountId sharedDevices");
+        const hasAccess = 
+            (device.userId && device.userId.toString() === req.user.userId) ||
+            (device.accountId && user?.accountId && device.accountId === user.accountId) ||
+            req.user.role === "admin" ||
+            req.user.role === "superadmin" ||
+            (user && user.devices && user.devices.some(d => d.toString() === device._id.toString())) ||
+            (user && user.sharedDevices && user.sharedDevices.some(id => String(id).trim().toUpperCase() === device.deviceId)) ||
+            (Array.isArray(device.sharedWith) && device.sharedWith.some(e => e.userId && String(e.userId) === String(req.user.userId)));
+
+        if (!hasAccess) {
+            return res.status(403).json({
+                success: false,
+                message: "Access denied to this device"
+            });
+        }
+
+        // Calculate date range for sleep session
+        // Changed to 12 noon to 12 noon: For selected date, query (previous day 12 PM) to (selected date 12 PM)
+        // Example: For date Feb 11, query Feb 10 12:00 PM → Feb 11 12:00 PM (sleep that ends on Feb 11)
+        const { getISTComponents, createFromISTComponents } = require('../utils/timezoneHelper');
+        const targetDate = date ? new Date(date + 'T00:00:00') : new Date();
+        
+        // Get IST components of target date
+        const istComponents = getISTComponents(targetDate);
+        
+        // Start: (selectedDate - 1 day) 12:00 PM IST (noon of previous day)
+        const previousDay = new Date(targetDate.getTime() - 24 * 60 * 60 * 1000);
+        const previousDayComponents = getISTComponents(previousDay);
+        const noonStartUTC = createFromISTComponents(
+            previousDayComponents.year,
+            previousDayComponents.month,
+            previousDayComponents.date,
+            12, 0, 0  // 12:00 PM (noon)
+        );
+        
+        // End: selectedDate 12:00 PM IST (noon of selected date)
+        const noonEndUTC = createFromISTComponents(
+            istComponents.year,
+            istComponents.month,
+            istComponents.date,
+            12, 0, 0  // 12:00 PM (noon)
+        );
+        
+        const dayStartUTC = noonStartUTC;
+        const dayEndUTC = noonEndUTC;
+        
+        // Use provided date or default to today (IST) as sessionDate
+        const { formatISTDate } = require('../utils/timezoneHelper');
+        const sessionDate = date || formatISTDate(new Date());
+
+        // Calculate sleep session
+        // Pass sessionDate (query date) to use as sessionDate - sleep end date, not sleep start date
+        const calculatedSession = await calculateSleepSession(deviceId, dayStartUTC, dayEndUTC, sessionDate);
+
+        if (!calculatedSession) {
+            return res.json({
+                success: false,
+                message: "No valid sleep session found. Sleep must be at least 3 hours with 90% data quality."
+            });
+        }
+
+        // Store the session
+        const session = await storeSleepSession(calculatedSession, req.user.userId);
+
+        res.json({
+            success: true,
+            data: session,
+            message: "Sleep session calculated and stored successfully"
+        });
+    } catch (error) {
+        console.error("Error calculating sleep session:", error);
+        res.status(500).json({
+            success: false,
+            message: "Server error",
+            error: error.message
+        });
+    }
+});
+
+// ✅ Get sleep data for a specific device (legacy route - kept for backward compatibility)
 router.get("/data/sleep/:deviceId", authMiddleware, async (req, res) => {
     try {
         // Get query parameters for filtering
@@ -577,12 +1273,13 @@ router.get("/data/sleep/:deviceId", authMiddleware, async (req, res) => {
             };
         }
 
-        // Query with optional limit and sorting
-        const sleepData = await SleepData.find(query)
-            .sort({ timestamp: -1 }) // Newest first
-            .limit(limit ? parseInt(limit) : 100);
+        // Query sleep sessions instead of SleepData
+        const sleepSessions = await SleepSession.find(query)
+            .sort({ tibStart: -1 }) // Newest first
+            .limit(limit ? parseInt(limit) : 100)
+            .lean();
 
-        res.json(sleepData);
+        res.json(sleepSessions);
     } catch (error) {
         console.error("Error fetching sleep data:", error);
         res.status(500).json({ message: "Server error" });
@@ -1019,9 +1716,12 @@ router.patch("/devices/activate/:deviceId", authMiddleware, async (req, res) => 
 
         console.log("✅ Found device:", device.deviceId, "status:", device.status, "userId:", device.userId);
 
-        // 2) Ensure it belongs to user
-        if (!device.userId || String(device.userId) !== String(userId)) {
-            console.log("⚠️ Device does not belong to this user. device.userId:", device.userId);
+        // 2) Allow owner or caretaker (shared access) to set device as active for viewing
+        const isOwner = device.userId && String(device.userId) === String(userId);
+        const isCaretaker = Array.isArray(device.sharedWith) &&
+            device.sharedWith.some((e) => e.userId && String(e.userId) === String(userId));
+        if (!isOwner && !isCaretaker) {
+            console.log("⚠️ Device not owned or shared with this user.");
             return res.status(403).json({ message: "Device does not belong to this user" });
         }
 
@@ -1102,9 +1802,24 @@ router.post('/user/devices/save', authMiddleware, async (req, res) => {
                 continue;
             }
 
+            // Generate default name if customName is not set
+            let updateData = { userId };
+            if (!device.customName) {
+                // Count existing devices for this user (excluding current device if already assigned)
+                const deviceCount = await Device.countDocuments({ 
+                    userId: new mongoose.Types.ObjectId(userId),
+                    _id: { $ne: device._id } // Exclude current device from count
+                });
+                const nextNumber = deviceCount + 1;
+                updateData.customName = `Dozemate_${nextNumber}`;
+            }
+
             // set userId on device (idempotent)
             if (!device.userId || String(device.userId) !== String(userId)) {
-                await Device.updateOne({ _id: device._id }, { $set: { userId } });
+                await Device.updateOne({ _id: device._id }, { $set: updateData });
+            } else if (!device.customName && updateData.customName) {
+                // Device already assigned to user but no customName - update name only
+                await Device.updateOne({ _id: device._id }, { $set: { customName: updateData.customName } });
             }
 
             // push into user's devices (no duplicates)

@@ -36,6 +36,9 @@ const UserSchema = new mongoose.Schema({
   role: { type: String, enum: ["user", "admin", "superadmin"], default: "user" },
 
   devices: { type: [{ type: mongoose.Schema.Types.ObjectId, ref: "Device" }], default: [] },
+  // Caretaker: deviceIds for owned (synced with devices) and shared (read-only)
+  ownedDevices: { type: [String], default: [] },
+  sharedDevices: { type: [String], default: [] },
   grid: { type: { x: Number, y: Number }, default: undefined },
   displayedDevices: { type: [{ type: mongoose.Schema.Types.ObjectId, ref: "Device" }], default: [] },
   activeDevices: [{ type: mongoose.Schema.Types.ObjectId, ref: "Device" }],
@@ -70,11 +73,26 @@ const UserSchema = new mongoose.Schema({
   weight: {
     type: Number // in kg
   },
+  weightUnit: {
+    type: String,
+    enum: ['kg', 'lbs'],
+    default: 'kg'
+  },
   height: {
-    type: Number // in cm
+    type: Number // in cm (converted from user's preferred unit)
+  },
+  heightUnit: {
+    type: String,
+    enum: ['ft_in', 'cm', 'm'],
+    default: 'ft_in'
   },
   waist: {
-    type: Number // in cm
+    type: Number // in cm (converted from user's preferred unit)
+  },
+  waistUnit: {
+    type: String,
+    enum: ['in', 'cm'],
+    default: 'in'
   },
   createdAt: { type: Date, default: Date.now },
   passwordMustChange: { type: Boolean, default: false },
@@ -82,6 +100,8 @@ const UserSchema = new mongoose.Schema({
   passwordChangedAt: Date,
   passwordResetToken: String,
   passwordResetExpires: Date,
+  passwordResetCode: String, // 6-digit code for mobile reset
+  passwordResetCodeExpires: Date, // Expiration for 6-digit code
   tempPasswordIssuedAt: Date,
   identifier: { type: String, trim: true },              // human name you show
   identifierKey: { type: String, index: true, unique: true, sparse: true }, // normalized

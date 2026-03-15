@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   View,
   Text,
@@ -10,41 +10,52 @@ import {
   Alert,
   RefreshControl,
   TextInput,
-  Modal,
+  Animated,
 } from 'react-native';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useBluetooth } from '@/contexts/BluetoothProvider';
 import { useDevice } from '@/contexts/DeviceContext';
-import { isWebSocketConnected, connectWebSocket, disconnectWebSocket, unsubscribeFromDevice, subscribeToDevice } from '@/services/websocketService';
-import { activateDevice, updateDeviceName } from '@/services/deviceData';
+import { useProvisioning } from '@/contexts/ProvisioningContext';
+import { isWebSocketConnected, disconnectWebSocket, unsubscribeFromDevice } from '@/services/websocketService';
+import { activateDevice, updateDeviceName, deleteDevice, removeSharedDevice, cleanupLocalBleStores } from '@/services/deviceData';
+
+const BLE_TO_BACKEND_DEVICE_ID_KEY = '@slimiot_ble_to_backend_device_id';
+
+/** Normalize BLE id to 12-char hex for MAC comparison (strip colons/dashes, uppercase) */
+function normalizeBleIdToMac(bleId: string): string {
+  if (!bleId) return '';
+  const cleaned = bleId.replace(/[:\-]/g, '').toUpperCase();
+  return cleaned.length >= 12 ? cleaned.slice(-12) : cleaned;
+}
+
+/** Extract 12-char MAC from backend deviceId format "NNNN-XXXXXXXXXXXX" or "XXXXXXXXXXXX" */
+function macFromBackendDeviceId(deviceId: string): string {
+  const s = (deviceId || '').replace(/:/g, '').toUpperCase();
+  const match = s.match(/([0-9A-F]{12})$/);
+  return match ? match[1] : s.slice(-12);
+}
 
 export default function AllDevicesScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { devices, activeDevice, isLoading, refreshDevices, setActiveDevice } = useDevice();
+  const { devices, ownedDevices, sharedDevices, activeDevice, refreshDevices, setActiveDevice } = useDevice();
+  const { connectedDevice, connectionStatus, startScan, stopScan, scannedDevices, connectToDevice } = useBluetooth();
+  const { setSelectedDevice } = useProvisioning();
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [switchingDeviceId, setSwitchingDeviceId] = useState<string | null>(null);
-  const [wsStatus, setWsStatus] = useState<boolean>(false);
+  const [isCheckingWifiDevice, setIsCheckingWifiDevice] = useState(false);
+  const [isConnectingToWifiDevice, setIsConnectingToWifiDevice] = useState(false);
+  const wifiCheckTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [editingDeviceId, setEditingDeviceId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState<string>('');
   const [isSavingName, setIsSavingName] = useState(false);
-
-  // Check WebSocket status for active device
-  useEffect(() => {
-    if (activeDevice?.deviceId) {
-      const checkStatus = () => {
-        const connected = isWebSocketConnected();
-        setWsStatus(connected);
-      };
-      
-      checkStatus();
-      const interval = setInterval(checkStatus, 2000);
-      
-      return () => clearInterval(interval);
-    }
-  }, [activeDevice?.deviceId]);
+  const [isDeletingDevice, setIsDeletingDevice] = useState(false);
+  const [nameError, setNameError] = useState<string>('');
+  const [switchingDeviceId, setSwitchingDeviceId] = useState<string | null>(null);
+  const radioAnimations = useRef<{ [key: string]: Animated.Value }>({});
 
   const handleRefresh = async () => {
     setIsRefreshing(true);
@@ -55,65 +66,175 @@ export default function AllDevicesScreen() {
     }
   };
 
+  // Initialize animation values for devices
+  useEffect(() => {
+    if (devices) {
+      devices.forEach((device) => {
+        if (!radioAnimations.current[device.deviceId]) {
+          const isActive = device.deviceId === activeDevice?.deviceId;
+          radioAnimations.current[device.deviceId] = new Animated.Value(isActive ? 1 : 0);
+        } else {
+          // Update existing animation value if device becomes active/inactive
+          const isActive = device.deviceId === activeDevice?.deviceId;
+          const currentValue = radioAnimations.current[device.deviceId];
+          if (currentValue) {
+            currentValue.setValue(isActive ? 1 : 0);
+          }
+        }
+      });
+    }
+  }, [devices, activeDevice]);
+
+  // Update animations when active device changes (only for passive updates, not during manual switch)
+  useEffect(() => {
+    if (devices && activeDevice && !switchingDeviceId) {
+      devices.forEach((device) => {
+        const animValue = radioAnimations.current[device.deviceId];
+        if (animValue) {
+          const isActive = device.deviceId === activeDevice.deviceId;
+          Animated.timing(animValue, {
+            toValue: isActive ? 1 : 0,
+            duration: 300,
+            useNativeDriver: false,
+          }).start();
+        }
+      });
+    }
+  }, [activeDevice, devices, switchingDeviceId]);
+
   const handleSwitchDevice = async (device: any) => {
     if (device.deviceId === activeDevice?.deviceId) {
       return; // Already active
     }
 
+    setSwitchingDeviceId(device.deviceId);
+
+    try {
+      const oldDeviceId = activeDevice?.deviceId;
+      
+      // Animate radio button selection
+      const oldAnimValue = oldDeviceId ? radioAnimations.current[oldDeviceId] : null;
+      const newAnimValue = radioAnimations.current[device.deviceId];
+      
+      // Start animation immediately for visual feedback
+      if (oldAnimValue) {
+        Animated.timing(oldAnimValue, {
+          toValue: 0,
+          duration: 300,
+          useNativeDriver: false,
+        }).start();
+      }
+      
+      if (newAnimValue) {
+        Animated.timing(newAnimValue, {
+          toValue: 1,
+          duration: 300,
+          useNativeDriver: false,
+        }).start();
+      }
+      
+      console.log(`[AllDevices] Switching from device ${oldDeviceId} to ${device.deviceId}`);
+      
+      // Unsubscribe from old device if WebSocket is connected
+      if (oldDeviceId && isWebSocketConnected()) {
+        console.log(`[AllDevices] Unsubscribing from old device: ${oldDeviceId}`);
+        unsubscribeFromDevice(oldDeviceId);
+      }
+      
+      // Disconnect current WebSocket completely
+      console.log('[AllDevices] Disconnecting WebSocket...');
+      disconnectWebSocket();
+      
+      // Call backend API to activate device
+      console.log(`[AllDevices] Activating device on backend: ${device.deviceId}`);
+      const result = await activateDevice(device.deviceId);
+      
+      if (result.success) {
+        console.log('[AllDevices] Backend activation successful');
+        
+        // Update active device in context
+        await setActiveDevice(device);
+        console.log('[AllDevices] Active device updated in context');
+        
+        // Refresh device list
+        await refreshDevices();
+        console.log('[AllDevices] Device list refreshed');
+        
+        // Note: WebSocket will be reconnected automatically by home screen's useEffect
+        // when activeDevice changes. We don't need to connect here as the home screen
+        // will handle it dynamically.
+        console.log('[AllDevices] WebSocket will reconnect automatically on home screen');
+      } else {
+        console.error('[AllDevices] Failed to switch device:', result.message);
+        // Revert animation on failure
+        if (oldAnimValue) {
+          Animated.timing(oldAnimValue, {
+            toValue: 1,
+            duration: 300,
+            useNativeDriver: false,
+          }).start();
+        }
+        if (newAnimValue) {
+          Animated.timing(newAnimValue, {
+            toValue: 0,
+            duration: 300,
+            useNativeDriver: false,
+          }).start();
+        }
+      }
+    } catch (error: any) {
+      console.error('[AllDevices] Error switching device:', error);
+      // Revert animation on error
+      const oldDeviceId = activeDevice?.deviceId;
+      const oldAnimValue = oldDeviceId ? radioAnimations.current[oldDeviceId] : null;
+      const newAnimValue = radioAnimations.current[device.deviceId];
+      if (oldAnimValue) {
+        Animated.timing(oldAnimValue, {
+          toValue: 1,
+          duration: 300,
+          useNativeDriver: false,
+        }).start();
+      }
+      if (newAnimValue) {
+        Animated.timing(newAnimValue, {
+          toValue: 0,
+          duration: 300,
+          useNativeDriver: false,
+        }).start();
+      }
+    } finally {
+      setSwitchingDeviceId(null);
+    }
+  };
+
+  // Helper function to get display name for device
+  const getDeviceDisplayName = (device: any) => {
+    return device.customName || device.defaultName || device.deviceId;
+  };
+
+  // Handle rename device
+  const handleRenameDevice = (device: any) => {
+    setEditingDeviceId(device.deviceId);
+    setEditingName(device.customName || '');
+    setNameError('');
+  };
+
+  const handleRemoveShared = (deviceId: string) => {
     Alert.alert(
-      'Switch Active Device',
-      `Do you want to make "${device.deviceId}" your active device? The current active device will become inactive.`,
+      'Remove shared device',
+      'Remove this device from your account? You will no longer see its data.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
-          text: 'Switch',
+          text: 'Remove',
+          style: 'destructive',
           onPress: async () => {
             try {
-              setSwitchingDeviceId(device.deviceId);
-              
-              const oldDeviceId = activeDevice?.deviceId;
-              
-              console.log(`[AllDevices] Switching from device ${oldDeviceId} to ${device.deviceId}`);
-              
-              // Unsubscribe from old device if WebSocket is connected
-              if (oldDeviceId && isWebSocketConnected()) {
-                console.log(`[AllDevices] Unsubscribing from old device: ${oldDeviceId}`);
-                unsubscribeFromDevice(oldDeviceId);
-              }
-              
-              // Disconnect current WebSocket completely
-              console.log('[AllDevices] Disconnecting WebSocket...');
-              disconnectWebSocket();
-              
-              // Call backend API to activate device
-              console.log(`[AllDevices] Activating device on backend: ${device.deviceId}`);
-              const result = await activateDevice(device.deviceId);
-              
-              if (result.success) {
-                console.log('[AllDevices] Backend activation successful');
-                
-                // Update active device in context
-                await setActiveDevice(device);
-                console.log('[AllDevices] Active device updated in context');
-                
-                // Refresh device list
-                await refreshDevices();
-                console.log('[AllDevices] Device list refreshed');
-                
-                // Note: WebSocket will be reconnected automatically by home screen's useEffect
-                // when activeDevice changes. We don't need to connect here as the home screen
-                // will handle it dynamically.
-                console.log('[AllDevices] WebSocket will reconnect automatically on home screen');
-                
-                Alert.alert('Success', `Device ${device.deviceId} is now active. WebSocket will reconnect automatically.`);
-              } else {
-                Alert.alert('Error', result.message || 'Failed to switch device');
-              }
-            } catch (error: any) {
-              console.error('[AllDevices] Error switching device:', error);
-              Alert.alert('Error', error.message || 'Failed to switch device');
-            } finally {
-              setSwitchingDeviceId(null);
+              const result = await removeSharedDevice(deviceId);
+              if (result.success) await refreshDevices();
+              else Alert.alert('Error', result.message ?? 'Failed to remove');
+            } catch (e: any) {
+              Alert.alert('Error', e.message ?? 'Something went wrong');
             }
           },
         },
@@ -121,15 +242,49 @@ export default function AllDevicesScreen() {
     );
   };
 
-  // Helper function to get display name for device
-  const getDeviceDisplayName = (device: any) => {
-    return device.customName || device.deviceId;
+  // Validate device name for duplicates
+  const validateDeviceName = (name: string): boolean => {
+    if (!name || !name.trim()) {
+      setNameError('');
+      return true; // Empty name is allowed (uses device ID)
+    }
+
+    const trimmedName = name.trim();
+    
+    // Get current device's existing name
+    const currentDevice = devices?.find(d => d.deviceId === editingDeviceId);
+    const currentDeviceName = currentDevice?.customName?.toLowerCase() || '';
+    
+    // Check if name already exists for another device (excluding current device)
+    const nameExists = devices?.some(device => 
+      device.deviceId !== editingDeviceId && 
+      device.customName && 
+      device.customName.toLowerCase() === trimmedName.toLowerCase()
+    );
+
+    // Allow if it's the same as current device's name
+    if (trimmedName.toLowerCase() === currentDeviceName) {
+      setNameError('');
+      return true;
+    }
+
+    if (nameExists) {
+      setNameError('Already exist please use different name');
+      return false;
+    }
+
+    setNameError('');
+    return true;
   };
 
-  // Handle rename device
-  const handleRenameDevice = (device: any) => {
-    setEditingDeviceId(device.deviceId);
-    setEditingName(device.customName || '');
+  // Handle name input change with validation
+  const handleNameChange = (text: string) => {
+    setEditingName(text);
+    if (text.trim()) {
+      validateDeviceName(text);
+    } else {
+      setNameError('');
+    }
   };
 
   const handleSaveName = async () => {
@@ -143,6 +298,11 @@ export default function AllDevicesScreen() {
       return;
     }
 
+    // Validate for duplicates
+    if (!validateDeviceName(trimmedName)) {
+      return; // Error message already set
+    }
+
     try {
       setIsSavingName(true);
       const result = await updateDeviceName(editingDeviceId, trimmedName || null);
@@ -152,6 +312,7 @@ export default function AllDevicesScreen() {
         await refreshDevices();
         setEditingDeviceId(null);
         setEditingName('');
+        setNameError('');
         Alert.alert('Success', result.message || 'Device name updated');
       } else {
         Alert.alert('Error', result.message || 'Failed to update device name');
@@ -165,8 +326,203 @@ export default function AllDevicesScreen() {
   };
 
   const handleCancelEdit = () => {
+    if (wifiCheckTimeoutRef.current) {
+      clearTimeout(wifiCheckTimeoutRef.current);
+      wifiCheckTimeoutRef.current = null;
+    }
+    if (isCheckingWifiDevice) {
+      stopScan();
+      setIsCheckingWifiDevice(false);
+    }
+    setIsConnectingToWifiDevice(false);
     setEditingDeviceId(null);
     setEditingName('');
+    setNameError('');
+  };
+
+  const showDeviceNotConnectedAlert = () => {
+    const backendDeviceId = editingDeviceId;
+    const deviceName = backendDeviceId ? (devices?.find((d) => d.deviceId === backendDeviceId)?.customName || backendDeviceId) : 'device';
+    Alert.alert(
+      'Dozemate Not Found',
+      `Could not find "${deviceName}" nearby.\n\nPlease ensure:\n• The device is turned on\n• Bluetooth is enabled on your phone\n• The device is within range\n\nThen try again or go to Scan to connect.`,
+      [
+        { text: 'OK', style: 'cancel' },
+        {
+          text: 'Scan for Device',
+          onPress: () => {
+            handleCancelEdit();
+            router.push('/(bluetooth)/ScanScreen');
+          },
+        },
+      ]
+    );
+  };
+
+  // Cleanup wifi check on unmount
+  useEffect(() => {
+    return () => {
+      if (wifiCheckTimeoutRef.current) {
+        clearTimeout(wifiCheckTimeoutRef.current);
+        wifiCheckTimeoutRef.current = null;
+      }
+      if (isCheckingWifiDevice) {
+        stopScan();
+      }
+    };
+  }, []);
+
+  // When scanning for Change WiFi: watch scannedDevices for a matching device
+  useEffect(() => {
+    if (!isCheckingWifiDevice || !editingDeviceId || scannedDevices.length === 0) return;
+
+    const targetBackendId = editingDeviceId.trim().toUpperCase();
+
+    (async () => {
+      try {
+        const raw = await AsyncStorage.getItem(BLE_TO_BACKEND_DEVICE_ID_KEY);
+        const bleIdToBackendDeviceId: Record<string, string> = raw ? JSON.parse(raw) : {};
+
+        const targetDevice = devices?.find((d) => d.deviceId === editingDeviceId);
+        const targetBleMac = (targetDevice?.bleMac ?? '')?.replace(/[:\-]/g, '').toUpperCase().slice(-12);
+        const targetMac = targetBleMac || macFromBackendDeviceId(targetBackendId);
+        const matchingDevice = scannedDevices.find((d) => {
+          const dNorm = normalizeBleIdToMac(d.id);
+          if (!dNorm || dNorm.length !== 12) return false;
+          if (targetBleMac && targetBleMac.length === 12 && dNorm === targetBleMac) return true;
+          const mappedBackendId = (bleIdToBackendDeviceId[d.id] ?? '')?.trim().toUpperCase();
+          if (mappedBackendId === targetBackendId) return true;
+          const mapKeysForTarget = Object.entries(bleIdToBackendDeviceId)
+            .filter(([, v]) => (v ?? '').trim().toUpperCase() === targetBackendId)
+            .map(([k]) => k);
+          if (mapKeysForTarget.some((k) => normalizeBleIdToMac(k) === dNorm)) return true;
+          if (targetMac && targetMac.length === 12 && dNorm === targetMac) return true;
+          return false;
+        });
+
+        if (matchingDevice) {
+          if (wifiCheckTimeoutRef.current) {
+            clearTimeout(wifiCheckTimeoutRef.current);
+            wifiCheckTimeoutRef.current = null;
+          }
+          stopScan();
+          setIsConnectingToWifiDevice(true);
+          try {
+            await connectToDevice(matchingDevice);
+            setSelectedDevice(matchingDevice);
+            handleCancelEdit();
+            router.push('/(bluetooth)/WiFiSetupScreen');
+          } catch (connErr) {
+            console.error('[AllDevices] connectToDevice failed:', connErr);
+            setIsCheckingWifiDevice(false);
+            setIsConnectingToWifiDevice(false);
+            showDeviceNotConnectedAlert();
+          }
+        }
+      } catch (_) {}
+    })();
+  }, [isCheckingWifiDevice, editingDeviceId, scannedDevices, devices]);
+
+  const handleChangeWifi = async () => {
+    const backendDeviceId = editingDeviceId;
+    if (!backendDeviceId) return;
+
+    if (isCheckingWifiDevice) return;
+
+    try {
+      const raw = await AsyncStorage.getItem(BLE_TO_BACKEND_DEVICE_ID_KEY);
+      const bleIdToBackendDeviceId: Record<string, string> = raw ? JSON.parse(raw) : {};
+      const targetBackendId = backendDeviceId.trim().toUpperCase();
+
+      // 1. If already connected and matches, go directly to WiFi setup
+      const isBleConnected = connectionStatus === 'connected' && connectedDevice;
+      const connectedBleId = connectedDevice?.id;
+      const mappedBackendId = connectedBleId
+        ? (bleIdToBackendDeviceId[connectedBleId] ?? '')?.trim().toUpperCase()
+        : '';
+      const targetDevice = devices?.find((d) => d.deviceId === backendDeviceId);
+      const targetBleMac = (targetDevice?.bleMac ?? '')?.replace(/[:\-]/g, '').toUpperCase().slice(-12);
+      const targetMac = targetBleMac || macFromBackendDeviceId(targetBackendId);
+      const connectedBleMac = connectedBleId ? normalizeBleIdToMac(connectedBleId) : '';
+      const isSameDevice =
+        mappedBackendId === targetBackendId ||
+        (targetMac.length === 12 && connectedBleMac.length === 12 && connectedBleMac === targetMac);
+
+      if (isBleConnected && isSameDevice && connectedDevice) {
+        setSelectedDevice(connectedDevice);
+        handleCancelEdit();
+        router.push('/(bluetooth)/WiFiSetupScreen');
+        return;
+      }
+
+      // 2. Otherwise: show loading, scan for device
+      setIsCheckingWifiDevice(true);
+      startScan();
+
+      wifiCheckTimeoutRef.current = setTimeout(() => {
+        wifiCheckTimeoutRef.current = null;
+        stopScan();
+        setIsCheckingWifiDevice(false);
+        showDeviceNotConnectedAlert();
+      }, 8000);
+    } catch (e) {
+      console.error('[AllDevices] handleChangeWifi error:', e);
+      setIsCheckingWifiDevice(false);
+      stopScan();
+      if (wifiCheckTimeoutRef.current) {
+        clearTimeout(wifiCheckTimeoutRef.current);
+        wifiCheckTimeoutRef.current = null;
+      }
+      showDeviceNotConnectedAlert();
+    }
+  };
+
+  const handleDeleteDevice = (deviceId?: string) => {
+    const deviceIdToDelete = deviceId || editingDeviceId;
+    if (!deviceIdToDelete) return;
+
+    Alert.alert(
+      'Remove Device',
+      'Remove this device from your account? You will no longer see it or its data.',
+      [
+        {
+          text: 'No',
+          style: 'cancel',
+          onPress: () => {
+            // Do nothing, just close the confirmation
+          },
+        },
+        {
+          text: 'Yes',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              setIsDeletingDevice(true);
+              const result = await deleteDevice(deviceIdToDelete);
+              
+              if (result.success) {
+                await cleanupLocalBleStores(deviceIdToDelete);
+                if (editingDeviceId === deviceIdToDelete) {
+                  setEditingDeviceId(null);
+                  setEditingName('');
+                }
+                await refreshDevices();
+                if (activeDevice?.deviceId === deviceIdToDelete) {
+                  await setActiveDevice(null);
+                }
+              } else {
+                Alert.alert('Error', result.message || 'Failed to remove device');
+              }
+            } catch (error: any) {
+              console.error('Error removing device:', error);
+              Alert.alert('Error', error.message || 'Failed to remove device');
+            } finally {
+              setIsDeletingDevice(false);
+            }
+          },
+        },
+      ]
+    );
   };
 
   // Separate active device from others
@@ -176,7 +532,7 @@ export default function AllDevicesScreen() {
   );
 
   return (
-    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
+    <View style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor="#02041A" />
       <LinearGradient
         colors={['#1D244D', '#02041A', '#1A1D3E']}
@@ -185,20 +541,28 @@ export default function AllDevicesScreen() {
 
       {/* Header */}
       <View style={[styles.header, { paddingTop: insets.top + 6 }]}>
-        <TouchableOpacity
-          onPress={() => router.back()}
-          style={styles.headerIconContainer}
-        >
-          <Ionicons name="arrow-back" size={24} color="#FFF" />
-        </TouchableOpacity>
         <Text style={styles.headerTitle}>All Devices</Text>
-        <View style={styles.headerIconContainer} />
+        <View style={styles.headerActions}>
+          <TouchableOpacity
+            onPress={() => router.push('/(bluetooth)/ScanScreen')}
+            style={styles.headerAddButton}
+          >
+            <Ionicons name="add-circle-outline" size={18} color="#C7B9FF" />
+            <Text style={styles.headerAddButtonText}>Add Device</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={() => router.back()}
+            style={styles.headerIconBtn}
+          >
+            <Text style={styles.headerIconText}>Close</Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
       <ScrollView
         contentContainerStyle={[
           styles.content,
-          { paddingBottom: insets.bottom + 20 },
+          { paddingBottom: 100 },
         ]}
         showsVerticalScrollIndicator={false}
         refreshControl={
@@ -209,12 +573,7 @@ export default function AllDevicesScreen() {
           />
         }
       >
-        {isLoading ? (
-          <View style={styles.loadingContainer}>
-            <ActivityIndicator size="large" color="#4A90E2" />
-            <Text style={styles.loadingText}>Loading devices...</Text>
-          </View>
-        ) : devices.length === 0 ? (
+        {!devices || devices.length === 0 ? (
           <View style={styles.emptyContainer}>
             <Ionicons name="phone-portrait-outline" size={64} color="rgba(255,255,255,0.3)" />
             <Text style={styles.emptyTitle}>No Devices Found</Text>
@@ -229,7 +588,7 @@ export default function AllDevicesScreen() {
             </TouchableOpacity>
           </View>
         ) : (
-          <>
+          <View>
             {/* Active Device Section */}
             {activeDevice && (
               <View style={styles.section}>
@@ -240,41 +599,72 @@ export default function AllDevicesScreen() {
                       <View style={styles.deviceIdRow}>
                         <Ionicons name="phone-portrait" size={20} color="#4CAF50" />
                         <View style={styles.deviceNameContainer}>
-                          <Text style={styles.deviceName}>{getDeviceDisplayName(activeDevice)}</Text>
-                          {activeDevice.customName && (
-                            <Text style={styles.deviceIdSubtext}>{activeDevice.deviceId}</Text>
+                          <View style={styles.deviceNameRow}>
+                            <Text style={styles.deviceName}>{getDeviceDisplayName(activeDevice)}</Text>
+                            {(activeDevice as any).isShared && (
+                              <View style={styles.sharedBadge}>
+                                <Text style={styles.sharedBadgeText}>Shared</Text>
+                              </View>
+                            )}
+                            {!(activeDevice as any).isShared && (
+                              <TouchableOpacity
+                                onPress={() => handleRenameDevice(activeDevice)}
+                                style={styles.editButtonInline}
+                                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                              >
+                                <Text style={styles.editButtonText}>Edit</Text>
+                              </TouchableOpacity>
+                            )}
+                          </View>
+                          <Text style={styles.deviceIdSubtext}>
+                            {activeDevice.customName ? activeDevice.deviceId : activeDevice.deviceId}
+                          </Text>
+                        </View>
+                        <View style={styles.badgeAndDeleteContainer}>
+                          {(activeDevice as any).isShared ? (
+                            <TouchableOpacity
+                              onPress={() => handleRemoveShared(activeDevice.deviceId)}
+                              style={styles.deleteIconButton}
+                              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                            >
+                              <Text style={styles.removeSharedText}>Remove</Text>
+                            </TouchableOpacity>
+                          ) : (
+                            <TouchableOpacity
+                              onPress={() => handleDeleteDevice(activeDevice.deviceId)}
+                              style={styles.deleteIconButton}
+                              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                            >
+                              <Ionicons name="trash-outline" size={18} color="#FF3B30" />
+                            </TouchableOpacity>
                           )}
                         </View>
-                        <View style={[styles.activeBadge, { backgroundColor: '#4CAF50' }]}>
-                          <Text style={styles.activeBadgeText}>ACTIVE</Text>
-                        </View>
-                      </View>
-                      <View style={styles.statusRow}>
-                        <View style={[styles.statusDot, wsStatus ? styles.statusConnected : styles.statusDisconnected]} />
-                        <Text style={styles.statusText}>
-                          {wsStatus ? '🟢 WebSocket Connected' : '🟡 WebSocket Disconnected'}
-                        </Text>
                       </View>
                     </View>
-                    <TouchableOpacity
-                      onPress={() => handleRenameDevice(activeDevice)}
-                      style={styles.editButton}
-                    >
-                      <Ionicons name="pencil" size={18} color="#4CAF50" />
-                    </TouchableOpacity>
+                    <View style={styles.deviceActions}>
+                      <View style={styles.radioButtonContainer}>
+                        {(() => {
+                          if (!radioAnimations.current[activeDevice.deviceId]) {
+                            radioAnimations.current[activeDevice.deviceId] = new Animated.Value(1);
+                          }
+                          const animValue = radioAnimations.current[activeDevice.deviceId];
+                          const borderColor = animValue.interpolate({
+                            inputRange: [0, 1],
+                            outputRange: ['rgba(255,255,255,0.5)', '#4CAF50'],
+                          });
+                          const scale = animValue.interpolate({
+                            inputRange: [0, 1],
+                            outputRange: [0, 1],
+                          });
+                          return (
+                            <Animated.View style={[styles.radioButton, { borderColor }]}>
+                              <Animated.View style={[styles.radioButtonInner, { transform: [{ scale }] }]} />
+                            </Animated.View>
+                          );
+                        })()}
+                      </View>
+                    </View>
                   </View>
-                  {activeDevice.status && (
-                    <View style={styles.deviceDetails}>
-                      <Text style={styles.detailText}>
-                        Status: <Text style={styles.detailValue}>{activeDevice.status}</Text>
-                      </Text>
-                      {activeDevice.deviceType && (
-                        <Text style={styles.detailText}>
-                          Type: <Text style={styles.detailValue}>{activeDevice.deviceType}</Text>
-                        </Text>
-                      )}
-                    </View>
-                  )}
                 </View>
               </View>
             )}
@@ -285,134 +675,194 @@ export default function AllDevicesScreen() {
                 <Text style={styles.sectionTitle}>
                   Other Devices ({otherDevices.length})
                 </Text>
-                {otherDevices.map((device, index) => (
-                  <View
-                    key={device.deviceId}
-                    style={[
-                      styles.deviceCard,
-                      index === otherDevices.length - 1 && styles.lastDeviceCard,
-                    ]}
-                  >
-                    <View style={styles.deviceHeader}>
-                      <View style={styles.deviceInfo}>
-                        <View style={styles.deviceIdRow}>
-                          <Ionicons name="phone-portrait-outline" size={20} color="rgba(255,255,255,0.6)" />
-                          <View style={styles.deviceNameContainer}>
-                            <Text style={styles.deviceId}>{getDeviceDisplayName(device)}</Text>
-                            {device.customName && (
-                              <Text style={styles.deviceIdSubtext}>{device.deviceId}</Text>
-                            )}
-                          </View>
-                          {device.status === 'inactive' && (
-                            <View style={[styles.activeBadge, { backgroundColor: 'rgba(255,255,255,0.2)' }]}>
-                              <Text style={[styles.activeBadgeText, { color: 'rgba(255,255,255,0.6)' }]}>INACTIVE</Text>
+                {otherDevices.map((device, index) => {
+                  const isShared = !!(device as any).isShared;
+                  return (
+                    <View
+                      key={device.deviceId}
+                      style={[
+                        styles.deviceCard,
+                        index === otherDevices.length - 1 && styles.lastDeviceCard,
+                      ]}
+                    >
+                      <View style={styles.deviceHeader}>
+                        <View style={styles.deviceInfo}>
+                          <View style={styles.deviceIdRow}>
+                            <Ionicons name="phone-portrait-outline" size={20} color="rgba(255,255,255,0.6)" />
+                            <View style={styles.deviceNameContainer}>
+                              <View style={styles.deviceNameRow}>
+                                <Text style={styles.deviceId}>{getDeviceDisplayName(device)}</Text>
+                                {isShared && (
+                                  <View style={styles.sharedBadge}>
+                                    <Text style={styles.sharedBadgeText}>Shared</Text>
+                                  </View>
+                                )}
+                                {!isShared && (
+                                  <TouchableOpacity
+                                    onPress={() => handleRenameDevice(device)}
+                                    style={styles.editButtonInline}
+                                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                                  >
+                                    <Text style={styles.editButtonTextInactive}>Edit</Text>
+                                  </TouchableOpacity>
+                                )}
+                              </View>
+                              <Text style={styles.deviceIdSubtext}>
+                                {device.customName ? device.deviceId : device.deviceId}
+                              </Text>
                             </View>
-                          )}
+                            <View style={styles.badgeAndDeleteContainer}>
+                              {isShared ? (
+                                <TouchableOpacity
+                                  onPress={() => handleRemoveShared(device.deviceId)}
+                                  style={styles.deleteIconButton}
+                                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                                >
+                                  <Text style={styles.removeSharedText}>Remove</Text>
+                                </TouchableOpacity>
+                              ) : (
+                                <TouchableOpacity
+                                  onPress={() => handleDeleteDevice(device.deviceId)}
+                                  style={styles.deleteIconButton}
+                                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                                >
+                                  <Ionicons name="trash-outline" size={18} color="#FF3B30" />
+                                </TouchableOpacity>
+                              )}
+                            </View>
+                          </View>
                         </View>
-                        <View style={styles.statusRow}>
-                          <Text style={styles.inactiveStatusText}>
-                            Tap to make active
-                          </Text>
+                        <View style={styles.deviceActions}>
+                          <TouchableOpacity
+                            onPress={() => handleSwitchDevice(device)}
+                            style={styles.radioButtonContainer}
+                            activeOpacity={0.7}
+                            disabled={switchingDeviceId !== null}
+                          >
+                            {(() => {
+                              if (!radioAnimations.current[device.deviceId]) {
+                                radioAnimations.current[device.deviceId] = new Animated.Value(0);
+                              }
+                              const animValue = radioAnimations.current[device.deviceId];
+                              const borderColor = animValue.interpolate({
+                                inputRange: [0, 1],
+                                outputRange: ['rgba(255,255,255,0.5)', '#4CAF50'],
+                              });
+                              const scale = animValue.interpolate({
+                                inputRange: [0, 1],
+                                outputRange: [0, 1],
+                              });
+                              const isSwitching = switchingDeviceId === device.deviceId;
+                              return (
+                                <Animated.View style={[styles.radioButton, { borderColor, opacity: isSwitching ? 0.6 : 1 }]}>
+                                  <Animated.View style={[styles.radioButtonInner, { transform: [{ scale }] }]} />
+                                  {isSwitching && (
+                                    <View style={styles.radioButtonLoading}>
+                                      <ActivityIndicator size="small" color="#4CAF50" />
+                                    </View>
+                                  )}
+                                </Animated.View>
+                              );
+                            })()}
+                          </TouchableOpacity>
                         </View>
-                      </View>
-                      <View style={styles.deviceActions}>
-                        <TouchableOpacity
-                          onPress={() => handleRenameDevice(device)}
-                          style={styles.editButton}
-                          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                        >
-                          <Ionicons name="pencil" size={18} color="rgba(255,255,255,0.6)" />
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                          onPress={() => handleSwitchDevice(device)}
-                          disabled={switchingDeviceId === device.deviceId}
-                          style={styles.switchButton}
-                        >
-                          {switchingDeviceId === device.deviceId ? (
-                            <ActivityIndicator size="small" color="#4A90E2" />
-                          ) : (
-                            <Ionicons name="chevron-forward" size={20} color="rgba(255,255,255,0.5)" />
-                          )}
-                        </TouchableOpacity>
                       </View>
                     </View>
-                    {device.status && (
-                      <View style={styles.deviceDetails}>
-                        <Text style={styles.detailText}>
-                          Status: <Text style={styles.detailValue}>{device.status}</Text>
-                        </Text>
-                        {device.deviceType && (
-                          <Text style={styles.detailText}>
-                            Type: <Text style={styles.detailValue}>{device.deviceType}</Text>
-                          </Text>
-                        )}
-                      </View>
-                    )}
-                  </View>
-                ))}
+                  );
+                })}
               </View>
             )}
-          </>
+          </View>
         )}
       </ScrollView>
 
-      {/* Rename Device Modal */}
-      <Modal
-        visible={editingDeviceId !== null}
-        animationType="slide"
-        transparent
-        onRequestClose={handleCancelEdit}
-      >
-        <View style={styles.modalBackdrop}>
-          <View style={styles.modalContent}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Rename Device</Text>
+      {/* Rename Device Popup */}
+      {editingDeviceId !== null && (
+        <View style={styles.popupBackdrop}>
+          <TouchableOpacity
+            style={styles.popupBackdropTouch}
+            activeOpacity={1}
+            onPress={handleCancelEdit}
+          />
+          <View style={styles.popupContentWrapper}>
+            <View style={styles.popupContent}>
+            <View style={styles.popupHeader}>
+              <Text style={styles.popupTitle}>Rename Device</Text>
               <TouchableOpacity onPress={handleCancelEdit}>
                 <Ionicons name="close" size={24} color="#FFF" />
               </TouchableOpacity>
             </View>
 
-            <Text style={styles.modalSubtitle}>
+            <Text style={styles.popupSubtitle}>
               Enter a custom name for this device (optional)
             </Text>
-            <Text style={styles.modalHint}>
+            <Text style={styles.popupHint}>
               Leave empty to use device ID as name
             </Text>
 
             <TextInput
-              style={styles.nameInput}
+              style={[
+                styles.nameInput,
+                nameError && styles.nameInputError
+              ]}
               placeholder="e.g., Bedroom Device, Living Room"
               placeholderTextColor="rgba(255,255,255,0.5)"
               value={editingName}
-              onChangeText={setEditingName}
+              onChangeText={handleNameChange}
               maxLength={50}
               autoFocus
             />
+            {nameError ? (
+              <Text style={styles.nameErrorText}>{nameError}</Text>
+            ) : null}
 
-            <View style={styles.modalButtons}>
+            <View style={styles.popupButtons}>
               <TouchableOpacity
-                style={[styles.modalButton, styles.modalButtonCancel]}
+                style={[styles.popupButton, styles.popupButtonCancel]}
                 onPress={handleCancelEdit}
-                disabled={isSavingName}
+                disabled={isSavingName || isDeletingDevice}
               >
-                <Text style={styles.modalButtonTextCancel}>Cancel</Text>
+                <Text style={styles.popupButtonTextCancel}>Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={[styles.modalButton, styles.modalButtonSave, isSavingName && styles.modalButtonDisabled]}
+                style={[styles.popupButton, styles.popupButtonSave, (isSavingName || nameError) && styles.popupButtonDisabled]}
                 onPress={handleSaveName}
-                disabled={isSavingName}
+                disabled={isSavingName || isDeletingDevice || !!nameError}
               >
                 {isSavingName ? (
                   <ActivityIndicator size="small" color="#1D244D" />
                 ) : (
-                  <Text style={styles.modalButtonTextSave}>Save</Text>
+                  <Text style={styles.popupButtonTextSave}>Save</Text>
                 )}
               </TouchableOpacity>
             </View>
+            <TouchableOpacity
+              style={styles.popupButtonWifi}
+              onPress={handleChangeWifi}
+              disabled={isSavingName || isDeletingDevice || isCheckingWifiDevice || isConnectingToWifiDevice}
+            >
+              {isConnectingToWifiDevice ? (
+                <>
+                  <ActivityIndicator size="small" color="#C7B9FF" />
+                  <Text style={styles.popupButtonWifiText}>Connecting to device...</Text>
+                </>
+              ) : isCheckingWifiDevice ? (
+                <>
+                  <ActivityIndicator size="small" color="#C7B9FF" />
+                  <Text style={styles.popupButtonWifiText}>Checking if Dozemate is live...</Text>
+                </>
+              ) : (
+                <>
+                  <Ionicons name="wifi-outline" size={18} color="#C7B9FF" />
+                  <Text style={styles.popupButtonWifiText}>Change WiFi Network</Text>
+                </>
+              )}
+            </TouchableOpacity>
+          </View>
           </View>
         </View>
-      </Modal>
-    </SafeAreaView>
+      )}
+    </View>
   );
 }
 
@@ -433,9 +883,35 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingBottom: 10,
   },
-  headerIconContainer: {
-    width: 32,
+  headerActions: {
+    flexDirection: 'row',
     alignItems: 'center',
+    gap: 8,
+  },
+  headerAddButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 12,
+    backgroundColor: 'rgba(255,255,255,0.10)',
+    gap: 6,
+  },
+  headerAddButtonText: {
+    color: '#C7B9FF',
+    fontWeight: '800',
+    fontSize: 14,
+  },
+  headerIconBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 12,
+    backgroundColor: 'rgba(255,255,255,0.10)',
+  },
+  headerIconText: {
+    color: '#C7B9FF',
+    fontWeight: '800',
+    fontSize: 14,
   },
   headerTitle: {
     color: '#FFF',
@@ -527,11 +1003,20 @@ const styles = StyleSheet.create({
   deviceIdRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 8,
     gap: 8,
+    flexWrap: 'wrap',
   },
   deviceNameContainer: {
     flex: 1,
+    minWidth: 0,
+    justifyContent: 'center',
+  },
+  deviceNameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    flexShrink: 1,
+    maxWidth: '100%',
   },
   deviceName: {
     color: '#FFF',
@@ -542,13 +1027,20 @@ const styles = StyleSheet.create({
     color: '#FFF',
     fontSize: 16,
     fontWeight: '600',
-    flex: 1,
   },
   deviceIdSubtext: {
     color: 'rgba(255,255,255,0.5)',
     fontSize: 12,
     marginTop: 2,
   },
+  sharedBadge: {
+    backgroundColor: 'rgba(199, 185, 255, 0.25)',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  sharedBadgeText: { color: '#C7B9FF', fontSize: 10, fontWeight: '700' },
+  removeSharedText: { color: '#FF9F43', fontSize: 12, fontWeight: '600' },
   deviceActions: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -557,8 +1049,62 @@ const styles = StyleSheet.create({
   editButton: {
     padding: 4,
   },
+  editButtonInline: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    marginLeft: 8,
+    borderRadius: 8,
+    backgroundColor: 'rgba(255,255,255,0.1)',
+  },
+  editButtonText: {
+    color: '#4CAF50',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  editButtonTextInactive: {
+    color: 'rgba(255,255,255,0.6)',
+    fontSize: 12,
+    fontWeight: '600',
+  },
   switchButton: {
     padding: 4,
+  },
+  radioButtonContainer: {
+    padding: 4,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  radioButton: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: 'rgba(255,255,255,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    position: 'relative',
+  },
+  radioButtonSelected: {
+    borderColor: '#4CAF50',
+  },
+  radioButtonInner: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: '#4CAF50',
+  },
+  radioButtonLoading: {
+    position: 'absolute',
+    width: 24,
+    height: 24,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  badgeAndDeleteContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    alignSelf: 'center',
   },
   activeBadge: {
     paddingHorizontal: 8,
@@ -570,6 +1116,9 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '700',
     letterSpacing: 0.5,
+  },
+  deleteIconButton: {
+    padding: 4,
   },
   statusRow: {
     flexDirection: 'row',
@@ -611,39 +1160,62 @@ const styles = StyleSheet.create({
     color: 'rgba(255,255,255,0.9)',
     fontWeight: '600',
   },
-  // Modal styles
-  modalBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.7)',
-    justifyContent: 'flex-end',
+  // Popup styles
+  popupBackdrop: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 1000,
   },
-  modalContent: {
+  popupBackdropTouch: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+  },
+  popupContentWrapper: {
+    width: '85%',
+    maxWidth: 400,
+    zIndex: 1001,
+  },
+  popupContent: {
     backgroundColor: '#1D244D',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    padding: 20,
-    paddingBottom: 40,
+    borderRadius: 20,
+    padding: 24,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
   },
-  modalHeader: {
+  popupHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 16,
+    marginBottom: 20,
   },
-  modalTitle: {
+  popupTitle: {
     color: '#FFFFFF',
     fontSize: 20,
     fontWeight: '700',
   },
-  modalSubtitle: {
+  popupSubtitle: {
     color: 'rgba(255,255,255,0.8)',
     fontSize: 14,
-    marginBottom: 4,
+    marginBottom: 8,
   },
-  modalHint: {
+  popupHint: {
     color: 'rgba(255,255,255,0.5)',
     fontSize: 12,
-    marginBottom: 16,
+    marginBottom: 20,
     fontStyle: 'italic',
   },
   nameInput: {
@@ -652,37 +1224,65 @@ const styles = StyleSheet.create({
     padding: 16,
     color: '#FFFFFF',
     fontSize: 16,
-    marginBottom: 20,
+    marginBottom: 8,
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.2)',
   },
-  modalButtons: {
+  nameInputError: {
+    borderColor: '#FF3B30',
+    borderWidth: 2,
+  },
+  nameErrorText: {
+    color: '#FF3B30',
+    fontSize: 12,
+    marginBottom: 24,
+    marginTop: 4,
+  },
+  popupButtons: {
     flexDirection: 'row',
     gap: 12,
+    marginTop: 8,
   },
-  modalButton: {
+  popupButton: {
     flex: 1,
     paddingVertical: 14,
     borderRadius: 12,
     alignItems: 'center',
   },
-  modalButtonCancel: {
+  popupButtonCancel: {
     backgroundColor: 'rgba(255,255,255,0.1)',
   },
-  modalButtonSave: {
+  popupButtonSave: {
     backgroundColor: '#FFFFFF',
   },
-  modalButtonDisabled: {
+  popupButtonDisabled: {
     opacity: 0.5,
   },
-  modalButtonTextCancel: {
+  popupButtonTextCancel: {
     color: '#FFFFFF',
     fontSize: 16,
     fontWeight: '600',
   },
-  modalButtonTextSave: {
+  popupButtonTextSave: {
     color: '#1D244D',
     fontSize: 16,
+    fontWeight: '600',
+  },
+  popupButtonWifi: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    marginTop: 12,
+    paddingVertical: 14,
+    borderRadius: 12,
+    backgroundColor: 'rgba(199, 185, 255, 0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(199, 185, 255, 0.3)',
+  },
+  popupButtonWifiText: {
+    color: '#C7B9FF',
+    fontSize: 15,
     fontWeight: '600',
   },
 });

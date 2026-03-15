@@ -225,9 +225,16 @@ exports.getDeviceHistory = async (req, res) => {
       return res.status(400).json({ status: "fail", message: "deviceId is required" });
     }
 
-    // ✅ Verify device ownership before allowing access to history
-    const device = await Device.findOne({ deviceId, userId: req.user.userId });
+    // ✅ Verify device access (owner OR caretaker/shared)
+    const device = await Device.findOne({ deviceId });
     if (!device) {
+      return res.status(404).json({ status: "fail", message: "Device not found" });
+    }
+    const _uid = String(req.user.userId);
+    const isOwner = device.userId && String(device.userId) === _uid;
+    const isCaretaker = Array.isArray(device.sharedWith) &&
+      device.sharedWith.some(e => e.userId && String(e.userId) === _uid);
+    if (!isOwner && !isCaretaker) {
       return res.status(403).json({ 
         status: "fail", 
         message: "Access denied to this device" 
@@ -346,9 +353,16 @@ exports.getRespirationLive = async (req, res) => {
       return res.status(400).json({ status: "fail", message: "deviceId is required" });
     }
 
-    // ✅ Verify device ownership before allowing access to respiration data
-    const device = await Device.findOne({ deviceId, userId: req.user.userId });
+    // ✅ Verify device access (owner OR caretaker/shared)
+    const device = await Device.findOne({ deviceId });
     if (!device) {
+      return res.status(404).json({ status: "fail", message: "Device not found" });
+    }
+    const _uid = String(req.user.userId);
+    const isOwner = device.userId && String(device.userId) === _uid;
+    const isCaretaker = Array.isArray(device.sharedWith) &&
+      device.sharedWith.some(e => e.userId && String(e.userId) === _uid);
+    if (!isOwner && !isCaretaker) {
       return res.status(403).json({ 
         status: "fail", 
         message: "Access denied to this device" 
@@ -445,9 +459,16 @@ exports.getStressAggregates = async (req, res) => {
       return res.status(400).json({ status: "fail", message: "deviceId is required" });
     }
 
-    // ✅ Verify device ownership before allowing access to stress data
-    const device = await Device.findOne({ deviceId, userId: req.user.userId });
+    // ✅ Verify device access (owner OR caretaker/shared)
+    const device = await Device.findOne({ deviceId });
     if (!device) {
+      return res.status(404).json({ status: "fail", message: "Device not found" });
+    }
+    const _uid = String(req.user.userId);
+    const isOwner = device.userId && String(device.userId) === _uid;
+    const isCaretaker = Array.isArray(device.sharedWith) &&
+      device.sharedWith.some(e => e.userId && String(e.userId) === _uid);
+    if (!isOwner && !isCaretaker) {
       return res.status(403).json({ 
         status: "fail", 
         message: "Access denied to this device" 

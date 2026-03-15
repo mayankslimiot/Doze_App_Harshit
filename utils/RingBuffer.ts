@@ -4,7 +4,7 @@
  */
 export interface DataPoint {
   timestamp: number; // Unix timestamp in milliseconds
-  value: number; // Data value (e.g., heart rate BPM)
+  value: number | null; // Data value (e.g., heart rate BPM), null indicates gap (HV=0 or AS=0)
 }
 
 const MAX_POINTS = 15000;

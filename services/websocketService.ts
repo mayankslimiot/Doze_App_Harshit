@@ -11,6 +11,7 @@ const getWebSocketUrl = (): string => {
 let socket: Socket | null = null;
 let currentDeviceId: string | null = null;
 let messageHandlers: Set<WebSocketMessageHandler> = new Set();
+let deviceUpdateHandlers: Set<DeviceUpdateHandler> = new Set();
 let isConnecting = false;
 
 export type WebSocketMessageHandler = (data: {
@@ -35,6 +36,15 @@ export type WebSocketMessageHandler = (data: {
   metrics?: any;
   signals?: any;
   [key: string]: any;
+}) => void;
+
+export type DeviceUpdateHandler = (data: {
+  deviceId: string;
+  bedStatus: 'Vacant' | 'Occupied' | 'Waiting';
+  absenceStart?: number;
+  HV?: number;
+  isLive: boolean;
+  source?: 'packet' | 'timeout';
 }) => void;
 
 /**
@@ -181,6 +191,27 @@ export const connectWebSocket = async (
       }
     });
 
+    // ✅ Listen for device_update events (bedStatus, absenceStart, HV, isLive)
+    socket.on('device_update', (data: any) => {
+      console.log('[WebSocket] 📨 device_update received!', {
+        deviceId: data.deviceId,
+        bedStatus: data.bedStatus,
+        isLive: data.isLive,
+        source: data.source
+      });
+
+      // Call all registered device update handlers
+      if (deviceUpdateHandlers.size > 0) {
+        deviceUpdateHandlers.forEach((handler) => {
+          try {
+            handler(data);
+          } catch (error) {
+            console.error('[WebSocket] ❌ Error in device update handler:', error);
+          }
+        });
+      }
+    });
+
     socket.on('error', (error: any) => {
       console.error('[WebSocket] Error:', error);
       isConnecting = false;
@@ -219,13 +250,61 @@ export const connectWebSocket = async (
 };
 
 /**
- * Disconnect from WebSocket server
+ * Disconnect socket only; keep handlers and currentDeviceId.
+ * Used when reconnecting on app resume so existing handlers still receive data.
  */
+function disconnectSocketOnly(): void {
+  if (socket) {
+    socket.removeAllListeners();
+    socket.disconnect();
+    socket = null;
+  }
+  isConnecting = false;
+}
+
+/**
+ * Reconnect WebSocket if disconnected (e.g. after app resume).
+ * Safe to call from app resume: no-op if already connected to same device.
+ * resumeHandler: optional handler that pushes to buffers so graphs get data even if Home isn't mounted.
+ */
+export const reconnectIfDisconnected = async (
+  deviceId: string,
+  resumeHandler?: WebSocketMessageHandler
+): Promise<Socket | null> => {
+  const id = deviceId?.trim();
+  if (!id) return null;
+
+  if (socket && socket.connected && currentDeviceId === id) {
+    return socket;
+  }
+  if (isConnecting) {
+    return null;
+  }
+  if (socket) {
+    disconnectSocketOnly();
+  }
+  return connectWebSocket(id, resumeHandler);
+};
+
 /**
  * Remove a specific message handler
  */
 export const removeWebSocketHandler = (handler: WebSocketMessageHandler) => {
   messageHandlers.delete(handler);
+};
+
+/**
+ * Add a device update handler
+ */
+export const addDeviceUpdateHandler = (handler: DeviceUpdateHandler) => {
+  deviceUpdateHandlers.add(handler);
+};
+
+/**
+ * Remove a device update handler
+ */
+export const removeDeviceUpdateHandler = (handler: DeviceUpdateHandler) => {
+  deviceUpdateHandlers.delete(handler);
 };
 
 /**
@@ -237,6 +316,7 @@ export const disconnectWebSocket = () => {
     socket = null;
     currentDeviceId = null;
     messageHandlers.clear();
+    deviceUpdateHandlers.clear();
     isConnecting = false;
   }
 };

@@ -1,0 +1,237 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Notifications from 'expo-notifications';
+import { Platform } from 'react-native';
+
+export interface HumidityNotificationSettings {
+  enabled: boolean;
+  highThreshold: number; // Humidity percentage (0-100) - alert when exceeded
+  lowThreshold: number; // Humidity percentage (0-100) - alert when below
+  cooldownMinutes: number; // Minutes to wait between notifications
+}
+
+const SETTINGS_KEY = 'humidity_notification_settings';
+const NOTIFICATION_STATE_KEY = 'humidity_notification_state';
+
+// Default settings
+const DEFAULT_SETTINGS: HumidityNotificationSettings = {
+  enabled: false,
+  highThreshold: 70,
+  lowThreshold: 30,
+  cooldownMinutes: 10,
+};
+
+// Track notification state to avoid duplicate notifications
+interface NotificationState {
+  lastHighNotification?: number; // Timestamp of last high threshold notification
+  lastLowNotification?: number; // Timestamp of last low threshold notification
+  wasAboveHigh?: boolean; // Was last reading above high threshold?
+  wasBelowLow?: boolean; // Was last reading below low threshold?
+}
+
+/**
+ * Get humidity notification settings from storage
+ */
+export async function getHumidityNotificationSettings(): Promise<HumidityNotificationSettings> {
+  try {
+    const stored = await AsyncStorage.getItem(SETTINGS_KEY);
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      return { ...DEFAULT_SETTINGS, ...parsed };
+    }
+    return DEFAULT_SETTINGS;
+  } catch (error) {
+    console.error('[HumidityNotifications] Error loading settings:', error);
+    return DEFAULT_SETTINGS;
+  }
+}
+
+/**
+ * Save humidity notification settings to storage
+ */
+export async function saveHumidityNotificationSettings(
+  settings: HumidityNotificationSettings
+): Promise<void> {
+  try {
+    await AsyncStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+  } catch (error) {
+    console.error('[HumidityNotifications] Error saving settings:', error);
+    throw error;
+  }
+}
+
+/**
+ * Get notification state from storage
+ */
+async function getNotificationState(): Promise<NotificationState> {
+  try {
+    const stored = await AsyncStorage.getItem(NOTIFICATION_STATE_KEY);
+    if (stored) {
+      return JSON.parse(stored);
+    }
+    return {};
+  } catch (error) {
+    console.error('[HumidityNotifications] Error loading notification state:', error);
+    return {};
+  }
+}
+
+/**
+ * Save notification state to storage
+ */
+async function saveNotificationState(state: NotificationState): Promise<void> {
+  try {
+    await AsyncStorage.setItem(NOTIFICATION_STATE_KEY, JSON.stringify(state));
+  } catch (error) {
+    console.error('[HumidityNotifications] Error saving notification state:', error);
+  }
+}
+
+/**
+ * Ensure Android notification channel is set up
+ */
+async function ensureAndroidChannel(): Promise<void> {
+  if (Platform.OS !== 'android') return;
+  await Notifications.setNotificationChannelAsync('humidity_alerts', {
+    name: 'Humidity Alerts',
+    importance: Notifications.AndroidImportance.HIGH,
+    sound: 'default',
+    vibrationPattern: [200, 100, 200, 100, 200],
+    lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+    description: 'Alerts when humidity exceeds or falls below thresholds',
+  });
+}
+
+/**
+ * Send a humidity notification
+ */
+async function sendHumidityNotification(
+  title: string,
+  body: string,
+  type: 'high' | 'low'
+): Promise<void> {
+  try {
+    await ensureAndroidChannel();
+    await Notifications.scheduleNotificationAsync({
+      content: {
+        title,
+        body,
+        sound: 'default',
+        data: { type: 'humidity_alert', alertType: type },
+        priority: Notifications.AndroidNotificationPriority.HIGH,
+      },
+      trigger: null, // Immediate
+    });
+  } catch (error) {
+    console.error('[HumidityNotifications] Error sending notification:', error);
+  }
+}
+
+/**
+ * Check if enough time has passed since last notification (cooldown)
+ */
+function isCooldownExpired(
+  lastNotificationTime: number | undefined,
+  cooldownMinutes: number
+): boolean {
+  if (!lastNotificationTime) return true;
+  const cooldownMs = cooldownMinutes * 60 * 1000;
+  return Date.now() - lastNotificationTime >= cooldownMs;
+}
+
+/**
+ * Process humidity reading and send notifications if thresholds are exceeded
+ * This should be called whenever new humidity data is received
+ * 
+ * @param humidity Current humidity percentage (0-100)
+ * @param deviceId Optional device ID for logging
+ */
+export async function processHumidityReading(
+  humidity: number,
+  deviceId?: string
+): Promise<void> {
+  try {
+    // Load settings
+    const settings = await getHumidityNotificationSettings();
+    
+    // If notifications are disabled, do nothing
+    if (!settings.enabled) {
+      return;
+    }
+
+    // Validate humidity value (0-100%)
+    if (!Number.isFinite(humidity) || humidity < 0 || humidity > 100) {
+      return;
+    }
+
+    // Load notification state
+    const state = await getNotificationState();
+    const now = Date.now();
+
+    // Check high threshold
+    if (humidity > settings.highThreshold) {
+      // Only notify if:
+      // 1. We weren't already above threshold (to avoid spam)
+      // 2. Cooldown has expired
+      if (!state.wasAboveHigh && isCooldownExpired(state.lastHighNotification, settings.cooldownMinutes)) {
+        await sendHumidityNotification(
+          'High Humidity Alert',
+          `Room humidity is ${Math.round(humidity * 10) / 10}%, which is above your threshold of ${settings.highThreshold}%.`,
+          'high'
+        );
+        
+        // Update state
+        state.lastHighNotification = now;
+        state.wasAboveHigh = true;
+        await saveNotificationState(state);
+        
+        console.log(`[HumidityNotifications] High threshold alert: ${humidity}% > ${settings.highThreshold}%`);
+      }
+    } else {
+      // Reset high threshold state when we're back in normal range
+      if (state.wasAboveHigh) {
+        state.wasAboveHigh = false;
+        await saveNotificationState(state);
+      }
+    }
+
+    // Check low threshold
+    if (humidity < settings.lowThreshold) {
+      // Only notify if:
+      // 1. We weren't already below threshold (to avoid spam)
+      // 2. Cooldown has expired
+      if (!state.wasBelowLow && isCooldownExpired(state.lastLowNotification, settings.cooldownMinutes)) {
+        await sendHumidityNotification(
+          'Low Humidity Alert',
+          `Room humidity is ${Math.round(humidity * 10) / 10}%, which is below your threshold of ${settings.lowThreshold}%.`,
+          'low'
+        );
+        
+        // Update state
+        state.lastLowNotification = now;
+        state.wasBelowLow = true;
+        await saveNotificationState(state);
+        
+        console.log(`[HumidityNotifications] Low threshold alert: ${humidity}% < ${settings.lowThreshold}%`);
+      }
+    } else {
+      // Reset low threshold state when we're back in normal range
+      if (state.wasBelowLow) {
+        state.wasBelowLow = false;
+        await saveNotificationState(state);
+      }
+    }
+  } catch (error) {
+    console.error('[HumidityNotifications] Error processing humidity reading:', error);
+  }
+}
+
+/**
+ * Reset notification state (useful for testing or when settings change)
+ */
+export async function resetHumidityNotificationState(): Promise<void> {
+  try {
+    await AsyncStorage.removeItem(NOTIFICATION_STATE_KEY);
+  } catch (error) {
+    console.error('[HumidityNotifications] Error resetting notification state:', error);
+  }
+}

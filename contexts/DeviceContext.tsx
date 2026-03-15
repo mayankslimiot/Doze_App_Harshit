@@ -10,21 +10,30 @@ type Device = {
   manufacturer?: string;
   status?: string;
   customName?: string | null;
+  isShared?: boolean;
+  sharedWith?: Array<{ userId: string; email?: string }>;
+  bleMac?: string | null;  // BLE MAC (12 hex) for scan matching
 };
 
 type DeviceContextType = {
-  devices: Device[];
+  devices: Device[] | null; // null = unknown/not loaded, [] = no devices, [x] = has devices
+  ownedDevices: Device[] | null;
+  sharedDevices: Device[] | null;
   activeDevice: Device | null;
   isLoading: boolean;
   addDevice: (deviceId: string) => Promise<{ success: boolean; message?: string }>;
   refreshDevices: () => Promise<void>;
   setActiveDevice: (device: Device | null) => Promise<void>;
+  isDeviceShared: (deviceId: string) => boolean;
 };
 
 const DeviceContext = createContext<DeviceContextType | undefined>(undefined);
 
 export function DeviceProvider({ children }: { children: React.ReactNode }) {
-  const [devices, setDevices] = useState<Device[]>([]);
+  // CRITICAL: null = unknown/not loaded, [] = loaded with no devices, [x] = loaded with devices
+  const [devices, setDevices] = useState<Device[] | null>(null);
+  const [ownedDevices, setOwnedDevices] = useState<Device[] | null>(null);
+  const [sharedDevices, setSharedDevices] = useState<Device[] | null>(null);
   const [activeDevice, setActiveDeviceState] = useState<Device | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const { auth } = useAuth();
@@ -35,8 +44,8 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
     if (!auth.isLoading && auth.isLoggedIn) {
     loadDevices();
     } else if (!auth.isLoading && !auth.isLoggedIn) {
-      // User not logged in - clear devices and set loading to false
-      setDevices([]);
+      // User not logged in - clear devices (set to null = unknown) and set loading to false
+      setDevices(null);
       setActiveDeviceState(null);
       setIsLoading(false);
     }
@@ -44,12 +53,23 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
 
   const loadDevices = async () => {
     try {
+      // TEMP: Log device loading start
+      const loadStart = Date.now();
+      console.log('[DEVICE] loadDevices started', {
+        timestamp: loadStart,
+        isLoggedIn: auth.isLoggedIn,
+      });
+      
       setIsLoading(true);
       const result = await getUserDevices();
       
       if (result.success) {
         const devicesList = result.devices || [];
+        const ownedList = result.ownedDevices || [];
+        const sharedList = result.sharedDevices || [];
         setDevices(devicesList);
+        setOwnedDevices(ownedList);
+        setSharedDevices(sharedList);
         
         let active: Device | null = null;
         
@@ -72,22 +92,50 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
           console.log('[DeviceContext] Auto-setting first device as active:', active.deviceId);
         }
         
-        // Set the active device
         setActiveDeviceState(active);
         if (active) {
           await AsyncStorage.setItem('active_device_id', active.deviceId);
         } else {
           await AsyncStorage.removeItem('active_device_id');
         }
+        
+        console.log('[DEVICE] loadDevices completed', {
+          devicesCount: devicesList.length,
+          ownedCount: ownedList.length,
+          sharedCount: sharedList.length,
+          hasActiveDevice: !!active,
+          activeDeviceId: active?.deviceId || null,
+          loadTime: Date.now() - loadStart,
+          timestamp: Date.now(),
+        });
+      } else {
+        // API call failed - set to null (unknown state)
+        setDevices(null);
+        setOwnedDevices(null);
+        setSharedDevices(null);
+        console.log('[DEVICE] loadDevices failed', {
+          error: result.message || 'Unknown error',
+          loadTime: Date.now() - loadStart,
+          timestamp: Date.now(),
+        });
       }
     } catch (error) {
       console.error('Failed to load devices:', error);
+      setDevices(null);
+      setOwnedDevices(null);
+      setSharedDevices(null);
     } finally {
       setIsLoading(false);
     }
   };
 
   const refreshDevices = async () => {
+    // TEMP: Log device refresh
+    console.log('[DEVICE] refreshDevices called', {
+      timestamp: Date.now(),
+      currentDevicesCount: devices?.length || 0,
+      isLoggedIn: auth.isLoggedIn,
+    });
     await loadDevices();
   };
 
@@ -111,7 +159,9 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
         await refreshDevices();
         
         // If this is the first device, set it as active
-        if (devices.length === 0 && result.data) {
+        // Check if devices is null or empty array
+        const currentDevices = devices || [];
+        if (currentDevices.length === 0 && result.data) {
           const newDevice = result.data.device || { deviceId };
           await setActiveDevice(newDevice as Device);
         }
@@ -130,7 +180,6 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
     setActiveDeviceState(device);
     if (device) {
       await AsyncStorage.setItem('active_device_id', device.deviceId);
-      // Update backend to set this device as active
       try {
         const { activateDevice } = await import('@/services/deviceData');
         await activateDevice(device.deviceId);
@@ -142,15 +191,23 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  const isDeviceShared = (deviceId: string) => {
+    const d = devices?.find((x) => x.deviceId === deviceId);
+    return !!(d && (d as Device).isShared);
+  };
+
   return (
     <DeviceContext.Provider
       value={{
         devices,
+        ownedDevices,
+        sharedDevices,
         activeDevice,
         isLoading,
         addDevice,
         refreshDevices,
         setActiveDevice,
+        isDeviceShared,
       }}
     >
       {children}

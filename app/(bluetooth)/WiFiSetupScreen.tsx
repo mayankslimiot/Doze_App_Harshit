@@ -1,13 +1,15 @@
 import CustomAlert from "@/components/CustomAlert";
 import { useBluetooth } from "@/contexts/BluetoothProvider";
+import { useDevice } from "@/contexts/DeviceContext";
 import { useProvisioning } from "@/contexts/ProvisioningContext";
 import { ScannedNetwork, scanWifi } from "@/services/WifiService";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Ionicons } from "@expo/vector-icons";
 import { BlurView } from "expo-blur";
 import { LinearGradient } from "expo-linear-gradient";
 import * as Location from "expo-location";
 import { useRouter, usePathname } from "expo-router";
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Keyboard,
@@ -24,6 +26,8 @@ import {
 } from "react-native";
 import WifiManager from "react-native-wifi-reborn";
 
+const BLE_TO_BACKEND_DEVICE_ID_KEY = '@slimiot_ble_to_backend_device_id';
+
 export default function WiFiSetupScreen() {
   const {
     wifiSSID,
@@ -32,11 +36,15 @@ export default function WiFiSetupScreen() {
     setWifiPassword,
     sendWifiCredentials,
     selectedDevice,
+    selectedDeviceId,
     wifiProvisioningSuccess,
   } = useProvisioning();
   const { connectedDevice, connectionStatus } = useBluetooth();
+  const { devices: contextDevices } = useDevice();
   const router = useRouter();
   const pathname = usePathname();
+
+  const [bleIdToBackendDeviceId, setBleIdToBackendDeviceId] = useState<Record<string, string>>({});
 
   const [showPassword, setShowPassword] = useState(false);
   const [isSending, setIsSending] = useState(false);
@@ -54,6 +62,37 @@ export default function WiFiSetupScreen() {
   // Ref to track if we've already shown the disconnection alert
   const hasShownDisconnectAlert = useRef(false);
 
+  // Same display-name logic as Scan screen: registered custom name vs BLE name
+  const devicesForDisplayNames = useMemo(
+    () => (contextDevices ?? []).map((d: any) => ({ deviceId: d.deviceId, customName: d.customName ?? null, defaultName: d.defaultName ?? null })),
+    [contextDevices]
+  );
+  const registeredDeviceMap = useMemo(() => {
+    const map = new Map<string, string>();
+    devicesForDisplayNames.forEach((device) => {
+      const id = (device.deviceId || '').trim().toUpperCase();
+      const name = (device.customName || device.defaultName || '').trim();
+      if (id && name) map.set(id, name);
+    });
+    return map;
+  }, [devicesForDisplayNames]);
+  const deviceDisplayName = useMemo(() => {
+    if (!selectedDeviceId) return selectedDevice?.name ?? 'Unknown Device';
+    const backendId = (bleIdToBackendDeviceId[selectedDeviceId] ?? (selectedDeviceId || '').trim().toUpperCase());
+    return registeredDeviceMap.get(backendId) ?? selectedDevice?.name ?? 'Unknown Device';
+  }, [selectedDeviceId, selectedDevice?.name, bleIdToBackendDeviceId, registeredDeviceMap]);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const raw = await AsyncStorage.getItem(BLE_TO_BACKEND_DEVICE_ID_KEY);
+        if (cancelled) return;
+        if (raw != null) setBleIdToBackendDeviceId((JSON.parse(raw) as Record<string, string>) || {});
+      } catch (_) {}
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
   // Function to show disconnect alert
   const showDisconnectAlert = useCallback(() => {
     console.log('⚠️ Unexpected device disconnection in WiFiSetupScreen');
@@ -61,7 +100,7 @@ export default function WiFiSetupScreen() {
     
     setAlertTitle("Device Disconnected");
     setAlertMessage(
-      `Connection to ${selectedDevice?.name || 'device'} was lost.\n\n` +
+      `Connection to ${deviceDisplayName || 'device'} was lost.\n\n` +
       "This might happen if:\n" +
       "• The device moved out of range\n" +
       "• Bluetooth was turned off\n" +
@@ -94,7 +133,7 @@ export default function WiFiSetupScreen() {
       }
     ]);
     setShowAlert(true);
-  }, [selectedDevice, router]);
+  }, [deviceDisplayName, router]);
 
   // Monitor device connection status
   useEffect(() => {
@@ -510,7 +549,7 @@ export default function WiFiSetupScreen() {
                 <View style={styles.deviceCardInfo}>
                   <Text style={styles.deviceCardTitle}>Connected Device</Text>
                   <Text style={styles.deviceCardName}>
-                    {selectedDevice.name || "Unknown Device"}
+                    {deviceDisplayName}
                   </Text>
                   <Text style={styles.connectionStatus}>
                     Status: {connectionStatusText}
@@ -756,7 +795,7 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     top: 0,
-    height: "100%",
+    bottom: 0,
   },
   header: {
     flexDirection: "row",

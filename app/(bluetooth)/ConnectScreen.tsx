@@ -5,6 +5,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { Buffer } from "buffer";
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from "expo-router";
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import React, { useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Animated, Platform, SafeAreaView, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { Subscription } from 'react-native-ble-plx';
@@ -249,8 +250,8 @@ export default function ConnectScreen() {
 
     try {
       // Call auto-register API (ONLY ONCE)
-      console.log(`[WiFi Provisioning] 📡 Calling auto-register API for serial: ${serialForRegistration}`);
-      const registrationResult = await autoRegisterDevice(serialForRegistration);
+      console.log(`[WiFi Provisioning] 📡 Calling auto-register API for serial: ${serialForRegistration}, bleMac: ${selectedDeviceId || 'none'}`);
+      const registrationResult = await autoRegisterDevice(serialForRegistration, selectedDeviceId || undefined);
 
       if (registrationResult.success) {
         console.log('[WiFi Provisioning] ✅ Device registered successfully!');
@@ -287,6 +288,28 @@ export default function ConnectScreen() {
           // DeviceContext will automatically set the first device (or the one from backend activeDevice) as active
         } catch (refreshError) {
           console.error('[WiFi Provisioning] ⚠️ Failed to refresh device list:', refreshError);
+        }
+
+        // Save BLE id → backend deviceId so Scan screen can show custom name for "Previously Connected"
+        const backendDeviceId = registrationResult.device?.deviceId?.trim().toUpperCase();
+        if (selectedDeviceId && backendDeviceId) {
+          try {
+            const key = '@slimiot_ble_to_backend_device_id';
+            const raw = await AsyncStorage.getItem(key);
+            const map: Record<string, string> = raw ? JSON.parse(raw) : {};
+            map[selectedDeviceId] = backendDeviceId;
+            await AsyncStorage.setItem(key, JSON.stringify(map));
+            // Backfill "Previously Connected" entry so custom name shows without re-scan
+            const prevKey = '@slimiot_previous_doze_devices';
+            const prevRaw = await AsyncStorage.getItem(prevKey);
+            if (prevRaw) {
+              const prevList: Array<{ id: string; name: string | null; backendDeviceId?: string }> = JSON.parse(prevRaw);
+              const updated = prevList.map((d) =>
+                d.id === selectedDeviceId ? { ...d, backendDeviceId } : d
+              );
+              await AsyncStorage.setItem(prevKey, JSON.stringify(updated));
+            }
+          } catch (_) {}
         }
         
         // Trigger success animation
@@ -774,7 +797,7 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     top: 0,
-    height: '100%',
+    bottom: 0,
   },
   header: {
     flexDirection: 'row',

@@ -1,9 +1,9 @@
 import { BlurView } from 'expo-blur';
-import { Dimensions, Modal, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Dimensions, Modal, StyleSheet, Text, TouchableOpacity, TouchableWithoutFeedback, View } from 'react-native';
 
 const { width } = Dimensions.get('window');
 
-interface AlertButton {
+export interface AlertButton {
   text: string;
   onPress: () => void;
   style?: 'default' | 'primary';
@@ -40,39 +40,43 @@ const CustomAlert: React.FC<CustomAlertProps> = ({ visible, title, message, butt
       {/* Full screen blur overlay */}
       <BlurView intensity={1000} tint="dark" style={styles.fullScreenBlur}>
         {/* Additional dark overlay for better contrast */}
-        <View style={styles.darkOverlay}>
-          {/* Modal container */}
-          <View style={styles.modalContainer}>
-            <Text style={styles.modalTitle}>{title}</Text>
-            <Text style={styles.modalMessage}>{message}</Text>
-            
-            {/* Buttons container */}
-            <View style={alertButtons.length > 1 ? styles.buttonsRow : styles.buttonsSingle}>
-              {alertButtons.map((button, index) => {
-                const isPrimary = button.style === 'primary' || alertButtons.length === 1;
-                return (
-                  <TouchableOpacity
-                    key={index}
-                    style={[
-                      styles.modalButton,
-                      alertButtons.length > 1 && styles.modalButtonHalf,
-                      isPrimary ? styles.modalButtonPrimary : styles.modalButtonSecondary,
-                      index > 0 && alertButtons.length > 1 && { marginLeft: 10 }
-                    ]}
-                    onPress={button.onPress}
-                  >
-                    <Text style={[
-                      styles.modalButtonText,
-                      isPrimary ? styles.modalButtonTextPrimary : styles.modalButtonTextSecondary
-                    ]}>
-                      {button.text}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
+        <TouchableWithoutFeedback onPress={onClose}>
+          <View style={styles.darkOverlay}>
+            {/* Modal container - prevent dismiss when clicking inside */}
+            <TouchableWithoutFeedback onPress={() => {}}>
+              <View style={styles.modalContainer}>
+                <Text style={styles.modalTitle}>{title}</Text>
+                <Text style={styles.modalMessage}>{message}</Text>
+                
+                {/* Buttons container */}
+                <View style={alertButtons.length > 1 ? styles.buttonsRow : styles.buttonsSingle}>
+                  {alertButtons.map((button, index) => {
+                    const isPrimary = button.style === 'primary' || alertButtons.length === 1;
+                    return (
+                      <TouchableOpacity
+                        key={index}
+                        style={[
+                          styles.modalButton,
+                          alertButtons.length > 1 && styles.modalButtonHalf,
+                          isPrimary ? styles.modalButtonPrimary : styles.modalButtonSecondary,
+                          index > 0 && alertButtons.length > 1 && { marginLeft: 10 }
+                        ]}
+                        onPress={button.onPress}
+                      >
+                        <Text style={[
+                          styles.modalButtonText,
+                          isPrimary ? styles.modalButtonTextPrimary : styles.modalButtonTextSecondary
+                        ]}>
+                          {button.text}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </View>
+            </TouchableWithoutFeedback>
           </View>
-        </View>
+        </TouchableWithoutFeedback>
       </BlurView>
     </Modal>
   );

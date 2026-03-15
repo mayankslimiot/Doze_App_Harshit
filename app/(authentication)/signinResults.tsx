@@ -47,9 +47,8 @@ export default function SigninResult() {
             <TouchableOpacity
               style={styles.primaryBtn}
               onPress={() => {
-                // Let NavigationGuard handle routing based on device status
-                // It will route to setup if no devices, or home if devices exist
-                router.replace('/(tabs)/home');
+                // Navigate to PostLoginResolver - it will handle device check and routing
+                router.replace('/PostLoginResolver');
               }}
             >
               <Text style={styles.primaryText}>Continue</Text>

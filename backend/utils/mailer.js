@@ -90,4 +90,55 @@ async function sendNewUserCredentials(to, name, tempPassword) {
   return sendEmail({ to, subject, text, html });
 }
 
-module.exports = { verifySmtp, sendEmail, sendNewUserCredentials };
+/**
+ * Send email to caretaker when owner shares a device with them.
+ * @param {Object} opts
+ * @param {string} opts.to - Caretaker email
+ * @param {string} opts.ownerName - Name of person who shared the device
+ * @param {string} opts.ownerEmail - Email of person who shared the device
+ * @param {string} opts.deviceName - Display name of the device (custom name or device ID)
+ * @param {string} opts.deviceId - Device ID
+ */
+async function sendCaretakerShareNotification({ to, ownerName, ownerEmail, deviceName, deviceId }) {
+  const subject = 'You have been given access to a device';
+  const text = [
+    'Hello,',
+    '',
+    `${ownerName || 'A user'} (${ownerEmail || '—'}) has shared a device with you.`,
+    '',
+    'Details:',
+    `  • Who shared: ${ownerName || '—'} (${ownerEmail || '—'})`,
+    `  • Device name: ${deviceName || deviceId || '—'}`,
+    `  • Device ID: ${deviceId || '—'}`,
+    '',
+    'You can now view this device in the app under your shared devices.',
+    '',
+    '— Dozemate',
+  ].join('\n');
+
+  const html = [
+    '<p>Hello,</p>',
+    `<p><strong>${escapeHtml(ownerName || 'A user')}</strong> (<a href="mailto:${escapeHtml(ownerEmail || '')}">${escapeHtml(ownerEmail || '—')}</a>) has shared a device with you.</p>`,
+    '<p><strong>Details:</strong></p>',
+    '<ul>',
+    `<li><strong>Who shared:</strong> ${escapeHtml(ownerName || '—')} (${escapeHtml(ownerEmail || '—')})</li>`,
+    `<li><strong>Device name:</strong> ${escapeHtml(deviceName || deviceId || '—')}</li>`,
+    `<li><strong>Device ID:</strong> ${escapeHtml(deviceId || '—')}</li>`,
+    '</ul>',
+    '<p>You can now view this device in the app under your shared devices.</p>',
+    '<p>— Dozemate</p>',
+  ].join('');
+
+  return sendEmail({ to, subject, text, html });
+}
+
+function escapeHtml(s) {
+  if (s == null) return '';
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+module.exports = { verifySmtp, sendEmail, sendNewUserCredentials, sendCaretakerShareNotification };

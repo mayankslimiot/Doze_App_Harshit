@@ -146,7 +146,7 @@ export default function ReportsScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#02041A' },
-  gradientBackground: { position: 'absolute', width: '100%', height: '100%' },
+  gradientBackground: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0 },
   header: { paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   headerTitle: { color: '#FFF', fontSize: 22, fontWeight: '800' },
   headerActions: { flexDirection: 'row' },

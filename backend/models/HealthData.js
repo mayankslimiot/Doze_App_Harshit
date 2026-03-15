@@ -3,17 +3,19 @@ const mongoose = require("mongoose");
 const HealthDataSchema = new mongoose.Schema({
     deviceId: { type: String, required: true },
     timestamp: { type: Date, default: Date.now },
-    
+    /** Same moment as timestamp but in IST (e.g. "2025-02-13 18:30:00 IST") for CSV/export clarity */
+    timestampIST: { type: String, default: undefined },
+
     // New wrapped stream fields
-    seq: { type: Number },
-    ts: { type: Number },
+    seq: { type: Number, default: undefined },
+    ts: { type: Number, default: undefined },
     TS: { type: Number },
     receivedAt: { type: Date, default: Date.now },
     streamType: { type: String, default: "live" },
     streamVersion: { type: String, default: "v2" },
     
     // Full name fields - stored as top-level fields (all as Number)
-    timestampSeconds: { type: Number },
+    timestampSeconds: { type: Number, default: undefined },
     timestampMilliseconds: { type: Number },
     temperature: { type: Number },
     humidity: { type: Number },
@@ -128,10 +130,39 @@ const HealthDataSchema = new mongoose.Schema({
 
 // Note: Fields are now stored with full names (temperature, heartRate, etc.)
 
+// Fast path for most read queries (history, sleep motion timeline)
 HealthDataSchema.index({ deviceId: 1, timestamp: -1 });
-// Unique index to prevent duplicates based on deviceId + timestampSeconds (for backward compatibility)
-HealthDataSchema.index({ deviceId: 1, timestampSeconds: 1 }, { unique: true, sparse: true });
-// Unique index for new wrapped stream format: deviceId + seq + ts
-HealthDataSchema.index({ deviceId: 1, seq: 1, ts: 1 }, { unique: true, sparse: true });
+// // Unique index to prevent duplicates based on deviceId + timestampSeconds (for backward compatibility)
+// HealthDataSchema.index({ deviceId: 1, timestampSeconds: 1 }, { unique: true, sparse: true });
+// // Unique index for new wrapped stream format: deviceId + seq + ts
+// HealthDataSchema.index({ deviceId: 1, seq: 1, ts: 1 }, { unique: true, sparse: true });
+
+
+// ✅ V2 uniqueness only when seq+ts are present
+HealthDataSchema.index(
+  { deviceId: 1, seq: 1, ts: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      seq: { $type: "number" },
+      ts: { $type: "number" },
+    },
+  }
+);
+
+// ✅ Legacy uniqueness without blocking v2.
+// We cannot reliably scope partialFilterExpression by "$exists" on some Mongo versions,
+// so we include "seq" in the unique key:
+//   - legacy docs typically have seq missing/null -> uniqueness behaves as (deviceId, timestampSeconds)
+//   - v2 docs have seq present -> multiple docs may share timestampSeconds as long as seq differs
+HealthDataSchema.index(
+  { deviceId: 1, timestampSeconds: 1, seq: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      timestampSeconds: { $type: "number" },
+    },
+  }
+);
 
 module.exports = mongoose.model("HealthData", HealthDataSchema);

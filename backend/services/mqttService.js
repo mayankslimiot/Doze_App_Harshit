@@ -4,7 +4,8 @@ const HealthData = require('../models/HealthData');
 const HealthData180s = require('../models/HealthData180s');
 const Device = require('../models/Device');
 const { logger } = require('../utils/logger');
-const { broadcastHealthData, broadcastDeviceStatus, broadcastHeartRateGraphUpdate } = require('./websocketService');
+const { formatTimestampIST } = require('../utils/timezoneHelper');
+const { broadcastHealthData, broadcastDeviceStatus, broadcastDeviceUpdate, broadcastHeartRateGraphUpdate } = require('./websocketService');
 
 // Configuration from .env file
 const MQTT_BROKER_URL = process.env.MQTT_BROKER_URL || 'mqtt://172.236.188.162:1883';
@@ -22,6 +23,34 @@ const toNum = (v) => {
   const n = Number(v);
   return Number.isFinite(n) ? n : undefined;
 };
+function deriveTimestampSecondsFromAny(data) {
+  // 1) TS (seconds)
+  if (data?.TS !== undefined && data.TS !== null && data.TS !== "") {
+    const n = Number(data.TS);
+    if (Number.isFinite(n)) return n;
+  }
+
+  // 2) TS_ms (milliseconds)
+  if (data?.TS_ms !== undefined && data.TS_ms !== null && data.TS_ms !== "") {
+    const n = Number(data.TS_ms);
+    if (Number.isFinite(n)) return Math.floor(n / 1000);
+  }
+
+  // 3) ts (seconds) - some payloads use lowercase
+  if (data?.ts !== undefined && data.ts !== null && data.ts !== "") {
+    const n = Number(data.ts);
+    if (Number.isFinite(n)) return n;
+  }
+
+  // 4) ISO timestamp string
+  if (data?.timestamp && typeof data.timestamp === "string") {
+    const ms = Date.parse(data.timestamp);
+    if (Number.isFinite(ms)) return Math.floor(ms / 1000);
+  }
+
+  // 5) fallback: server time
+  return Math.floor(Date.now() / 1000);
+}
 
 function convertStringsToNumbers(obj) {
   if (!obj || typeof obj !== "object") return obj;
@@ -126,50 +155,52 @@ function parseAbbreviatedFormat(data) {
  * Buffer incomplete messages and reconstruct complete JSON
  */
 function bufferMessage(deviceId, messageChunk) {
-  if (!messageBuffers.has(deviceId)) {
-    messageBuffers.set(deviceId, '');
-  }
-  
-  const buffer = messageBuffers.get(deviceId) + messageChunk.toString();
-  messageBuffers.set(deviceId, buffer);
-  
-  // Try to find complete JSON objects in buffer
+  const prev = messageBuffers.get(deviceId) || "";
+  let working = prev + messageChunk.toString("utf8");
+
   const completeMessages = [];
-  let remainingBuffer = buffer;
-  
-  // Look for JSON objects (starting with { and ending with })
+  let remainingBuffer = working;
+
   while (remainingBuffer.length > 0) {
-    const startIdx = remainingBuffer.indexOf('{');
+    const startIdx = remainingBuffer.indexOf("{");
     if (startIdx === -1) {
-      // No more JSON objects, clear buffer
-      messageBuffers.set(deviceId, '');
+      // No JSON start found; drop garbage
+      remainingBuffer = "";
       break;
     }
-    
+
     // Find matching closing brace
     let braceCount = 0;
     let endIdx = -1;
+
     for (let i = startIdx; i < remainingBuffer.length; i++) {
-      if (remainingBuffer[i] === '{') braceCount++;
-      if (remainingBuffer[i] === '}') braceCount--;
+      if (remainingBuffer[i] === "{") braceCount++;
+      if (remainingBuffer[i] === "}") braceCount--;
+
       if (braceCount === 0) {
         endIdx = i;
         break;
       }
     }
-    
+
     if (endIdx !== -1) {
       // Found complete JSON
       const jsonStr = remainingBuffer.substring(startIdx, endIdx + 1);
       completeMessages.push(jsonStr);
+
+      // Continue scanning after this object
       remainingBuffer = remainingBuffer.substring(endIdx + 1);
-    } else {
-      // Incomplete JSON, keep in buffer
-      messageBuffers.set(deviceId, remainingBuffer);
-      break;
+      continue;
     }
+
+    // Incomplete JSON: keep from startIdx onward for next chunk
+    remainingBuffer = remainingBuffer.substring(startIdx);
+    break;
   }
-  
+
+  // ✅ CRITICAL: persist only the leftover (usually "")
+  messageBuffers.set(deviceId, remainingBuffer);
+
   return completeMessages;
 }
 
@@ -178,30 +209,34 @@ function bufferMessage(deviceId, messageChunk) {
  * Returns normalized object or null if invalid
  */
 function normalizePayload(payload) {
-  // Validate required fields
   if (!payload) {
-    logger.warn('MQTT: Payload is missing', {});
+    logger.warn("MQTT: Payload is missing", {});
     return null;
   }
 
-  // Check if this is the new wrapped stream format
-  if (payload.device_id && payload.seq !== undefined && payload.ts !== undefined && payload.data) {
-    // New wrapped stream format
+  // ✅ If payload wraps actual sensor fields under `.data`, unwrap it
+  // Supports shapes like:
+  //   { deviceId, timestamp, topic, data: { TS, T, H, HR, ... } }
+  //   { device_id, seq, ts, data: { ... } } (already handled below)
+  const hasInnerDataObject =
+    payload.data && typeof payload.data === "object" && !Array.isArray(payload.data);
+
+  // New wrapped stream format
+  if (payload.device_id && payload.seq !== undefined && payload.ts !== undefined && hasInnerDataObject) {
     const normalized = {
       deviceId: payload.device_id,
       seq: Number(payload.seq),
       ts: Number(payload.ts),
       TS: payload.data.TS !== undefined ? Number(payload.data.TS) : undefined,
-      payload: payload.data
+      payload: payload.data,
     };
 
-    // Validate required fields
     if (!normalized.deviceId || normalized.seq === undefined || normalized.ts === undefined || !normalized.payload) {
-      logger.warn('MQTT: Missing required fields in wrapped stream', {
+      logger.warn("MQTT: Missing required fields in wrapped stream", {
         hasDeviceId: !!normalized.deviceId,
         hasSeq: normalized.seq !== undefined,
         hasTs: normalized.ts !== undefined,
-        hasPayload: !!normalized.payload
+        hasPayload: !!normalized.payload,
       });
       return null;
     }
@@ -209,13 +244,15 @@ function normalizePayload(payload) {
     return normalized;
   }
 
-  // Legacy format - return as-is for backward compatibility
+  // Legacy / other formats (including wrapper-with-data)
+  const inner = hasInnerDataObject ? payload.data : payload;
+
   return {
     deviceId: payload.deviceId || payload.device_id,
-    seq: payload.seq,
-    ts: payload.ts,
-    TS: payload.TS,
-    payload: payload
+    seq: payload.seq !== undefined ? Number(payload.seq) : undefined,
+    ts: payload.ts !== undefined ? Number(payload.ts) : undefined,
+    TS: inner?.TS !== undefined ? Number(inner.TS) : (payload.TS !== undefined ? Number(payload.TS) : undefined),
+    payload: inner,
   };
 }
 
@@ -229,14 +266,25 @@ function detectStreamType(payload) {
     return 'INVALID';
   }
 
+  // 180-second stream indicators
+  if (payload.RR_mean !== undefined || payload.pNN50 !== undefined) {
+    return '180S';
+  }
+
   // LIVE stream indicators
+  // Check for full stream (has HR or V or other sensor data)
   if (payload.HR !== undefined || payload.V !== undefined) {
     return 'LIVE';
   }
 
-  // 180-second stream indicators
-  if (payload.RR_mean !== undefined || payload.pNN50 !== undefined) {
-    return '180S';
+  // ✅ Short stream: Only TS, AS, HV present (no human detected)
+  // This is also a LIVE stream type, just with no sensor data
+  const payloadKeys = Object.keys(payload);
+  const hasOnlyStatusFields = payloadKeys.length <= 3 && 
+    payloadKeys.every(key => ['TS', 'AS', 'HV'].includes(key));
+  
+  if (hasOnlyStatusFields) {
+    return 'LIVE'; // Treat short stream as LIVE stream with NULL data
   }
 
   return 'INVALID';
@@ -259,7 +307,7 @@ async function checkDuplicate(deviceId, seq, ts, streamType) {
       });
       return !!existing;
     } else {
-      // For LIVE stream, check both collections (in case of migration)
+      // LIVE stream uniqueness is (deviceId, seq, ts)
       const existing = await HealthData.findOne({
         deviceId: deviceId,
         seq: seq,
@@ -278,12 +326,14 @@ async function checkDuplicate(deviceId, seq, ts, streamType) {
  */
 async function save180sData(normalized, deviceId) {
   try {
+    const now = new Date();
     const doc = new HealthData180s({
-      deviceId: normalized.deviceId,
+      deviceId: deviceId,
       seq: normalized.seq,
       ts: normalized.ts,
       TS: normalized.TS,
-      timestamp: new Date(),
+      timestamp: now,
+      timestampIST: formatTimestampIST(now),
       receivedAt: new Date(),
       streamType: '180s',
       streamVersion: 'v2',
@@ -292,15 +342,33 @@ async function save180sData(normalized, deviceId) {
 
     const saved = await doc.save();
     logger.info('✅ MQTT: Saved 180s data to healthdata_180s', {
-      deviceId: normalized.deviceId,
+      deviceId: deviceId,
       documentId: saved._id,
       seq: normalized.seq,
-      ts: normalized.ts
+      ts: normalized.ts,
+      hasStressLevel: !!saved.payload?.stress_level
     });
+
+    // ✅ Broadcast via WebSocket (so frontend receives stress data in real-time)
+    // Convert saved document to object and broadcast
+    try {
+      const savedDocObject = saved.toObject();
+      // Log stress_level for debugging
+      if (savedDocObject.payload?.stress_level) {
+        logger.info('📊 MQTT: Broadcasting 180s data with stress_level', {
+          deviceId: deviceId,
+          stress_level: savedDocObject.payload.stress_level
+        });
+      }
+      broadcastHealthData(deviceId, savedDocObject);
+    } catch (wsError) {
+      logger.err(wsError, { where: 'MQTT: broadcastHealthData (180s)' });
+    }
+
     return saved;
   } catch (saveError) {
     // Handle duplicate key error (race condition or retry)
-    if (saveError.code === 11000 || saveError.name === 'MongoServerError') {
+    if (saveError && saveError.code === 11000) {
       logger.info('⏭️ MQTT: Duplicate 180s data detected, skipping', {
         deviceId: normalized.deviceId,
         seq: normalized.seq,
@@ -317,6 +385,11 @@ async function save180sData(normalized, deviceId) {
  */
 async function saveLiveData(normalized, deviceId, legacyData) {
   try {
+    // ✅ If legacy path, do it first (legacy function already updates status + broadcasts)
+    if (normalized.seq === undefined || normalized.ts === undefined) {
+      return await processLegacyLiveData(deviceId, legacyData);
+    }
+
     // Verify device exists
     const device = await Device.findOne({ deviceId });
     if (!device) {
@@ -324,153 +397,310 @@ async function saveLiveData(normalized, deviceId, legacyData) {
       return null;
     }
 
-    // Update device status
-    await Device.findByIdAndUpdate(device._id, {
+    // --- v2 wrapped stream save logic ---
+    const convertedData = convertStringsToNumbers(normalized.payload);
+    const cleanData = { ...convertedData };
+    delete cleanData.temperature;
+
+    // ✅ Extract AS (absenceStart) and HV (Human Validity) for bedStatus computation
+    const absenceStart = cleanData.AS !== undefined ? toNum(cleanData.AS) : null;
+    const hv = cleanData.HV !== undefined ? toNum(cleanData.HV) : null;
+
+    // ✅ Compute bedStatus based on AS (absenceStart):
+    // - AS = 0 → Always "Vacant" (regardless of HV)
+    // - AS = 1 → "Occupied" (regardless of HV)
+    // Note: HV value doesn't affect bedStatus when data is coming in.
+    //       HV is only used by watchdog timer (30s timeout) to determine "Waiting" status.
+    //       See server.js watchdog timer for "Waiting" logic (AS=1 AND HV=1 AND no data for 30s).
+    let bedStatus = "Vacant"; // Default
+    if (absenceStart === 0 || absenceStart === "0") {
+      bedStatus = "Vacant";
+    } else if (absenceStart === 1 || absenceStart === "1") {
+      bedStatus = "Occupied";
+    }
+    // Note: If AS is null/undefined, keep previous bedStatus (don't change)
+
+    // ✅ Get previous bedStatus to detect changes
+    const previousBedStatus = device.bedStatus || "Vacant";
+    const bedStatusChanged = previousBedStatus !== bedStatus;
+
+    // ✅ Update device document with bedStatus, absenceStart, HV, isLive, lastActiveAt
+    const updateData = {
       status: "active",
       lastActiveAt: new Date(),
-    }, { new: true });
-    
-    // Broadcast device status update
+      isLive: true
+    };
+
+    // Only update bedStatus if AS is present (don't overwrite with null)
+    if (absenceStart !== null && absenceStart !== undefined) {
+      updateData.bedStatus = bedStatus;
+      updateData.absenceStart = absenceStart;
+    }
+
+    // Only update HV if present
+    if (hv !== null && hv !== undefined) {
+      updateData.HV = hv;
+    }
+
+    const updatedDevice = await Device.findByIdAndUpdate(
+      device._id,
+      { $set: updateData },
+      { new: true }
+    );
+
+    // ✅ Broadcast device_update if bedStatus changed or device recovered from Waiting
+    if (bedStatusChanged || previousBedStatus === "Waiting") {
+      try {
+        broadcastDeviceUpdate(deviceId, {
+          bedStatus: updatedDevice.bedStatus,
+          absenceStart: updatedDevice.absenceStart,
+          HV: updatedDevice.HV,
+          isLive: updatedDevice.isLive,
+          source: "packet"
+        });
+        logger.info('MQTT: Device update broadcasted (bedStatus changed)', {
+          deviceId,
+          previousBedStatus,
+          newBedStatus: updatedDevice.bedStatus,
+          absenceStart,
+          HV: hv
+        });
+      } catch (wsError) {
+        logger.err(wsError, { where: "MQTT: broadcastDeviceUpdate" });
+      }
+    }
+
+    // Also broadcast legacy device status for backward compatibility
     try {
-      broadcastDeviceStatus(deviceId, {
-        status: "active",
-        lastActiveAt: new Date()
-      });
+      broadcastDeviceStatus(deviceId, { status: "active", lastActiveAt: new Date() });
     } catch (wsError) {
       logger.err(wsError, { where: "MQTT: broadcastDeviceStatus" });
     }
 
-    // Handle new wrapped stream format
-    if (normalized.seq !== undefined && normalized.ts !== undefined) {
-      // New wrapped stream format - map payload data
-      const convertedData = convertStringsToNumbers(normalized.payload);
-      const cleanData = { ...convertedData };
-      delete cleanData.temperature;
+    // --- v2 wrapped stream save logic ---
+    // Note: convertedData and cleanData are already declared above for bedStatus computation
+    // Reuse them here
 
-      // Check if data is in abbreviated format
-      const isAbbreviatedFormat = cleanData.hasOwnProperty("TS") || cleanData.hasOwnProperty("T") || 
-                                  cleanData.hasOwnProperty("H") || cleanData.hasOwnProperty("HR");
-      
-      if (!isAbbreviatedFormat) {
-        logger.warn('MQTT: Live data payload is not in abbreviated format', { deviceId });
-        return null;
-      }
+    // ✅ Check if this is a short stream (only TS, AS, HV - no human detected)
+    const payloadKeys = Object.keys(cleanData);
+    const isShortStream = payloadKeys.length <= 3 && 
+      payloadKeys.every(key => ['TS', 'AS', 'HV'].includes(key));
 
-      // Map abbreviated fields to full names
-      const mappedData = mapAbbreviatedToFullNames(cleanData);
-      
-      // Define all valid schema fields
-      const validSchemaFields = [
-        'timestampSeconds', 'timestampMilliseconds', 'temperature', 'humidity',
-        'motionStart', 'motionEndReason', 'absenceStart', 'absenceEnd',
-        'snoringStart', 'snoringStop', 'snoringFrequency', 'respirationStop', 'respirationStart',
-        'voltage', 'level', 'status', 'heartRate', 'respiration',
-        'pm10', 'co2', 'voc', 'etoh'
-      ];
-      
-      // Extract only valid mapped fields
-      const validMappedFields = {};
-      const extraFields = {};
-      
-      Object.keys(mappedData).forEach(key => {
-        if (validSchemaFields.includes(key)) {
-          if (mappedData[key] !== null && mappedData[key] !== undefined && mappedData[key] !== '') {
-            validMappedFields[key] = mappedData[key];
-          }
-        } else {
-          extraFields[key] = mappedData[key];
-        }
+    // Check if data is in abbreviated format
+    const isAbbreviatedFormat =
+      cleanData.hasOwnProperty("TS") ||
+      cleanData.hasOwnProperty("T") ||
+      cleanData.hasOwnProperty("H") ||
+      cleanData.hasOwnProperty("HR");
+
+    if (!isAbbreviatedFormat && !isShortStream) {
+      logger.warn('MQTT: Live data payload is not in abbreviated format', { deviceId });
+      return null;
+    }
+
+    // ✅ If short stream, save all fields as NULL
+    if (isShortStream) {
+      logger.info('MQTT: Short stream detected (no human detected), saving all fields as NULL', {
+        deviceId,
+        payloadKeys,
+        seq: normalized.seq,
+        ts: normalized.ts,
+        timestamp: new Date().toISOString()
       });
 
-      // Extract signals
-      const signals = {};
-      if (validMappedFields.voltage !== undefined) {
-        signals.battery = validMappedFields.voltage;
-        delete validMappedFields.voltage;
-      }
-
-      // Build final document
+      const now = new Date();
       const newHealthData = new HealthData();
       const fieldsToSet = {
-        deviceId: normalized.deviceId,
+        deviceId: deviceId,
         seq: normalized.seq,
         ts: normalized.ts,
         TS: normalized.TS,
-        timestamp: new Date(),
+        timestamp: now,
+        timestampIST: formatTimestampIST(now),
         receivedAt: new Date(),
         streamType: 'live',
         streamVersion: 'v2',
         metrics: {},
-        signals: signals,
-        raw: Object.keys(extraFields).length > 0 ? extraFields : {}
+        signals: {},
+        raw: cleanData, // Store original short stream payload in raw
+        // Set all metric fields to null explicitly
+        timestampSeconds: normalized.TS || null,
+        timestampMilliseconds: null,
+        temperature: null,
+        humidity: null,
+        motionStart: null,
+        motionEndReason: null,
+        absenceStart: cleanData.AS !== undefined ? toNum(cleanData.AS) : null,
+        absenceEnd: null,
+        snoringStart: null,
+        snoringStop: null,
+        snoringFrequency: null,
+        respirationStop: null,
+        respirationStart: null,
+        voltage: null,
+        level: null,
+        status: null,
+        heartRate: null,
+        respiration: null,
+        pm10: null,
+        co2: null,
+        voc: null,
+        etoh: null
       };
 
-      // Add all valid mapped schema fields
-      validSchemaFields.forEach(field => {
-        if (validMappedFields[field] !== undefined && validMappedFields[field] !== null && validMappedFields[field] !== '') {
-          fieldsToSet[field] = validMappedFields[field];
-        }
-      });
-
-      // Ensure no abbreviated keys remain
-      Object.keys(fieldNameMapping).forEach(abbr => {
-        if (fieldsToSet[abbr] !== undefined) {
-          delete fieldsToSet[abbr];
-        }
-      });
-
       newHealthData.set(fieldsToSet);
-      
+
       try {
         const savedDoc = await newHealthData.save();
-        logger.info('✅ MQTT: Saved live data to healthdata_new collection', {
-          deviceId: normalized.deviceId,
+        logger.info('✅ MQTT: Saved short stream (NULL data) to healthdata_new collection', {
+          deviceId: deviceId,
           documentId: savedDoc._id,
           seq: normalized.seq,
-          ts: normalized.ts
+          ts: normalized.ts,
         });
-        
-        // Broadcast via WebSocket (ONLY for live data)
+
+        // Broadcast via WebSocket
         try {
           broadcastHealthData(deviceId, savedDoc.toObject());
-          
-          // If heart rate data exists, also broadcast graph update
-          if (savedDoc.heartRate || savedDoc.hr || savedDoc.bpm) {
-            setImmediate(() => {
-              broadcastHeartRateGraphUpdate(deviceId, 0).catch((err) => {
-                logger.err(err, { where: "MQTT: broadcastHeartRateGraphUpdate" });
-              });
-            });
-          }
         } catch (wsError) {
-          logger.err(wsError, { where: "MQTT: broadcastHealthData" });
+          logger.err(wsError, { where: 'MQTT: broadcastHealthData (short stream)' });
         }
-        
+
         return savedDoc;
       } catch (saveError) {
-        // Handle duplicate key error
-        if (saveError.code === 11000 || saveError.name === 'MongoServerError') {
-          logger.info('⏭️ MQTT: Duplicate live data detected, skipping', {
+        if (saveError && saveError.code === 11000) {
+          logger.info('⏭️ MQTT: Duplicate short stream data detected, skipping', {
             deviceId: normalized.deviceId,
             seq: normalized.seq,
-            ts: normalized.ts
+            ts: normalized.ts,
           });
           return null;
         }
         throw saveError;
       }
-    } else {
-      // Legacy format - use existing logic
-      return await processLegacyLiveData(deviceId, legacyData);
+    }
+
+    // Map abbreviated fields to full names
+    const mappedData = mapAbbreviatedToFullNames(cleanData);
+
+    // Define all valid schema fields
+    const validSchemaFields = [
+      'timestampSeconds', 'timestampMilliseconds', 'temperature', 'humidity',
+      'motionStart', 'motionEndReason', 'absenceStart', 'absenceEnd',
+      'snoringStart', 'snoringStop', 'snoringFrequency', 'respirationStop', 'respirationStart',
+      'voltage', 'level', 'status', 'heartRate', 'respiration',
+      'pm10', 'co2', 'voc', 'etoh'
+    ];
+
+    // Extract only valid mapped fields
+    const validMappedFields = {};
+    const extraFields = {};
+
+    Object.keys(mappedData).forEach((key) => {
+      if (validSchemaFields.includes(key)) {
+        const coerced = toNum(mappedData[key]);
+        if (coerced !== undefined) {
+          validMappedFields[key] = coerced;
+        }
+      } else {
+        extraFields[key] = mappedData[key];
+      }
+    });
+
+    // Extract signals (voltage goes to signals.battery)
+    const signals = {};
+    if (validMappedFields.voltage !== undefined) {
+      signals.battery = validMappedFields.voltage;
+      delete validMappedFields.voltage;
+    }
+
+    const now = new Date();
+    const newHealthData = new HealthData();
+    const fieldsToSet = {
+      deviceId: deviceId,
+      seq: normalized.seq,
+      ts: normalized.ts,
+      TS: normalized.TS,
+      timestamp: now,
+      timestampIST: formatTimestampIST(now),
+      receivedAt: new Date(),
+      streamType: 'live',
+      streamVersion: 'v2',
+      metrics: {},
+      signals,
+      raw: Object.keys(extraFields).length > 0 ? extraFields : {},
+    };
+
+    // ✅ CRITICAL: Handle heartRate gaps (HV=0 only, NOT AS)
+    // Rule: Heart rate validity depends ONLY on HV (Heart Validity), not AS (Absence Start)
+    // AS = Human presence (1 = present, 0 = absent) - used for bed status only
+    // HV = Heart rate validity (1 = valid, 0 = invalid/no heart rate)
+    // If HV=0 OR HR=0, save heartRate = null (gap indicator)
+    // Check original payload for HV field (before mapping)
+    const hvValue = cleanData.HV !== undefined ? Number(cleanData.HV) : undefined;
+    const hrValue = mappedData.heartRate !== undefined ? Number(mappedData.heartRate) : undefined;
+    
+    // If HV=0 or HR=0, set heartRate to null (gap)
+    // NOTE: AS is NOT checked - heart rate works independently of human presence
+    if ((hvValue === 0) || (hrValue === 0) || (hrValue === null)) {
+      // Explicitly set heartRate to null for gaps
+      fieldsToSet.heartRate = null;
+      // Remove heartRate from validMappedFields so it doesn't get overwritten
+      delete validMappedFields.heartRate;
+    }
+
+    // Add all valid mapped schema fields
+    validSchemaFields.forEach((field) => {
+      if (validMappedFields[field] !== undefined && validMappedFields[field] !== null && validMappedFields[field] !== '') {
+        fieldsToSet[field] = validMappedFields[field];
+      }
+    });
+
+    // Ensure no abbreviated keys remain
+    Object.keys(fieldNameMapping).forEach((abbr) => {
+      if (fieldsToSet[abbr] !== undefined) {
+        delete fieldsToSet[abbr];
+      }
+    });
+
+    newHealthData.set(fieldsToSet);
+
+    try {
+      const savedDoc = await newHealthData.save();
+      logger.info('✅ MQTT: Saved live data to healthdata_new collection', {
+        deviceId: deviceId,
+        documentId: savedDoc._id,
+        seq: normalized.seq,
+        ts: normalized.ts,
+      });
+
+      // Broadcast via WebSocket (ONLY for live data)
+      // Frontend now handles graph aggregation from raw health_data_update events
+      // No need to send zoom-specific graph updates - reduces latency and complexity
+      try {
+        broadcastHealthData(deviceId, savedDoc.toObject());
+      } catch (wsError) {
+        logger.err(wsError, { where: 'MQTT: broadcastHealthData' });
+      }
+
+      return savedDoc;
+    } catch (saveError) {
+      if (saveError && saveError.code === 11000) {
+        logger.info('⏭️ MQTT: Duplicate live data detected, skipping', {
+          deviceId: normalized.deviceId,
+          seq: normalized.seq,
+          ts: normalized.ts,
+        });
+        return null;
+      }
+      throw saveError;
     }
   } catch (error) {
-    logger.err(error, { 
-      where: "MQTT: saveLiveData",
-      deviceId 
-    });
+    logger.err(error, { where: "MQTT: saveLiveData", deviceId });
     return null;
   }
 }
+
 
 /**
  * Process legacy live data format (backward compatibility)
@@ -484,21 +714,20 @@ async function processLegacyLiveData(deviceId, data) {
       return null;
     }
 
-    // Convert strings to numbers first to extract timestampSeconds
     const convertedData = convertStringsToNumbers(data);
-    
-    // Extract device timestamp for duplicate checking
-    const deviceTimestampSeconds = convertedData.TS !== undefined && convertedData.TS !== "" 
-      ? Number(convertedData.TS) 
-      : null;
-    
-    // Check for duplicate: if deviceTimestampSeconds exists, check if we already have this data
-    if (deviceTimestampSeconds !== null && Number.isFinite(deviceTimestampSeconds)) {
+
+    // ✅ Ensure we always have a usable TS for the unique index (deviceId + timestampSeconds)
+    const derivedTS = deriveTimestampSecondsFromAny(convertedData);
+
+    // Use derivedTS for duplicate checking and saving
+    const deviceTimestampSeconds = Number.isFinite(derivedTS) ? derivedTS : null;
+
+    if (deviceTimestampSeconds !== null) {
       const existingRecord = await HealthData.findOne({
         deviceId: deviceId,
         timestampSeconds: deviceTimestampSeconds
       });
-      
+
       if (existingRecord) {
         logger.info(`⏭️ MQTT: Skipping duplicate legacy data`, {
           deviceId,
@@ -509,33 +738,177 @@ async function processLegacyLiveData(deviceId, data) {
       }
     }
 
-    // Update device status
-    await Device.findByIdAndUpdate(device._id, {
-      status: "active",
-      lastActiveAt: new Date(),
-    }, { new: true });
-    
-    // Broadcast device status update
-    try {
-      broadcastDeviceStatus(deviceId, {
-        status: "active",
-        lastActiveAt: new Date()
-      });
-    } catch (wsError) {
-      logger.err(wsError, { where: "MQTT: broadcastDeviceStatus" });
-    }
-    
-    // Remove temperature if present (use T field only)
     const cleanData = { ...convertedData };
     delete cleanData.temperature;
 
-    // Check if data is in abbreviated format
-    const isAbbreviatedFormat = cleanData.hasOwnProperty("TS") || cleanData.hasOwnProperty("T") || 
-                                cleanData.hasOwnProperty("H") || cleanData.hasOwnProperty("HR");
-    
-    if (!isAbbreviatedFormat) {
-      // Legacy format warning removed - just skip silently
+    // ✅ Extract AS (absenceStart) and HV (Human Validity) for bedStatus computation
+    const absenceStart = cleanData.AS !== undefined ? toNum(cleanData.AS) : null;
+    const hv = cleanData.HV !== undefined ? toNum(cleanData.HV) : null;
+
+    // ✅ Compute bedStatus based on AS (absenceStart):
+    // - AS = 0 → Always "Vacant" (regardless of HV)
+    // - AS = 1 → "Occupied" (regardless of HV)
+    // Note: HV value doesn't affect bedStatus when data is coming in.
+    //       HV is only used by watchdog timer (30s timeout) to determine "Waiting" status.
+    //       See server.js watchdog timer for "Waiting" logic (AS=1 AND HV=1 AND no data for 30s).
+    let bedStatus = "Vacant"; // Default
+    if (absenceStart === 0 || absenceStart === "0") {
+      bedStatus = "Vacant";
+    } else if (absenceStart === 1 || absenceStart === "1") {
+      bedStatus = "Occupied";
+    }
+    // Note: If AS is null/undefined, keep previous bedStatus (don't change)
+
+    // ✅ Get previous bedStatus to detect changes
+    const previousBedStatus = device.bedStatus || "Vacant";
+    const bedStatusChanged = previousBedStatus !== bedStatus;
+
+    // ✅ Update device document with bedStatus, absenceStart, HV, isLive, lastActiveAt
+    const updateData = {
+      status: "active",
+      lastActiveAt: new Date(),
+      isLive: true
+    };
+
+    // Only update bedStatus if AS is present (don't overwrite with null)
+    if (absenceStart !== null && absenceStart !== undefined) {
+      updateData.bedStatus = bedStatus;
+      updateData.absenceStart = absenceStart;
+    }
+
+    // Only update HV if present
+    if (hv !== null && hv !== undefined) {
+      updateData.HV = hv;
+    }
+
+    const updatedDevice = await Device.findByIdAndUpdate(
+      device._id,
+      { $set: updateData },
+      { new: true }
+    );
+
+    // ✅ Broadcast device_update if bedStatus changed or device recovered from Waiting
+    if (bedStatusChanged || previousBedStatus === "Waiting") {
+      try {
+        broadcastDeviceUpdate(deviceId, {
+          bedStatus: updatedDevice.bedStatus,
+          absenceStart: updatedDevice.absenceStart,
+          HV: updatedDevice.HV,
+          isLive: updatedDevice.isLive,
+          source: "packet"
+        });
+        logger.info('MQTT: Device update broadcasted (legacy, bedStatus changed)', {
+          deviceId,
+          previousBedStatus,
+          newBedStatus: updatedDevice.bedStatus,
+          absenceStart,
+          HV: hv
+        });
+      } catch (wsError) {
+        logger.err(wsError, { where: "MQTT: broadcastDeviceUpdate (legacy)" });
+      }
+    }
+
+    // Also broadcast legacy device status for backward compatibility
+    try {
+      broadcastDeviceStatus(deviceId, { status: "active", lastActiveAt: new Date() });
+    } catch (wsError) {
+      logger.err(wsError, { where: "MQTT: broadcastDeviceStatus" });
+    }
+
+    // ✅ Inject TS if missing so mapping produces timestampSeconds (prevents null in unique index)
+    if (cleanData.TS === undefined || cleanData.TS === null || cleanData.TS === "") {
+      cleanData.TS = deviceTimestampSeconds;
+    }
+
+    // ✅ Check if this is a short stream (only TS, AS, HV - no human detected)
+    const payloadKeys = Object.keys(cleanData);
+    const isShortStream = payloadKeys.length <= 3 && 
+      payloadKeys.every(key => ['TS', 'AS', 'HV'].includes(key));
+
+    const isAbbreviatedFormat =
+      cleanData.hasOwnProperty("TS") ||
+      cleanData.hasOwnProperty("T") ||
+      cleanData.hasOwnProperty("H") ||
+      cleanData.hasOwnProperty("HR");
+
+    if (!isAbbreviatedFormat && !isShortStream) {
       return null;
+    }
+
+    // ✅ If short stream, save all fields as NULL (legacy format)
+    if (isShortStream) {
+      logger.info('MQTT: Short stream detected (legacy format, no human detected), saving all fields as NULL', {
+        deviceId,
+        payloadKeys,
+        timestampSeconds: deviceTimestampSeconds,
+        timestamp: new Date().toISOString()
+      });
+
+      const now = new Date();
+      const newHealthData = new HealthData();
+      const fieldsToSet = {
+        deviceId: deviceId,
+        timestamp: now,
+        timestampIST: formatTimestampIST(now),
+        timestampSeconds: deviceTimestampSeconds,
+        metrics: {},
+        signals: {},
+        raw: cleanData, // Store original short stream payload in raw
+        // Set all metric fields to null explicitly
+        timestampMilliseconds: null,
+        temperature: null,
+        humidity: null,
+        motionStart: null,
+        motionEndReason: null,
+        absenceStart: cleanData.AS !== undefined ? toNum(cleanData.AS) : null,
+        absenceEnd: null,
+        snoringStart: null,
+        snoringStop: null,
+        snoringFrequency: null,
+        respirationStop: null,
+        respirationStart: null,
+        voltage: null,
+        level: null,
+        status: null,
+        heartRate: null,
+        respiration: null,
+        pm10: null,
+        co2: null,
+        voc: null,
+        etoh: null
+      };
+
+      newHealthData.set(fieldsToSet);
+
+      try {
+        const savedDoc = await newHealthData.save();
+        logger.info(`✅ MQTT: Saved short stream (NULL data, legacy format) to healthdata_new collection`, {
+          deviceId,
+          documentId: savedDoc._id,
+          timestampSeconds: deviceTimestampSeconds || 'N/A'
+        });
+
+        // Broadcast via WebSocket
+        try {
+          broadcastHealthData(deviceId, savedDoc.toObject());
+        } catch (wsError) {
+          logger.err(wsError, { where: "MQTT: broadcastHealthData (short stream legacy)" });
+        }
+
+        return savedDoc;
+      } catch (saveError) {
+        // Handle duplicate key error
+        if (saveError && saveError.code === 11000) {
+          logger.info(`⏭️ MQTT: Duplicate short stream detected (legacy format), skipping save`, {
+            deviceId,
+            timestampSeconds: deviceTimestampSeconds || 'N/A',
+            error: saveError.message
+          });
+          return null;
+        }
+        throw saveError;
+      }
     }
 
     // Map abbreviated fields to full names FIRST
@@ -589,14 +962,34 @@ async function processLegacyLiveData(deviceId, data) {
     // Create and save document - only with mapped fields
     const newHealthData = new HealthData();
     
+    const ts = finalDoc.timestamp ? new Date(finalDoc.timestamp) : new Date();
     // Build fieldsToSet with only valid schema fields
     const fieldsToSet = {
       deviceId: finalDoc.deviceId,
-      timestamp: finalDoc.timestamp,
+      timestamp: ts,
+      timestampIST: formatTimestampIST(ts),
       metrics: finalDoc.metrics || {},
       signals: finalDoc.signals || {},
       raw: Object.keys(finalDoc.raw || {}).length > 0 ? finalDoc.raw : {} // Only extra fields
     };
+
+    // ✅ CRITICAL: Handle heartRate gaps (HV=0 only, NOT AS) for legacy data
+    // Rule: Heart rate validity depends ONLY on HV (Heart Validity), not AS (Absence Start)
+    // AS = Human presence (1 = present, 0 = absent) - used for bed status only
+    // HV = Heart rate validity (1 = valid, 0 = invalid/no heart rate)
+    // If HV=0 OR HR=0, save heartRate = null (gap indicator)
+    // Check original cleanData for HV field (before mapping)
+    const hvValue = cleanData.HV !== undefined ? Number(cleanData.HV) : undefined;
+    const hrValue = mappedData.heartRate !== undefined ? Number(mappedData.heartRate) : undefined;
+    
+    // If HV=0 or HR=0, set heartRate to null (gap)
+    // NOTE: AS is NOT checked - heart rate works independently of human presence
+    if ((hvValue === 0) || (hrValue === 0) || (hrValue === null)) {
+      // Explicitly set heartRate to null for gaps
+      fieldsToSet.heartRate = null;
+      // Remove heartRate from finalDoc so it doesn't get overwritten
+      delete finalDoc.heartRate;
+    }
 
     // Add all valid mapped schema fields
     validSchemaFields.forEach(field => {
@@ -631,18 +1024,10 @@ async function processLegacyLiveData(deviceId, data) {
       });
       
       // Broadcast via WebSocket
+      // Frontend now handles graph aggregation from raw health_data_update events
+      // No need to send zoom-specific graph updates - reduces latency and complexity
       try {
         broadcastHealthData(deviceId, savedDoc.toObject());
-        
-        // If heart rate data exists, also broadcast graph update (default zoom level 0 = 10m)
-        if (savedDoc.heartRate || savedDoc.hr || savedDoc.bpm) {
-          // Use setImmediate to avoid blocking the save operation
-          setImmediate(() => {
-            broadcastHeartRateGraphUpdate(deviceId, 0).catch((err) => {
-              logger.err(err, { where: "MQTT: broadcastHeartRateGraphUpdate" });
-            });
-          });
-        }
       } catch (wsError) {
         logger.err(wsError, { where: "MQTT: broadcastHealthData" });
       }
@@ -650,7 +1035,7 @@ async function processLegacyLiveData(deviceId, data) {
       return savedDoc;
     } catch (saveError) {
       // Handle duplicate key error (race condition - another process saved same data)
-      if (saveError.code === 11000 || saveError.name === 'MongoServerError') {
+      if (saveError && saveError.code === 11000) {
         logger.info(`⏭️ MQTT: Duplicate detected (race condition), skipping save`, {
           deviceId,
           timestampSeconds: deviceTimestampSeconds || 'N/A',
@@ -662,10 +1047,7 @@ async function processLegacyLiveData(deviceId, data) {
     }
 
   } catch (error) {
-    logger.err(error, { 
-      where: "MQTT: processLegacyLiveData",
-      deviceId 
-    });
+    logger.err(error, { where: "MQTT: processLegacyLiveData", deviceId });
     return null;
   }
 }
@@ -676,52 +1058,47 @@ async function processLegacyLiveData(deviceId, data) {
  */
 async function processAndSaveHealthData(deviceId, data) {
   try {
-    // STEP 1: Normalize payload (MANDATORY - before any business logic)
     const normalized = normalizePayload(data);
-    if (!normalized) {
-      // Invalid payload - skip silently (no warning for new stream format)
-      return;
-    }
+    if (!normalized) return;
 
-    // Use deviceId from normalized payload if available, otherwise use topic deviceId
     const finalDeviceId = normalized.deviceId || deviceId;
 
-    // STEP 2: Detect stream type
+    // Ensure we use ONE deviceId everywhere (dedupe + insert) so uniqueness is truly
+    // (deviceId, seq, ts). This also avoids false cross-device duplicates if the topic
+    // deviceId and payload device_id ever disagree.
+    normalized.deviceId = finalDeviceId;
+
     const streamType = detectStreamType(normalized.payload);
-    
-    if (streamType === 'INVALID') {
-      // Invalid stream type - skip silently
+    if (streamType === "INVALID") {
+      // ✅ Make this visible while debugging
+      logger.warn("MQTT: Stream type INVALID (skipping)", {
+        deviceId: finalDeviceId,
+        payloadKeys: normalized.payload && typeof normalized.payload === "object" ? Object.keys(normalized.payload) : typeof normalized.payload,
+      });
       return;
     }
 
-    // STEP 3: Check for duplicates using deviceId + seq + ts
     if (normalized.seq !== undefined && normalized.ts !== undefined) {
       const isDuplicate = await checkDuplicate(finalDeviceId, normalized.seq, normalized.ts, streamType);
       if (isDuplicate) {
-        logger.info('⏭️ MQTT: Skipping duplicate data', {
+        logger.info("⏭️ MQTT: Skipping duplicate data", {
           deviceId: finalDeviceId,
           seq: normalized.seq,
           ts: normalized.ts,
-          streamType
+          streamType,
         });
-        return; // Skip duplicate
+        return;
       }
     }
 
-    // STEP 4: Route to appropriate collection based on stream type
-    if (streamType === '180S') {
-      // Save to healthdata_180s collection (NO WebSocket broadcast)
+    if (streamType === "180S") {
       await save180sData(normalized, finalDeviceId);
-    } else if (streamType === 'LIVE') {
-      // Save to existing live collection (WITH WebSocket broadcast)
-      await saveLiveData(normalized, finalDeviceId, data);
+    } else if (streamType === "LIVE") {
+      // ✅ IMPORTANT: pass the unwrapped payload to legacy path
+      await saveLiveData(normalized, finalDeviceId, normalized.payload);
     }
-
   } catch (error) {
-    logger.err(error, { 
-      where: "MQTT: processAndSaveHealthData",
-      deviceId 
-    });
+    logger.err(error, { where: "MQTT: processAndSaveHealthData", deviceId });
   }
 }
 
@@ -784,28 +1161,43 @@ function initializeMQTT() {
   });
 
   // Message event handler
-  mqttClient.on('message', (topic, message) => {
+  mqttClient.on('message', async (topic, message) => {
     try {
-      // Extract device ID from topic (device/{deviceId}/data)
       const topicParts = topic.split('/');
       if (topicParts.length < 3) {
         logger.warn('Invalid MQTT topic format', { topic });
         return;
       }
-      
+
       const deviceId = topicParts[1];
-      
-      // Buffer message chunks and get complete JSON messages
+
       const completeMessages = bufferMessage(deviceId, message);
-      
-      // Process each complete message
+
+      // ✅ Process sequentially to reduce race-condition duplicates
       for (const jsonStr of completeMessages) {
         try {
           const data = JSON.parse(jsonStr);
           logger.info('📨 MQTT: Received message', { deviceId, topic });
-          
-          // Process and save to database
-          processAndSaveHealthData(deviceId, data);
+
+          await processAndSaveHealthData(deviceId, data);
+
+          // ✅ Publish ACK to device/{device_id}/data/ack so device can confirm receipt
+          const seq = data.seq !== undefined ? Number(data.seq) : undefined;
+          const ackTopic = `device/${deviceId}/data/ack`;
+          const ackPayload = JSON.stringify({
+            status: 'received',
+            last_seq: seq,
+            server_time: new Date().toISOString()
+          });
+          if (mqttClient && mqttClient.connected) {
+            mqttClient.publish(ackTopic, ackPayload, { qos: 0 }, (err) => {
+              if (err) {
+                logger.err(err, { where: 'MQTT: ACK publish failed', deviceId, ackTopic });
+              } else {
+                logger.info('✅ MQTT: ACK sent', { deviceId, ackTopic, last_seq: seq });
+              }
+            });
+          }
         } catch (parseError) {
           logger.warn('Failed to parse MQTT message as JSON', {
             deviceId,

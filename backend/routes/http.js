@@ -5,6 +5,7 @@ const SleepData = require("../models/SleepData");
 const Device = require("../models/Device");
 const deviceApiKeyMiddleware = require("../middleware/deviceApiKeyMiddleware");
 const { broadcastHealthData, broadcastDeviceStatus } = require("../services/websocketService");
+const { formatTimestampIST } = require("../utils/timezoneHelper");
 
 dotenv.config();
 
@@ -268,10 +269,12 @@ router.post("/ingest", deviceApiKeyMiddleware, async (req, res) => {
       const cleanData = { ...convertedData };
       delete cleanData.temperature;
       
+      const now = new Date();
       // Base document - only essential fields, no mapped fields
       const base = {
         deviceId,
-        timestamp: new Date(),
+        timestamp: now,
+        timestampIST: formatTimestampIST(now),
         metrics: {
           ...(data.metrics || {})
         },
@@ -344,6 +347,7 @@ router.post("/ingest", deviceApiKeyMiddleware, async (req, res) => {
       const finalDoc = {
         deviceId: base.deviceId,
         timestamp: base.timestamp,
+        timestampIST: base.timestampIST,
         metrics: { ...base.metrics, ...mergedMetrics },
         signals: { ...base.signals, ...mergedSignals },
         raw: finalRaw
@@ -368,6 +372,7 @@ router.post("/ingest", deviceApiKeyMiddleware, async (req, res) => {
       const fieldsToSet = {
         deviceId: finalDoc.deviceId,
         timestamp: finalDoc.timestamp,
+        timestampIST: finalDoc.timestampIST || formatTimestampIST(finalDoc.timestamp),
         metrics: finalDoc.metrics || {},
         signals: finalDoc.signals || {},
         raw: finalDoc.raw || {}

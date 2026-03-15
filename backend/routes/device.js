@@ -8,22 +8,67 @@ const DevicePrefix = require('../models/DevicePrefix');
 const Profile = require("../models/Profile");
 const { logger } = require("../utils/logger");
 const { getIO } = require("../services/websocketService");
+const { sendCaretakerShareNotification } = require("../utils/mailer");
 const router = express.Router();
 const ID_RX = /^\d{4}-[0-9A-F]{12}$/i;; // 4 digits 12 hex chars
 const pad5 = (n) => String(n).padStart(5, '0');
 const deviceController= require('../controllers/deviceManagementController');
 
+/**
+ * Generate default device name (Dozemate_1, Dozemate_2, etc.)
+ * @param {string} userId - User ID to count devices for
+ * @param {string} excludeDeviceId - Optional device ID to exclude from count (for regenerating name)
+ * @returns {Promise<string>} Default device name
+ */
+async function generateDefaultDeviceName(userId) {
+  try {
+    // Find all devices owned by this user
+    const devices = await Device.find({ userId: new mongoose.Types.ObjectId(userId) }).select("customName defaultName").lean();
+    
+    // Set to track used indices
+    const usedIndices = new Set();
+    const nameRegex = /Dozemate_(\d+)/i;
+
+    devices.forEach(d => {
+      // Check defaultName
+      if (d.defaultName) {
+        const match = d.defaultName.match(nameRegex);
+        if (match) usedIndices.add(parseInt(match[1], 10));
+      }
+      // Check customName (to avoid clashing if user manually named something "Dozemate_X")
+      if (d.customName) {
+        const match = d.customName.match(nameRegex);
+        if (match) usedIndices.add(parseInt(match[1], 10));
+      }
+    });
+
+    // Find the first available index starting from 1
+    let nextIndex = 1;
+    while (usedIndices.has(nextIndex)) {
+      nextIndex++;
+    }
+
+    return `Dozemate_${nextIndex}`;
+  } catch (error) {
+    console.error('Error generating default device name:', error);
+    return `Dozemate_${Date.now()}`;
+  }
+}
+
 // --- local handlers so we don't need another controller import ---
+// Allow access if owner or caretaker (sharedWith)
 async function getByDeviceId(req, res) {
   try {
-    const device = await Device.findOne({ 
-      deviceId: req.params.deviceId,
-      userId: req.user.userId 
-    });
+    const device = await Device.findOne({ deviceId: req.params.deviceId });
     if (!device) {
-      return res.status(403).json({ 
-        message: 'Device not found or access denied' 
-      });
+      return res.status(404).json({ message: 'Device not found' });
+    }
+    const uid = req.user.userId?.toString();
+    const isOwner = device.userId && device.userId.toString() === uid;
+    const isCaretaker = Array.isArray(device.sharedWith) &&
+      device.sharedWith.some((e) => e.userId && e.userId.toString() === uid);
+    if (!isOwner && !isCaretaker) {
+      return res.status(403).json({ message: 'Device not found or access denied' });
     }
     res.json({ data: { device } });
   } catch (e) {
@@ -36,20 +81,21 @@ async function validateDeviceId(req, res) {
     const { deviceId } = req.query;
     if (!deviceId) return res.status(400).json({ ok: false, message: 'deviceId required' });
 
-    // Check ownership - only return device if it belongs to current user
-    const d = await Device.findOne({ 
-      deviceId,
-      userId: req.user.userId 
-    });
-    
-    // If device exists but doesn't belong to user, return exists:false for security
-    const deviceExists = await Device.findOne({ deviceId });
-    
+    const d = await Device.findOne({ deviceId });
+    if (!d) {
+      return res.json({ ok: true, exists: false, assigned: false, device: null });
+    }
+    const uid = req.user.userId?.toString();
+    const isOwner = d.userId && d.userId.toString() === uid;
+    const isCaretaker = Array.isArray(d.sharedWith) &&
+      d.sharedWith.some((e) => e.userId && e.userId.toString() === uid);
+    const hasAccess = isOwner || isCaretaker;
+
     res.json({
       ok: true,
-      exists: !!d, // Only true if device exists AND belongs to user
-      assigned: !!d?.userId,
-      device: d || null // Only return device if user owns it
+      exists: !!hasAccess,
+      assigned: !!d.userId,
+      device: hasAccess ? d : null
     });
   } catch (e) {
     res.status(500).json({ ok: false, message: e.message });
@@ -118,6 +164,16 @@ router.post("/add", authMiddleware, async (req, res) => {
       payload.manufacturer = manufacturer.trim();
     }
 
+    // Generate default name if customName is not provided in payload
+    if (!payload.customName) {
+      const defaultName = await generateDefaultDeviceName(req.user.userId);
+      payload.defaultName = defaultName;
+      payload.customName = defaultName;
+    } else {
+      // If customName is provided, we still need a default slot name
+      payload.defaultName = await generateDefaultDeviceName(req.user.userId);
+    }
+
     console.log(">>> Creating device with payload:", payload);
     const [device] = await Device.create([payload]);
     console.log(">>> Device created:", device._id, "deviceId:", device.deviceId, "status:", device.status);
@@ -138,6 +194,10 @@ router.post("/add", authMiddleware, async (req, res) => {
       console.log(">>> Before push, user.devices:", user.devices);
 
       user.devices.push(device._id);
+      if (!user.ownedDevices) user.ownedDevices = [];
+      if (!user.ownedDevices.includes(device.deviceId)) {
+        user.ownedDevices.push(device.deviceId);
+      }
       console.log(">>> After push, user.devices:", user.devices);
 
       if (!user.activeDevice && device.status === "active") {
@@ -435,39 +495,50 @@ router.get("/profiles/:profileId/active-device", authMiddleware, async (req, res
   }
 });
 
-// GET /devices/user - Fetch devices assigned to logged-in user
+// GET /devices/user - Fetch owned + shared devices for logged-in user
 router.get("/user", authMiddleware, async (req, res) => {
   try {
     const user = await User.findById(req.user.userId).lean();
     if (!user) return res.status(404).json({ message: "User not found" });
 
-    // fetch all devices that belong to this user
-    const devices = await Device.find(
-      { userId: req.user.userId },
-      "deviceId name deviceType manufacturer firmwareVersion location status _id customName"
+    // Owned: by userId (owner) or by user.ownedDevices if set
+    let ownedIds = user.ownedDevices && user.ownedDevices.length
+      ? user.ownedDevices
+      : (await Device.find({ userId: req.user.userId }).select("deviceId").lean()).map((d) => d.deviceId);
+    const ownedDevices = await Device.find(
+      { deviceId: { $in: ownedIds } },
+      "deviceId name deviceType manufacturer firmwareVersion location status _id customName defaultName sharedWith bleMac"
     ).lean();
+    const sharedIds = user.sharedDevices || [];
+    const sharedDevicesRaw = sharedIds.length
+      ? await Device.find(
+          { deviceId: { $in: sharedIds } },
+          "deviceId name deviceType manufacturer firmwareVersion location status _id customName defaultName bleMac"
+        ).lean()
+      : [];
+    const sharedDevices = sharedDevicesRaw.map((d) => ({ ...d, isShared: true }));
 
-    // Map device names from user's deviceNames Map (for backward compatibility)
-    // Mongoose Map is converted to object when using .lean(), so we need to handle both Map and Object
     let deviceNamesMap = {};
     if (user.deviceNames) {
-      if (user.deviceNames instanceof Map) {
-        deviceNamesMap = Object.fromEntries(user.deviceNames);
-      } else {
-        deviceNamesMap = user.deviceNames;
-      }
+      deviceNamesMap = user.deviceNames instanceof Map ? Object.fromEntries(user.deviceNames) : user.deviceNames;
     }
-    
-    // Priority: Device.customName > User.deviceNames > null
-    const devicesWithNames = devices.map(device => ({
-      ...device,
-      customName: device.customName || deviceNamesMap[device.deviceId] || null
-    }));
+    const withNames = (list) =>
+      list.map((device) => ({
+        ...device,
+        customName: device.customName || deviceNamesMap[device.deviceId] || null
+      }));
+    const ownedWithNames = withNames(ownedDevices);
+    const sharedWithNames = withNames(sharedDevices);
 
-    console.log("📋 Returning devices for user:", req.user.userId, devices.map(d => d.deviceId));
+    // Backward compat: single "devices" list = owned first, then shared
+    const devices = [...ownedWithNames, ...sharedWithNames];
+
+    console.log("📋 Returning devices for user:", req.user.userId, "owned:", ownedWithNames.length, "shared:", sharedWithNames.length);
 
     res.json({
-      devices: devicesWithNames,
+      devices,
+      ownedDevices: ownedWithNames,
+      sharedDevices: sharedWithNames,
       activeDevice: user.activeDevice,
       deviceNames: deviceNamesMap
     });
@@ -477,7 +548,130 @@ router.get("/user", authMiddleware, async (req, res) => {
   }
 });
 
-// PATCH /devices/rename/:deviceId - Update device custom name for current user
+// POST /devices/share - Owner shares device with caretaker (by email)
+router.post("/share", authMiddleware, async (req, res) => {
+  try {
+    const { email, deviceId } = req.body;
+    if (!email || !deviceId) {
+      return res.status(400).json({ message: "email and deviceId required" });
+    }
+    const emailStr = String(email).trim().toLowerCase();
+    const deviceIdNorm = String(deviceId).trim().toUpperCase();
+
+    const device = await Device.findOne({ deviceId: deviceIdNorm });
+    if (!device) return res.status(404).json({ message: "Device not found" });
+    if (device.userId.toString() !== req.user.userId.toString()) {
+      return res.status(403).json({ message: "Only the device owner can share it" });
+    }
+
+    const caretaker = await User.findOne({ email: emailStr }).select("_id email").lean();
+    if (!caretaker) {
+      return res.status(404).json({ message: "No user found with that email. They must register first." });
+    }
+    if (caretaker._id.toString() === req.user.userId.toString()) {
+      return res.status(400).json({ message: "You cannot share a device with yourself" });
+    }
+
+    const alreadyShared = device.sharedWith && device.sharedWith.some(
+      (e) => e.userId && e.userId.toString() === caretaker._id.toString()
+    );
+    if (alreadyShared) {
+      return res.status(409).json({ message: "Device is already shared with this user" });
+    }
+    const caretakerHas = (await User.findById(caretaker._id).select("sharedDevices").lean())?.sharedDevices || [];
+    if (caretakerHas.includes(deviceIdNorm)) {
+      return res.status(409).json({ message: "Device is already shared with this user" });
+    }
+
+    device.sharedWith = device.sharedWith || [];
+    device.sharedWith.push({ userId: caretaker._id, email: emailStr });
+    await device.save();
+
+    await User.findByIdAndUpdate(caretaker._id, {
+      $addToSet: { sharedDevices: deviceIdNorm }
+    });
+
+    // Send email to caretaker with who shared and device details
+    try {
+      const owner = await User.findById(req.user.userId).select("name email").lean();
+      const ownerName = owner?.name || null;
+      const ownerEmail = owner?.email || null;
+      const deviceName = device.customName || device.deviceId;
+      await sendCaretakerShareNotification({
+        to: emailStr,
+        ownerName,
+        ownerEmail,
+        deviceName,
+        deviceId: deviceIdNorm,
+      });
+    } catch (mailErr) {
+      logger.error?.(mailErr, { where: "caretaker share email", to: emailStr });
+      // Do not fail the request; sharing already succeeded
+    }
+
+    return res.status(200).json({ message: "Device shared successfully" });
+  } catch (e) {
+    console.error("Share device error:", e);
+    return res.status(500).json({ message: e.message || "Server error" });
+  }
+});
+
+// POST /devices/remove-shared - Caretaker removes device from their own account
+router.post("/remove-shared", authMiddleware, async (req, res) => {
+  try {
+    const { deviceId } = req.body;
+    if (!deviceId) return res.status(400).json({ message: "deviceId required" });
+    const deviceIdNorm = String(deviceId).trim().toUpperCase();
+    const device = await Device.findOne({ deviceId: deviceIdNorm });
+    if (!device) return res.status(404).json({ message: "Device not found" });
+
+    const uid = req.user.userId;
+    const inShared = device.sharedWith && device.sharedWith.some(
+      (e) => e.userId && e.userId.toString() === uid.toString()
+    );
+    if (!inShared) {
+      return res.status(403).json({ message: "You do not have shared access to this device" });
+    }
+
+    await Device.updateOne(
+      { deviceId: deviceIdNorm },
+      { $pull: { sharedWith: { userId: uid } } }
+    );
+    await User.findByIdAndUpdate(uid, { $pull: { sharedDevices: deviceIdNorm } });
+    return res.status(200).json({ message: "Device removed from your account" });
+  } catch (e) {
+    console.error("Remove shared error:", e);
+    return res.status(500).json({ message: e.message || "Server error" });
+  }
+});
+
+// POST /devices/remove-caretaker - Owner removes a caretaker from device
+router.post("/remove-caretaker", authMiddleware, async (req, res) => {
+  try {
+    const { deviceId, caretakerId } = req.body;
+    if (!deviceId || !caretakerId) {
+      return res.status(400).json({ message: "deviceId and caretakerId required" });
+    }
+    const deviceIdNorm = String(deviceId).trim().toUpperCase();
+    const device = await Device.findOne({ deviceId: deviceIdNorm });
+    if (!device) return res.status(404).json({ message: "Device not found" });
+    if (device.userId.toString() !== req.user.userId.toString()) {
+      return res.status(403).json({ message: "Only the device owner can remove caretakers" });
+    }
+
+    await Device.updateOne(
+      { deviceId: deviceIdNorm },
+      { $pull: { sharedWith: { userId: caretakerId } } }
+    );
+    await User.findByIdAndUpdate(caretakerId, { $pull: { sharedDevices: deviceIdNorm } });
+    return res.status(200).json({ message: "Caretaker removed" });
+  } catch (e) {
+    console.error("Remove caretaker error:", e);
+    return res.status(500).json({ message: e.message || "Server error" });
+  }
+});
+
+// PATCH /devices/rename/:deviceId - Owner only: update device custom name
 router.patch("/rename/:deviceId", authMiddleware, async (req, res) => {
   try {
     const { deviceId } = req.params;
@@ -491,10 +685,13 @@ router.patch("/rename/:deviceId", authMiddleware, async (req, res) => {
 
     const normalizedDeviceId = deviceId.trim().toUpperCase();
 
-    // Check if device belongs to user
-    const device = await Device.findOne({ deviceId: normalizedDeviceId, userId });
+    const device = await Device.findOne({ deviceId: normalizedDeviceId });
     if (!device) {
-      return res.status(404).json({ message: "Device not found or does not belong to this user" });
+      return res.status(404).json({ message: "Device not found" });
+    }
+    // Only owner can rename (caretakers read-only)
+    if (device.userId.toString() !== userId.toString()) {
+      return res.status(403).json({ message: "Only the device owner can rename it" });
     }
 
     // Validate customName (optional, but if provided must be non-empty string)
@@ -502,16 +699,18 @@ router.patch("/rename/:deviceId", authMiddleware, async (req, res) => {
     if (customName !== undefined && customName !== null) {
       const trimmedName = String(customName).trim();
       if (trimmedName.length === 0) {
-        // Remove the custom name if empty string
+        // If empty string, clear custom name (UI should fallback to defaultName)
         device.customName = null;
+        updatedName = device.defaultName; // For the response
       } else {
         // Set the custom name (max 50 characters)
         device.customName = trimmedName.substring(0, 50);
         updatedName = device.customName;
       }
     } else {
-      // Remove custom name if null/undefined
+      // If null/undefined, clear custom name
       device.customName = null;
+      updatedName = device.defaultName;
     }
 
     // Save to Device collection
@@ -552,7 +751,7 @@ router.patch("/rename/:deviceId", authMiddleware, async (req, res) => {
 // Called automatically when device connects to WiFi
 router.post("/auto-register", authMiddleware, async (req, res) => {
   try {
-    const { serialNumber } = req.body;
+    const { serialNumber, bleMac } = req.body;
     const currentUserId = req.user.userId;
 
     // Validate serial number
@@ -564,6 +763,9 @@ router.post("/auto-register", authMiddleware, async (req, res) => {
     }
 
     const deviceId = serialNumber.trim().toUpperCase();
+    const normalizedBleMac = (bleMac && typeof bleMac === 'string')
+      ? bleMac.replace(/[:\-]/g, '').toUpperCase().slice(-12)
+      : null;
 
     // Find device by deviceId (serialNumber)
     let device = await Device.findOne({ deviceId });
@@ -581,13 +783,17 @@ router.post("/auto-register", authMiddleware, async (req, res) => {
         // Device is registered to another user - transfer ownership
         wasReassigned = true;
         
-        // Remove device from previous user's devices array
+        // Remove device from previous user's devices array and ownedDevices
         const previousUser = await User.findById(previousUserId);
         if (previousUser) {
           previousUser.devices = previousUser.devices.filter(
             d => d.toString() !== device._id.toString()
           );
-          // If this was the active device, clear it
+          if (previousUser.ownedDevices) {
+            previousUser.ownedDevices = previousUser.ownedDevices.filter(
+              id => id !== device.deviceId
+            );
+          }
           if (previousUser.activeDevice && 
               previousUser.activeDevice.toString() === device._id.toString()) {
             previousUser.activeDevice = null;
@@ -602,6 +808,17 @@ router.post("/auto-register", authMiddleware, async (req, res) => {
       device.wifiStatus = "CONNECTED";
       device.wifiConnectedAt = now;
       device.lastActiveAt = now;
+      if (normalizedBleMac) device.bleMac = normalizedBleMac;
+
+      // Set default name if customName is not set
+      if (!device.defaultName) {
+        const defaultName = await generateDefaultDeviceName(currentUserId);
+        device.defaultName = defaultName;
+        if (!device.customName) {
+          device.customName = defaultName;
+        }
+      }
+      
       await device.save();
 
       // ✅ WebSocket cleanup and audit logging for ownership transfer
@@ -656,6 +873,9 @@ router.post("/auto-register", authMiddleware, async (req, res) => {
       const deviceType = deviceId.substring(0, 2) || "01";
       const manufacturer = "02"; // Default manufacturer, adjust as needed
 
+      // Generate default name if customName is not set
+      const defaultName = await generateDefaultDeviceName(currentUserId);
+
       device = await Device.create({
         deviceId,
         deviceType,
@@ -669,7 +889,10 @@ router.post("/auto-register", authMiddleware, async (req, res) => {
         lastActiveAt: now,
         createdAt: now,
         validity: new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000), // 1 year from now
-        profileVersion: 1
+        profileVersion: 1,
+        defaultName: defaultName, // Set permanent slot name
+        customName: defaultName,  // Initial custom name is the same as default
+        bleMac: normalizedBleMac || undefined
       });
 
       // ✅ Audit log: Device ownership assigned (new device)
@@ -691,6 +914,10 @@ router.post("/auto-register", authMiddleware, async (req, res) => {
       
       if (!deviceIdInArray) {
         currentUser.devices.push(device._id);
+      }
+      if (!currentUser.ownedDevices) currentUser.ownedDevices = [];
+      if (!currentUser.ownedDevices.includes(device.deviceId)) {
+        currentUser.ownedDevices.push(device.deviceId);
       }
 
       // Set as active device if user doesn't have one
@@ -734,7 +961,8 @@ router.post("/auto-register", authMiddleware, async (req, res) => {
         userId: device.userId,
         status: device.status,
         wifiStatus: device.wifiStatus,
-        wifiConnectedAt: device.wifiConnectedAt
+        wifiConnectedAt: device.wifiConnectedAt,
+        bleMac: device.bleMac
       },
       wasReassigned
     });
