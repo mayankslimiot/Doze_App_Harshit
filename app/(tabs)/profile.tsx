@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, StatusBar, Alert, TextInput, Image, Modal } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, StatusBar, Alert, TextInput, Image, Modal, Platform, Pressable } from 'react-native';
 import { BlurView } from 'expo-blur';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '@/contexts/AuthContext';
@@ -10,8 +11,6 @@ import * as ImagePicker from 'expo-image-picker';
 import { apiUrl } from '@/services/api';
 import { HealthGauge } from '@/components/HealthGauge';
 import {
-  parseHeightToInches,
-  heightToMeters,
   calculateBMI,
   calculateWaistHeightRatio,
   calculateABSI,
@@ -19,6 +18,8 @@ import {
   getWaistHeightRatioScore,
   getABSIScore,
   calculateOverallBodyIndex,
+  calculateAge,
+  HINTS,
 } from '@/utils/bodyMetrics';
 
 function UnitDropdown({ 
@@ -347,7 +348,8 @@ export default function ProfileScreen() {
       firstName,
       lastName,
       dateOfBirth: p.dateOfBirth || p.dob || '',
-      gender: (p.gender || 'Male') as string,
+      gender: (p.gender || '').toLowerCase() as string,
+      mobile: String(p.mobile || (auth.user as any)?.mobile || ''),
       waist: waistDisplay,
       waistUnit: waistUnitFromServer,
       weight: weightDisplay,
@@ -357,6 +359,53 @@ export default function ProfileScreen() {
       profileImage,
     };
   }, [auth.user]);
+
+  const [isCardExpanded, setIsCardExpanded] = useState(false);
+  const [isEditingDetails, setIsEditingDetails] = useState(false);
+  
+  const formattedName = [initial.firstName, initial.lastName].filter(Boolean).join(' ') || '—';
+  const [editName, setEditName] = useState(formattedName);
+  const [editMobile, setEditMobile] = useState(initial.mobile || '');
+  const [editGender, setEditGender] = useState(initial.gender || '');
+  const [editDob, setEditDob] = useState(initial.dateOfBirth || '');
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [dateObject, setDateObject] = useState(() => new Date());
+  const [sexModalVisible, setSexModalVisible] = useState(false);
+
+  useEffect(() => {
+    setEditName([initial.firstName, initial.lastName].filter(Boolean).join(' ') || '—');
+    setEditMobile(initial.mobile || '');
+    setEditGender(initial.gender || '');
+    setEditDob(initial.dateOfBirth || '');
+    if (initial.dateOfBirth) {
+       const d = new Date(initial.dateOfBirth);
+       if (!isNaN(d.getTime())) setDateObject(d);
+    }
+  }, [initial]);
+
+  const formatDisplayDate = (dString: string) => {
+    if (!dString) return '';
+    const match = dString.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (match) return `${match[3]}-${match[2]}-${match[1]}`;
+    return dString;
+  };
+
+  const handleSaveProfileDetails = async () => {
+    const payload = {
+       name: editName.trim(),
+       mobile: editMobile.trim(),
+       gender: editGender,
+       dateOfBirth: editDob, 
+    };
+    
+    // Auth context's saveProfileToServer handles the PUT request
+    const res = await saveProfileToServer(payload);
+    if(res.success){
+       setIsEditingDetails(false);
+    } else {
+       Alert.alert("Error", res.error || "Failed to save details");
+    }
+  };
 
   const profileImageUri = useMemo(() => {
     if (!initial.profileImage) return null;
@@ -650,12 +699,15 @@ export default function ProfileScreen() {
     const waistInches = waistCm / 2.54; // cm to inches
     const waistM = waistCm / 100; // cm to meters
 
+    // 4. Age: Calculate from DOB
+    const age = calculateAge(initial.dateOfBirth);
+
     // Now calculate metrics with converted values
     const bmi = calculateBMI(weightKg, heightM);
-    const waistHeightRatio = calculateWaistHeightRatio(waistInches, heightInchesValue);
-    const absi = calculateABSI(waistM, bmi, heightM);
+    const waistHeightRatio = calculateWaistHeightRatio(waistM, heightM);
+    const absi = calculateABSI(waistM, weightKg, heightM);
 
-    const bmiScore = getBMIScore(bmi);
+    const bmiScore = getBMIScore(bmi, age, initial.gender);
     const waistHeightScore = getWaistHeightRatioScore(waistHeightRatio, initial.gender);
     const absiScore = getABSIScore(absi);
     const overallScore = calculateOverallBodyIndex(waistHeightScore, bmiScore.score, absiScore);
@@ -697,24 +749,114 @@ export default function ProfileScreen() {
       <ScrollView contentContainerStyle={[styles.scroll, { paddingBottom: 100 }]} showsVerticalScrollIndicator={false}>
 
         {/* Identity compact card */}
-        <BlurView intensity={25} tint="dark" style={styles.identityCard}>
-          <TouchableOpacity 
-            activeOpacity={0.8} 
-            onPress={() => setIsPhotoModalVisible(true)}
-            style={styles.avatarContainer}
-          >
-            {profileImageUri ? (
-              <Image source={{ uri: profileImageUri }} style={styles.avatarImage} />
-            ) : (
-              <View style={styles.avatarInitialsContainer}>
-                <Text style={styles.avatarInitialsText}>{initials}</Text>
-              </View>
+        <BlurView intensity={25} tint="dark" style={[styles.identityCard, isCardExpanded && { flexDirection: 'column', alignItems: 'stretch' }]}>
+            {/* Top row */}
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                <TouchableOpacity 
+                  activeOpacity={0.8} 
+                  onPress={() => isEditingDetails ? null : setIsPhotoModalVisible(true)}
+                  style={styles.avatarContainer}
+                >
+                  {profileImageUri ? (
+                    <Image source={{ uri: profileImageUri }} style={styles.avatarImage} />
+                  ) : (
+                    <View style={styles.avatarInitialsContainer}>
+                      <Text style={styles.avatarInitialsText}>{initials}</Text>
+                    </View>
+                  )}
+                </TouchableOpacity>
+                <View style={{ flex: 1, marginLeft: 12 }}>
+                  {!isEditingDetails ? (
+                    <>
+                      <Text style={styles.identityName}>{formattedName}</Text>
+                      {auth.user?.email ? <Text style={styles.identitySub}>{auth.user.email}</Text> : null}
+                    </>
+                  ) : (
+                    <>
+                      <TextInput 
+                        style={[styles.inputField, { fontSize: 20, fontWeight: 'bold', marginBottom: 4, marginRight: 10 }]} 
+                        value={editName} 
+                        onChangeText={setEditName} 
+                        placeholder="Name"
+                        placeholderTextColor="rgba(255,255,255,0.4)"
+                      />
+                      {auth.user?.email ? <Text style={[styles.identitySub, { opacity: 0.6 }]}>{auth.user.email}</Text> : null}
+                    </>
+                  )}
+                </View>
+                
+                {/* Expand / Edit Actions */}
+                <View style={{ alignItems: 'flex-end', justifyContent: 'center' }}>
+                  {!isEditingDetails ? (
+                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                      {isCardExpanded && (
+                        <TouchableOpacity onPress={() => setIsEditingDetails(true)} style={{ marginRight: 12 }}>
+                          <Ionicons name="pencil" size={20} color="rgba(255,255,255,0.7)" />
+                        </TouchableOpacity>
+                      )}
+                      <TouchableOpacity onPress={() => setIsCardExpanded(!isCardExpanded)} style={{ padding: 4 }}>
+                        <Ionicons name={isCardExpanded ? "chevron-up" : "chevron-down"} size={22} color="rgba(255,255,255,0.7)" />
+                      </TouchableOpacity>
+                    </View>
+                  ) : (
+                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                      <TouchableOpacity onPress={handleSaveProfileDetails} style={{ marginRight: 6 }}>
+                        <Ionicons name="checkmark-circle" size={28} color="#4CAF50" />
+                      </TouchableOpacity>
+                      <TouchableOpacity onPress={() => { setIsEditingDetails(false); setEditName(formattedName); setEditMobile(initial.mobile || ''); setEditGender(initial.gender || ''); setEditDob(initial.dateOfBirth || ''); }}>
+                        <Ionicons name="close-circle" size={28} color="#FF5252" />
+                      </TouchableOpacity>
+                    </View>
+                  )}
+                </View>
+            </View>
+
+            {/* Expanded Content */}
+            {isCardExpanded && (
+               <View style={{ marginTop: 20, borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.1)', paddingTop: 15 }}>
+                  <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 13, marginBottom: 4 }}>Phone Number</Text>
+                  {!isEditingDetails ? (
+                    <Text style={{ color: '#fff', fontSize: 16, marginBottom: 15 }}>{editMobile || '—'}</Text>
+                  ) : (
+                    <TextInput 
+                      style={[styles.inputField, { marginBottom: 15 }]} 
+                      value={editMobile} 
+                      onChangeText={setEditMobile} 
+                      placeholder="Phone Number"
+                      placeholderTextColor="rgba(255,255,255,0.4)"
+                      keyboardType="phone-pad"
+                    />
+                  )}
+
+                  <View style={{ flexDirection: 'row', gap: 15 }}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 13, marginBottom: 4 }}>Date of Birth</Text>
+                        {!isEditingDetails ? (
+                          <Text style={{ color: '#fff', fontSize: 16 }}>{formatDisplayDate(editDob) || '—'}</Text>
+                        ) : (
+                          <TouchableOpacity onPress={() => setShowDatePicker(true)} style={styles.inputField}>
+                            <Text style={{ color: editDob ? '#fff' : 'rgba(255,255,255,0.4)' }}>
+                              {formatDisplayDate(editDob) || 'DD-MM-YYYY'}
+                            </Text>
+                          </TouchableOpacity>
+                        )}
+                      </View>
+
+                      <View style={{ flex: 1 }}>
+                        <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 13, marginBottom: 4 }}>Sex</Text>
+                        {!isEditingDetails ? (
+                          <Text style={{ color: '#fff', fontSize: 16, textTransform: 'capitalize' }}>{editGender || '—'}</Text>
+                        ) : (
+                          <TouchableOpacity onPress={() => setSexModalVisible(true)} style={styles.inputField}>
+                            <Text style={{ color: editGender ? '#fff' : 'rgba(255,255,255,0.4)', textTransform: 'capitalize' }}>
+                              {editGender || 'Select Sex'}
+                            </Text>
+                          </TouchableOpacity>
+                        )}
+                      </View>
+                  </View>
+               </View>
             )}
-          </TouchableOpacity>
-          <View style={{ flex: 1, marginLeft: 12 }}>
-            <Text style={styles.identityName}>{[initial.firstName, initial.lastName].filter(Boolean).join(' ') || '—'}</Text>
-            {auth.user?.email ? <Text style={styles.identitySub}>{auth.user.email}</Text> : null}
-          </View>
         </BlurView>
 
         {/* Photo Management Modal */}
@@ -821,40 +963,125 @@ export default function ProfileScreen() {
               label="Waist Height ratio"
               value={metrics.waistHeightRatio}
               score={metrics.waistHeightScore}
-              onInfoPress={() => showInfo(
-                'Waist Height Ratio',
-                'The ratio of waist circumference to height. Optimal range is 0.4-0.5 for men and 0.35-0.42 for women.'
-              )}
+              onInfoPress={() => showInfo('Waist-to-height ratio', HINTS.WHR)}
             />
             <CalculatedIndexRow
               label="BMI"
               value={metrics.bmi}
               score={metrics.bmiScore}
-              onInfoPress={() => router.push('/health-disclaimer')}
+              onInfoPress={() => showInfo('BMI', HINTS.BMI)}
             />
             <CalculatedIndexRow
               label="ABSI"
               value={metrics.absi}
               score={metrics.absiScore}
-              onInfoPress={() => showInfo(
-                'A Body Shape Index (ABSI)',
-                'ABSI is a measure of body shape that accounts for BMI and height. Lower values generally indicate better health.'
-              )}
+              onInfoPress={() => showInfo('ABSI', HINTS.ABSI)}
             />
             <CalculatedIndexRow
               label="Overall Body Index"
               value={allFieldsFilled ? metrics.overallScore.toFixed(1) : '—'}
               score={metrics.overallScore}
-              onInfoPress={() => showInfo(
-                'Overall Body Index',
-                'A composite score (0-10) calculated from Waist Height Ratio, BMI, and ABSI metrics.'
-              )}
+              onInfoPress={() => showInfo('Overall Body Index', HINTS.OBI)}
             />
           </View>
         </BlurView>
 
         <View style={{ height: 20 }} />
       </ScrollView>
+
+      {/* Floating Modal: Sex selector */}
+      <Modal
+        visible={sexModalVisible}
+        animationType="fade"
+        transparent
+        statusBarTranslucent
+        onRequestClose={() => setSexModalVisible(false)}
+      >
+        <Pressable style={styles.modalBackdrop} onPress={() => setSexModalVisible(false)} />
+        <View style={styles.modalCenter}>
+          <View style={styles.modalCard}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Select Sex</Text>
+              <TouchableOpacity onPress={() => setSexModalVisible(false)}>
+                <Ionicons name="close" size={22} color="#fff" />
+              </TouchableOpacity>
+            </View>
+
+            <TouchableOpacity
+              style={styles.modalItem}
+              onPress={() => { setEditGender(''); setSexModalVisible(false); }}
+            >
+              <Text style={styles.modalItemText}>Select</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.modalItem}
+              onPress={() => { setEditGender('female'); setSexModalVisible(false); }}
+            >
+              <Text style={styles.modalItemText}>Female</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.modalItem}
+              onPress={() => { setEditGender('male'); setSexModalVisible(false); }}
+            >
+              <Text style={styles.modalItemText}>Male</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.modalItem}
+              onPress={() => { setEditGender('other'); setSexModalVisible(false); }}
+            >
+              <Text style={styles.modalItemText}>Other / Undisclosed</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* DatePicker Modals/Views */}
+      {showDatePicker && (
+        Platform.OS === 'ios' ? (
+          <Modal transparent visible={showDatePicker} animationType="slide">
+            <Pressable style={styles.modalBackdrop} onPress={() => setShowDatePicker(false)} />
+            <View style={{ position: 'absolute', bottom: 0, width: '100%', backgroundColor: '#fff', paddingBottom: 30, paddingTop: 10, borderTopRightRadius: 20, borderTopLeftRadius: 20 }}>
+              <View style={{ flexDirection: 'row', justifyContent: 'flex-end', paddingHorizontal: 20, marginBottom: 10 }}>
+                <TouchableOpacity onPress={() => {
+                  const d = dateObject.getDate().toString().padStart(2, '0');
+                  const m = (dateObject.getMonth() + 1).toString().padStart(2, '0');
+                  const y = dateObject.getFullYear();
+                  setEditDob(`${y}-${m}-${d}`);
+                  setShowDatePicker(false);
+                }}>
+                  <Text style={{ color: '#007AFF', fontWeight: 'bold', fontSize: 18 }}>Done</Text>
+                </TouchableOpacity>
+              </View>
+              <DateTimePicker
+                value={dateObject}
+                mode="date"
+                display="spinner"
+                maximumDate={new Date()}
+                onChange={(e, d) => d && setDateObject(d)}
+                textColor="#000"
+              />
+            </View>
+          </Modal>
+        ) : (
+          <DateTimePicker
+            value={dateObject}
+            mode="date"
+            display="default"
+            maximumDate={new Date()}
+            onChange={(event, selectedDate) => {
+              setShowDatePicker(false);
+              if (event.type === 'set' && selectedDate) {
+                setDateObject(selectedDate);
+                const d = selectedDate.getDate().toString().padStart(2, '0');
+                const m = (selectedDate.getMonth() + 1).toString().padStart(2, '0');
+                const y = selectedDate.getFullYear();
+                setEditDob(`${y}-${m}-${d}`);
+              }
+            }}
+          />
+        )
+      )}
+
     </View>
   );
 }
@@ -1121,5 +1348,40 @@ const styles = StyleSheet.create({
   infoIcon: { 
     padding: 4,
   },
+  modalBackdrop: {
+    position: 'absolute', left: 0, right: 0, top: 0, bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.5)'
+  },
+  modalCenter: {
+    position: 'absolute', left: 0, right: 0, top: 0, bottom: 0,
+    justifyContent: 'center', alignItems: 'center', paddingHorizontal: 20
+  },
+  modalCard: {
+    width: '100%',
+    maxWidth: 520,
+    backgroundColor: 'rgba(20,24,60,0.95)',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+    padding: 14,
+  },
+  modalHeader: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8
+  },
+  modalTitle: { color: '#fff', fontSize: 18, fontWeight: '700' },
+  modalItem: {
+    paddingVertical: 12, paddingHorizontal: 8, borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: 'rgba(255,255,255,0.1)'
+  },
+  modalItemText: { color: '#fff', fontSize: 15 },
+  inputField: {
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    color: '#fff',
+    fontSize: 16
+  },
 });
-

@@ -2,6 +2,7 @@ import React from 'react';
 import { View, Text, StyleSheet, Dimensions, TouchableOpacity, StatusBar, FlatList, Animated, Image as RNImage } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Defs, ClipPath, Path, Image as SvgImage, G } from 'react-native-svg';
 import { useAuth } from '@/contexts/AuthContext';
 import { useBoot } from '@/contexts/BootContext';
@@ -53,6 +54,7 @@ export default function OnboardingScreen() {
   const router = useRouter();
   const { auth } = useAuth();
   const { completeOnboarding } = useBoot();
+  const insets = useSafeAreaInsets();
   const [page, setPage] = React.useState(0);
   const ref = React.useRef<FlatList<Slide>>(null);
   const progressAnim = React.useRef(new Animated.Value(0)).current;
@@ -176,7 +178,7 @@ export default function OnboardingScreen() {
       <TouchableOpacity style={styles.ctaBtn} onPress={onNext} activeOpacity={0.9}>
         <Text style={styles.ctaText}>{isLast ? 'Get started' : 'Next'}</Text>
       </TouchableOpacity>
-      <View style={{ height: 18 }} />
+      <View style={{ height: Math.max(18, insets.bottom + 10) }} />
     </View>
   );
 }
@@ -191,7 +193,7 @@ const styles = StyleSheet.create({
   dotFill: { position: 'absolute', left: 0, top: 0, height: DOT_SIZE, backgroundColor: '#C7B9FF', borderRadius: DOT_SIZE / 2 },
   ctaBtn: { marginHorizontal: 20, marginTop: 16, backgroundColor: '#FFFFFF', paddingVertical: 14, borderRadius: 20, alignItems: 'center' },
   ctaText: { color: '#1D244D', fontWeight: '800' },
-  skipWrap: { position: 'absolute', right: 16, top: (StatusBar.currentHeight || 0) + 10, zIndex: 2 },
+  skipWrap: { position: 'absolute', right: 16, top: (StatusBar.currentHeight || 44) + 10, zIndex: 2 },
   skipText: { color: 'rgba(255,255,255,0.85)', fontWeight: '700' },
 });
 

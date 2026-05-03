@@ -1,10 +1,14 @@
 import React from 'react';
-import { View, Text, StyleSheet, StatusBar, ScrollView, Dimensions, TouchableOpacity, Modal, Pressable, Animated, Easing } from 'react-native';
+import { View, Text, StyleSheet, StatusBar, ScrollView, Dimensions, TouchableOpacity, Modal, Pressable, Animated, Easing, ActivityIndicator } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import Svg from 'react-native-svg';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useBluetooth } from '@/contexts/BluetoothProvider';
+import { useDevice } from '@/contexts/DeviceContext';
+import { getHistoricalData, getStressGraph } from '@/services/deviceData';
+import { getSleepSessions } from '@/services/sleepAnalytics';
+import { useRouter } from 'expo-router';
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const RNSvg = require('react-native-svg');
@@ -30,6 +34,11 @@ function genSparklinePoints(widthPx = 120, heightPx = 28, count = 12, min = 0, m
 export default function HistoryScreen() {
   const insets = useSafeAreaInsets();
   const { connectedDevice } = useBluetooth();
+  const { activeDevice } = useDevice();
+  const router = useRouter();
+
+  const [isLoadingData, setIsLoadingData] = React.useState(false);
+  const [availableMetrics, setAvailableMetrics] = React.useState<string[]>([]);
 
   // Filter state
   const [isFilterOpen, setFilterOpen] = React.useState(false);
@@ -73,11 +82,90 @@ export default function HistoryScreen() {
 
   // No glow for time-period changes; only metric selection triggers glow
 
+  // Fetch logic for available metrics
+  React.useEffect(() => {
+    const deviceId = activeDevice?.deviceId || connectedDevice?.id;
+    if (!deviceId) return;
+
+    let isMounted = true;
+    setIsLoadingData(true);
+
+    const apiPeriod = period === '2d' ? '48h' : period === '3d' ? '72h' : period;
+    
+    // Calculate date bounds for sleep sessions API
+    const now = new Date();
+    const startDate = new Date(now);
+    if (period === '24h') startDate.setDate(now.getDate() - 1);
+    else if (period === '2d') startDate.setDate(now.getDate() - 2);
+    else if (period === '3d') startDate.setDate(now.getDate() - 3);
+    else if (period === '7d') startDate.setDate(now.getDate() - 7);
+    else startDate.setDate(now.getDate() - 30);
+
+    Promise.all([
+      getHistoricalData(deviceId, apiPeriod),
+      getSleepSessions(deviceId, startDate, now),
+      getStressGraph(deviceId, startDate, now)
+    ])
+      .then(([res, sleepRes, stressRes]) => {
+        if (!isMounted) return;
+        const foundKeys = new Set<string>();
+        
+        // Process historical data variables
+        if (res.success && res.data && res.data.length > 0) {
+          const keysToCheck = [
+            'temperature', 'humidity', 'iaq', 'eco2', 'tvoc', 'etoh', 'hrv',
+            'heartRate', 'respiration', 'sdnn', 'rmssd', 'lfPower', 'hfPower', 'lfHfRatio',
+            'skinTemp', 'envTemp'
+          ];
+          const keyMap: Record<string, string[]> = {
+            'heartRate': ['heartRate', 'hr'],
+            'respiration': ['respiration', 'resp'],
+            'temperature': ['temperature', 'temp'],
+          };
+
+          for (const item of res.data) {
+            for (const key of keysToCheck) {
+              if (foundKeys.has(key)) continue;
+              const aliases = keyMap[key] || [key];
+              for (const alias of aliases) {
+                if (item[alias] !== undefined && item[alias] !== null && item[alias] !== 0 && item[alias] !== '') {
+                  foundKeys.add(key);
+                  break;
+                }
+              }
+            }
+          }
+        }
+        
+        // Process sleep data
+        if (sleepRes.success && sleepRes.data && sleepRes.data.length > 0) {
+          foundKeys.add('sleep');
+        }
+
+        // Process stress data
+        if (stressRes.success && stressRes.data && stressRes.data.points && stressRes.data.points.length > 0) {
+          foundKeys.add('stress');
+        }
+
+        if (foundKeys.size > 0) {
+          setAvailableMetrics(Array.from(foundKeys));
+        } else {
+          setAvailableMetrics([]);
+        }
+      })
+      .catch((err) => console.error(err))
+      .finally(() => {
+        if (isMounted) setIsLoadingData(false);
+      });
+
+    return () => { isMounted = false; };
+  }, [activeDevice?.deviceId, connectedDevice?.id, period]);
+
   // Metric tiles (same style as Home's Environment Data)
   const baseMetrics = React.useMemo(
     () => [
       { key: 'hr', name: 'Estimated HR', value: '68', unit: 'BPM', icon: '❤️', colors: ['#2B2E57', '#1B1E3D'] as const },
-      { key: 'resp', name: 'Estimated Breathing', value: '14', unit: 'RPM', icon: '🌬️', colors: ['#24425F', '#18253A'] as const },
+      { key: 'resp', name: 'Estimated Respiration', value: '14', unit: 'RPM', icon: '🌬️', colors: ['#24425F', '#18253A'] as const },
       { key: 'temp', name: 'Temperature', value: '36.5', unit: '°C', icon: '🌡️', colors: ['#2B3E56', '#172235'] as const },
       { key: 'hum', name: 'Humidity', value: '45', unit: '%', icon: '💧', colors: ['#2A4A3E', '#153127'] as const },
     ],
@@ -105,8 +193,9 @@ export default function HistoryScreen() {
       { key: 'etoh', label: 'ETOH' },
       { key: 'hrv', label: 'HRV' },
       { key: 'stress', label: 'Stress' },
+      { key: 'sleep', label: 'Sleep' },
       { key: 'heartRate', label: 'Estimated HR' },
-      { key: 'respiration', label: 'Estimated Breathing' },
+      { key: 'respiration', label: 'Estimated Respiration' },
       { key: 'sdnn', label: 'SDNN' },
       { key: 'rmssd', label: 'RMSSD' },
       { key: 'lfPower', label: 'LF Power' },
@@ -129,8 +218,9 @@ export default function HistoryScreen() {
       etoh: { key: 'etoh', name: 'ETOH', value: '--', unit: 'ppb', icon: '🍷', colors: ['#2B2F3F', '#161925'] as const },
       hrv: { key: 'hrv', name: 'HRV', value: '65', unit: 'ms', icon: '💓', colors: ['#2B2E57', '#1B1E3D'] as const },
       stress: { key: 'stress', name: 'Stress', value: 'Moderate', unit: '', icon: '😮‍💨', colors: ['#4A2B2B', '#1E1414'] as const },
+      sleep: { key: 'sleep', name: 'Sleep', value: '0', unit: 'h', icon: '😴', colors: ['#1C1B33', '#111122'] as const },
       heartRate: { key: 'heartRate', name: 'Estimated HR', value: '68', unit: 'BPM', icon: '❤️', colors: ['#2B2E57', '#1B1E3D'] as const },
-      respiration: { key: 'respiration', name: 'Estimated Breathing', value: '14', unit: 'RPM', icon: '🌬️', colors: ['#24425F', '#18253A'] as const },
+      respiration: { key: 'respiration', name: 'Estimated Respiration', value: '14', unit: 'RPM', icon: '🌬️', colors: ['#24425F', '#18253A'] as const },
       sdnn: { key: 'sdnn', name: 'SDNN', value: '42', unit: 'ms', icon: '📈', colors: ['#2B3054', '#161A33'] as const },
       rmssd: { key: 'rmssd', name: 'RMSSD', value: '35', unit: 'ms', icon: '📊', colors: ['#2B3054', '#161A33'] as const },
       lfPower: { key: 'lfPower', name: 'LF Power', value: '1200', unit: 'ms²', icon: '🔵', colors: ['#1C2E4A', '#0E1625'] as const },
@@ -153,6 +243,8 @@ export default function HistoryScreen() {
     metricTiles.skinTemp,
     metricTiles.envTemp,
     metricTiles.hrv,
+    metricTiles.stress,
+    metricTiles.sleep,
     metricTiles.sdnn,
     metricTiles.rmssd,
     metricTiles.lfPower,
@@ -169,15 +261,27 @@ export default function HistoryScreen() {
     return map;
   }, [allMetrics]);
 
-  const deviceLabel = connectedDevice?.name || connectedDevice?.id || 'Device';
+  const deviceLabel = activeDevice?.customName || activeDevice?.defaultName || connectedDevice?.name || activeDevice?.deviceId || connectedDevice?.id || 'Device';
 
-  // Derived: tiles to render based on selected metrics
+  // Derived: tiles to render based on selected metrics and available data
   const tilesToRender = React.useMemo(() => {
-    if (selectedMetrics.length === 0) return allMetrics; // default: show everything
-    return selectedMetrics
-      .map((k) => (metricTiles as any)[k])
-      .filter(Boolean);
-  }, [selectedMetrics, metricTiles, allMetrics]);
+    let baseList = allMetrics;
+    
+    if (availableMetrics.length > 0) {
+      baseList = baseList.filter(m => availableMetrics.includes(m.key));
+    } else {
+      baseList = [];
+    }
+    
+    if (selectedMetrics.length > 0) {
+      return selectedMetrics
+        .map((k) => (metricTiles as any)[k])
+        .filter(Boolean)
+        .filter(m => availableMetrics.includes(m.key));
+    }
+    
+    return baseList;
+  }, [selectedMetrics, metricTiles, allMetrics, availableMetrics]);
 
   const onOpenFilter = () => {
     // initialize pending values from committed values
@@ -214,23 +318,7 @@ export default function HistoryScreen() {
       <View style={[styles.header, { paddingTop: insets.top + 6 }]}> 
         <Text style={styles.headerTitle}>History</Text>
         <View style={styles.headerActions}>
-          {/* Filter Button with glow pulse and active badge */}
-          <Animated.View
-            style={[
-              styles.glowWrap,
-              {
-                opacity: glowAnim,
-                transform: [
-                  { scale: glowAnim.interpolate({ inputRange: [0, 1], outputRange: [1, 1.25] }) },
-                ],
-              },
-            ]}
-            pointerEvents="none"
-          />
-          <TouchableOpacity style={[styles.headerIconBtn, isFilterActive && styles.headerIconActive]} activeOpacity={0.8} onPress={onOpenFilter}>
-            <Ionicons name="filter" size={18} color="#C7B9FF" />
-            {isFilterActive && <View style={styles.activeDot} />}
-          </TouchableOpacity>
+
           <TouchableOpacity style={styles.headerIconBtn} activeOpacity={0.8} onPress={onRefresh}>
             <Ionicons name="refresh" size={18} color="#C7B9FF" />
           </TouchableOpacity>
@@ -241,7 +329,6 @@ export default function HistoryScreen() {
         {/* Control row */}
         <View style={styles.controlsRow}>
           <View style={styles.pill}><Text style={styles.pillText}>Device: {deviceLabel}</Text></View>
-          <View style={styles.pill}><Text style={styles.pillText}>{periodLabel}</Text></View>
         </View>
 
         {/* Quick chips */}
@@ -253,15 +340,16 @@ export default function HistoryScreen() {
           ))}
         </View>
 
-        {/* Summary tiles */}
-        <View style={styles.summaryRow}>
-          <View style={styles.summaryTile}><Text style={styles.summaryTitle}>Avg Est. HR</Text><Text style={styles.summaryValue}>72 bpm</Text></View>
-          <View style={styles.summaryTile}><Text style={styles.summaryTitle}>Sleep Time</Text><Text style={styles.summaryValue}>6h 20m</Text></View>
-          <View style={styles.summaryTile}><Text style={styles.summaryTitle}>Readings</Text><Text style={styles.summaryValue}>124</Text></View>
-        </View>
 
         {/* Metric cards grid (same style as Home Environment Data) */}
-        <View style={styles.envCard}>
+        <View style={[styles.envCard, isLoadingData && { minHeight: 200, justifyContent: 'center' }]}>
+          {isLoadingData ? (
+             <ActivityIndicator color="#7EA6FF" size="large" />
+          ) : tilesToRender.length === 0 ? (
+             <View style={{ padding: 20, alignItems: 'center' }}>
+               <Text style={{ color: 'rgba(255,255,255,0.6)', fontSize: 16 }}>No data recorded for this period.</Text>
+             </View>
+          ) : (
           <View style={styles.envGrid}>
             {(() => {
               const items = tilesToRender;
@@ -274,7 +362,15 @@ export default function HistoryScreen() {
                     const pts = spark.svgPoints.split(' ');
                     const d = pts.length ? `M ${pts[0]} L ${pts.slice(1).join(' L ')}` : '';
                     return (
-                      <View key={m.key} style={styles.envTile}>
+                      <TouchableOpacity 
+                        key={m.key} 
+                        style={styles.envTile}
+                        activeOpacity={0.8}
+                        onPress={() => {
+                          const routeParam = m.key === 'hr' ? 'heartRate' : (m.key === 'resp' ? 'respiration' : m.key);
+                          router.push(`/charts/history-insights?metric=${routeParam}` as any);
+                        }}
+                      >
                         <LinearGradient colors={m.colors} style={styles.envTileBg} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} />
                         <View style={styles.envTileInner}>
                           <View style={styles.envTopRow}>
@@ -284,31 +380,9 @@ export default function HistoryScreen() {
                             <View style={{ flex: 1 }}>
                               <Text style={styles.envName} numberOfLines={1} ellipsizeMode="tail">{m.name}</Text>
                             </View>
-                            <View style={[styles.statusDot, { backgroundColor: '#7EA6FF' }]} />
-                          </View>
-
-                          <View style={styles.envValueRow}>
-                            <Text style={styles.envValueNum}>{m.value}</Text>
-                            <Text style={styles.envUnit}>{m.unit ? ` ${m.unit}` : ''}</Text>
-                          </View>
-
-                          <View style={styles.sparklineWrap}>
-                            <Svg height={28} width={120}>
-                              {!!d && (
-                                <Path
-                                  d={d}
-                                  fill="none"
-                                  stroke="rgba(255,255,255,0.9)"
-                                  strokeWidth={2}
-                                  strokeLinecap="round"
-                                  strokeLinejoin="round"
-                                  opacity={0.95}
-                                />
-                              )}
-                            </Svg>
                           </View>
                         </View>
-                      </View>
+                      </TouchableOpacity>
                     );
                   })}
                   {pair.length === 1 ? <View style={[styles.envTile, styles.emptyTile]} /> : null}
@@ -316,6 +390,7 @@ export default function HistoryScreen() {
               ));
             })()}
           </View>
+          )}
         </View>
       </ScrollView>
 
@@ -402,13 +477,13 @@ const styles = StyleSheet.create({
   summaryTitle: { color: 'rgba(255,255,255,0.8)', fontSize: 12, fontWeight: '700' },
   summaryValue: { color: '#FFFFFF', fontSize: 16, fontWeight: '800', marginTop: 4 },
 
-  envCard: { marginTop: 16, padding: 12, borderRadius: 16, backgroundColor: 'rgba(255,255,255,0.04)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)' },
+  envCard: { marginTop: 16 },
   envGrid: { width: '100%' },
   envRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 12 },
-  envTile: { flex: 1, minHeight: 110, borderRadius: 14, overflow: 'hidden', marginHorizontal: 6, backgroundColor: 'rgba(255,255,255,0.04)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)' },
+  envTile: { flex: 1, minHeight: 60, borderRadius: 14, overflow: 'hidden', marginHorizontal: 6, backgroundColor: 'rgba(255,255,255,0.04)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)' },
   emptyTile: { backgroundColor: 'transparent', borderWidth: 0, opacity: 0 },
   envTileBg: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, opacity: 0.22 },
-  envTileInner: { flex: 1, paddingHorizontal: 12, paddingVertical: 12, justifyContent: 'space-between' },
+  envTileInner: { flex: 1, paddingHorizontal: 10, paddingVertical: 10, justifyContent: 'center' },
   envTopRow: { flexDirection: 'row', alignItems: 'center' },
   envIconWrap: { width: 36, height: 36, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.06)' },
   envIcon: { fontSize: 16 },

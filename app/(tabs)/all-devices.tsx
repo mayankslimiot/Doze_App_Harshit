@@ -507,9 +507,6 @@ export default function AllDevicesScreen() {
                   setEditingName('');
                 }
                 await refreshDevices();
-                if (activeDevice?.deviceId === deviceIdToDelete) {
-                  await setActiveDevice(null);
-                }
               } else {
                 Alert.alert('Error', result.message || 'Failed to remove device');
               }
@@ -526,8 +523,9 @@ export default function AllDevicesScreen() {
   };
 
   // Separate active device from others
+  const currentDevices = devices || [];
   const activeDeviceData = activeDevice ? [activeDevice] : [];
-  const otherDevices = devices.filter(
+  const otherDevices = currentDevices.filter(
     (d) => d.deviceId !== activeDevice?.deviceId
   );
 
@@ -617,7 +615,7 @@ export default function AllDevicesScreen() {
                             )}
                           </View>
                           <Text style={styles.deviceIdSubtext}>
-                            {activeDevice.customName ? activeDevice.deviceId : activeDevice.deviceId}
+                            {activeDevice.customName || activeDevice.defaultName ? activeDevice.deviceId : ''}
                           </Text>
                         </View>
                         <View style={styles.badgeAndDeleteContainer}>
@@ -708,7 +706,7 @@ export default function AllDevicesScreen() {
                                 )}
                               </View>
                               <Text style={styles.deviceIdSubtext}>
-                                {device.customName ? device.deviceId : device.deviceId}
+                                {device.customName || device.defaultName ? device.deviceId : ''}
                               </Text>
                             </View>
                             <View style={styles.badgeAndDeleteContainer}>

@@ -131,7 +131,7 @@ export default function ProvisionCompleteScreen() {
             <View style={styles.infoRow}>
               <Ionicons name="heart" size={24} color="#4CAF50" />
               <View style={styles.infoTextContainer}>
-                <Text style={styles.infoLabel}>Health Monitoring</Text>
+                <Text style={styles.infoLabel}>Wellness Tracking</Text>
                 <Text style={styles.infoValue}>Running</Text>
               </View>
             </View>

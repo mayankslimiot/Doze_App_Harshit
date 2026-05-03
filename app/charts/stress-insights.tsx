@@ -83,7 +83,18 @@ export default function StressInsightsScreen() {
     }, [auth.isLoggedIn, activeDevice?.deviceId, onboardingSeen])
   );
 
-  const [selectedDate, setSelectedDate] = React.useState(new Date());
+  const [selectedDate, setSelectedDate] = React.useState(() => {
+    const now = new Date();
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    // If past 12 PM, we are in the next cycle (D to D+1)
+    if (now.getHours() >= 12) {
+      const tomorrow = new Date(today);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      return tomorrow;
+    }
+    return today;
+  });
   const [isLoading, setIsLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [isDatePickerVisible, setIsDatePickerVisible] = React.useState(false);
@@ -732,12 +743,20 @@ export default function StressInsightsScreen() {
 
   const formattedDate = React.useMemo(() => {
     if (selectedPeriod === 'Day') {
-      return selectedDate.toLocaleDateString('en-US', {
-        weekday: 'short',
-        day: '2-digit',
-        month: 'short',
-        year: 'numeric',
-      });
+      // Show cycle range: e.g. "23 - 24 Apr 2026"
+      const cycleStart = new Date(selectedDate);
+      cycleStart.setDate(cycleStart.getDate() - 1);
+      
+      const startDay = cycleStart.getDate();
+      const startMonth = cycleStart.toLocaleDateString('en-US', { month: 'short' });
+      const endDay = selectedDate.getDate();
+      const endMonth = selectedDate.toLocaleDateString('en-US', { month: 'short' });
+      const year = selectedDate.getFullYear();
+      
+      if (startMonth === endMonth) {
+        return `${startDay} - ${endDay} ${startMonth} ${year}`;
+      }
+      return `${startDay} ${startMonth} - ${endDay} ${endMonth} ${year}`;
     } else if (selectedPeriod === 'Week') {
       const weekStart = getWeekStart(selectedDate);
       const weekEnd = getWeekEnd(selectedDate);
@@ -765,7 +784,20 @@ export default function StressInsightsScreen() {
     setSelectedDate(newDate);
   };
 
+  // Navigate to next period - prevent going to future dates (cycle-aware)
   const goToNext = () => {
+    const now = new Date();
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    
+    let maxCycleDate;
+    if (now.getHours() >= 12) {
+      maxCycleDate = new Date(todayStart);
+      maxCycleDate.setDate(maxCycleDate.getDate() + 1);
+    } else {
+      maxCycleDate = todayStart;
+    }
+
     const newDate = new Date(selectedDate);
     if (selectedPeriod === 'Day') {
       newDate.setDate(newDate.getDate() + 1);
@@ -774,12 +806,24 @@ export default function StressInsightsScreen() {
     } else {
       newDate.setMonth(newDate.getMonth() + 1);
     }
-    setSelectedDate(newDate);
+    // Only update if new date is not in the future
+    if (newDate <= maxCycleDate) {
+      setSelectedDate(newDate);
+    }
   };
 
-  // Reset to today when period changes
+  // Reset to today's cycle when period changes
   React.useEffect(() => {
-    setSelectedDate(new Date());
+    const now = new Date();
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    if (now.getHours() >= 12) {
+      const tomorrow = new Date(today);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      setSelectedDate(tomorrow);
+    } else {
+      setSelectedDate(today);
+    }
   }, [selectedPeriod]);
 
   // Loading state. When no device on Day view, show "No data available" instead of skeleton.
@@ -802,7 +846,7 @@ export default function StressInsightsScreen() {
         <TouchableOpacity onPress={() => router.back()} style={styles.backButton} activeOpacity={0.8}>
           <Ionicons name="arrow-back" size={24} color="#FFFFFF" />
         </TouchableOpacity>
-        <Text style={styles.headerTitle} numberOfLines={1}>Stress Insights</Text>
+        <Text style={styles.headerTitle} numberOfLines={1}>{activeDevice?.customName || activeDevice?.defaultName || 'Stress Insights'}</Text>
         <View style={{ width: 40 }} />
       </View>
 
@@ -1000,6 +1044,13 @@ export default function StressInsightsScreen() {
                     </CartesianChart>
             </View>
 
+              {/* Disclaimer for 12 PM - 12 PM cycle */}
+              <View style={styles.disclaimerContainer}>
+                <Text style={styles.disclaimerText}>
+                  Disclaimer: Our day cycle is 12 noon to 12 noon. For example, Monday data counts from Sunday 12 noon to Monday 12 noon.
+                </Text>
+              </View>
+
           </View>
               )
             ) : selectedPeriod === 'Week' ? (
@@ -1117,6 +1168,13 @@ export default function StressInsightsScreen() {
                       }}
                     </CartesianChart>
                   </View>
+
+              {/* Disclaimer for 12 PM - 12 PM cycle */}
+              <View style={styles.disclaimerContainer}>
+                <Text style={styles.disclaimerText}>
+                  Disclaimer: Our day cycle is 12 noon to 12 noon. For example, Monday data counts from Sunday 12 noon to Monday 12 noon.
+                </Text>
+              </View>
 
                 </View>
               )
@@ -1461,6 +1519,22 @@ const styles = StyleSheet.create({
   hintText: {
     color: 'rgba(255, 255, 255, 0.4)',
     fontSize: 10,
+    fontStyle: 'italic',
+  },
+  disclaimerContainer: {
+    paddingHorizontal: 12,
+    paddingTop: 12,
+    paddingBottom: 4,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,255,255,0.06)',
+    marginTop: 8,
+    width: '100%',
+  },
+  disclaimerText: {
+    color: 'rgba(199,214,255,0.5)',
+    fontSize: 10,
+    lineHeight: 14,
+    textAlign: 'center',
     fontStyle: 'italic',
   },
 });

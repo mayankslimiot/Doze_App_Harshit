@@ -92,12 +92,12 @@ async function saveNotificationState(state: NotificationState): Promise<void> {
 async function ensureAndroidChannel(): Promise<void> {
   if (Platform.OS !== 'android') return;
   await Notifications.setNotificationChannelAsync('stress_alerts', {
-    name: 'Stress Alerts',
+    name: 'Stress Level Notifications',
     importance: Notifications.AndroidImportance.HIGH,
     sound: 'default',
     vibrationPattern: [200, 100, 200, 100, 200],
     lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
-    description: 'Alerts when stress level exceeds or falls below thresholds',
+    description: 'Notifications when stress level exceeds or falls below thresholds',
   });
 }
 
@@ -174,8 +174,8 @@ export async function processStressReading(
       // 2. Cooldown has expired
       if (!state.wasAboveHigh && isCooldownExpired(state.lastHighNotification, settings.cooldownMinutes)) {
         await sendStressNotification(
-          'High Stress Level Alert',
-          `Your stress level is ${Math.round(stressLevel)}, which is above your threshold of ${settings.highThreshold}.`,
+          'Stress Level Update',
+          `Your stress level is ${Math.round(stressLevel)}, which is above your set threshold of ${settings.highThreshold}.`,
           'high'
         );
         
@@ -201,8 +201,8 @@ export async function processStressReading(
       // 2. Cooldown has expired
       if (!state.wasBelowLow && isCooldownExpired(state.lastLowNotification, settings.cooldownMinutes)) {
         await sendStressNotification(
-          'Low Stress Level Alert',
-          `Your stress level is ${Math.round(stressLevel)}, which is below your threshold of ${settings.lowThreshold}.`,
+          'Stress Level Update',
+          `Your stress level is ${Math.round(stressLevel)}, which is below your set threshold of ${settings.lowThreshold}.`,
           'low'
         );
         

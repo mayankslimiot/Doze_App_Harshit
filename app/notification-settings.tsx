@@ -212,7 +212,7 @@ export default function NotificationSettingsScreen() {
         const { status } = await requestNotifications(['alert', 'badge', 'sound']);
         const granted = status === 'granted' || status === 'limited';
         if (!granted) {
-          Alert.alert('Permission required', 'Enable notifications in Settings to receive alerts.');
+          Alert.alert('Permission required', 'Enable notifications in Settings to receive updates.');
           setNotificationsEnabled(false);
           await AsyncStorage.setItem('notifications_enabled', 'false');
           return;
@@ -480,11 +480,11 @@ export default function NotificationSettingsScreen() {
             {/* Heart Rate Notifications - Only show when app notifications are enabled */}
             {notificationsEnabled && (
               <>
-                <SectionHeader label="Heart Rate Alerts" />
+                <SectionHeader label="Heart Rate Trends" />
                 <View style={styles.card}>
                   <Row
                     title="Enable Heart Rate Notifications"
-                    subtitle="Get notified when your heart rate goes above or below your set thresholds"
+                    subtitle="Get notified when your heart rate trend goes above or below your set thresholds"
                     showToggle
                     toggleValue={settings.enabled}
                     onToggle={handleToggleHeartRateNotifications}
@@ -497,7 +497,7 @@ export default function NotificationSettingsScreen() {
                         <View style={styles.rowTextContainer}>
                           <Text style={styles.rowTitle}>High Threshold</Text>
                           <Text style={styles.rowSubtitle}>
-                            Alert when heart rate exceeds this value (BPM)
+                            Notify when heart rate exceeds this value (BPM)
                           </Text>
                         </View>
                         {isEditingHigh ? (
@@ -548,7 +548,7 @@ export default function NotificationSettingsScreen() {
                         <View style={styles.rowTextContainer}>
                           <Text style={styles.rowTitle}>Low Threshold</Text>
                           <Text style={styles.rowSubtitle}>
-                            Alert when heart rate falls below this value (BPM)
+                            Notify when heart rate falls below this value (BPM)
                           </Text>
                         </View>
                         {isEditingLow ? (
@@ -596,11 +596,11 @@ export default function NotificationSettingsScreen() {
                   )}
                 </View>
 
-                <SectionHeader label="Respiration Alerts" />
+                <SectionHeader label="Breathing Trends" />
                 <View style={styles.card}>
                   <Row
                     title="Enable Respiration Notifications"
-                    subtitle="Get notified when your respiration rate goes above or below your set thresholds"
+                    subtitle="Get notified when your breathing rate trend goes above or below your set thresholds"
                     showToggle
                     toggleValue={respirationSettings.enabled}
                     onToggle={handleToggleRespirationNotifications}
@@ -613,7 +613,7 @@ export default function NotificationSettingsScreen() {
                         <View style={styles.rowTextContainer}>
                           <Text style={styles.rowTitle}>High Threshold</Text>
                           <Text style={styles.rowSubtitle}>
-                            Alert when respiration rate exceeds this value (RPM)
+                            Notify when breathing rate exceeds this value (RPM)
                           </Text>
                         </View>
                         {isEditingRespirationHigh ? (
@@ -664,7 +664,7 @@ export default function NotificationSettingsScreen() {
                         <View style={styles.rowTextContainer}>
                           <Text style={styles.rowTitle}>Low Threshold</Text>
                           <Text style={styles.rowSubtitle}>
-                            Alert when respiration rate falls below this value (RPM)
+                            Notify when breathing rate falls below this value (RPM)
                           </Text>
                         </View>
                         {isEditingRespirationLow ? (
@@ -712,11 +712,11 @@ export default function NotificationSettingsScreen() {
                   )}
                 </View>
 
-                <SectionHeader label="Stress Alerts" />
+                <SectionHeader label="Stress Level Trends" />
                 <View style={styles.card}>
                   <Row
                     title="Enable Stress Notifications"
-                    subtitle="Get notified when your stress level goes above or below your set thresholds"
+                    subtitle="Get notified when your stress level trend goes above or below your set thresholds"
                     showToggle
                     toggleValue={stressSettings.enabled}
                     onToggle={handleToggleStressNotifications}
@@ -729,7 +729,7 @@ export default function NotificationSettingsScreen() {
                         <View style={styles.rowTextContainer}>
                           <Text style={styles.rowTitle}>High Threshold</Text>
                           <Text style={styles.rowSubtitle}>
-                            Alert when stress level exceeds this value
+                            Notify when stress level exceeds this value
                           </Text>
                         </View>
                         {isEditingStressHigh ? (
@@ -778,7 +778,7 @@ export default function NotificationSettingsScreen() {
                         <View style={styles.rowTextContainer}>
                           <Text style={styles.rowTitle}>Low Threshold</Text>
                           <Text style={styles.rowSubtitle}>
-                            Alert when stress level falls below this value
+                            Notify when stress level falls below this value
                           </Text>
                         </View>
                         {isEditingStressLow ? (

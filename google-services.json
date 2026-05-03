@@ -7,18 +7,18 @@
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:1034636618673:android:android_app_id",
+        "mobilesdk_app_id": "1:1034636618673:android:1d5d94f44dbfe7f3ffab90",
         "android_client_info": {
-          "package_name": "com.slimiot.dozemate1"
+          "package_name": "com.slimiot.dozemate"
         }
       },
       "oauth_client": [
         {
-          "client_id": "1034636618673-4rk3ei9m4qsvs0s0gvpuisgr587qrs1t.apps.googleusercontent.com",
+          "client_id": "1034636618673-ur58q3t3na9qc8gecm9lqjtg5v9b6k47.apps.googleusercontent.com",
           "client_type": 1,
           "android_info": {
-            "package_name": "com.slimiot.dozemate1",
-            "certificate_hash": []
+            "package_name": "com.slimiot.dozemate",
+            "certificate_hash": "ca275cfd33c5147009f67622b7ae445422da8888"
           }
         },
         {
@@ -28,7 +28,7 @@
       ],
       "api_key": [
         {
-          "current_key": "AIzaSyC9TCRg2H2kw1rAXZH88OQrzwgqWdDOQj8"
+          "current_key": "AIzaSyAc8qxT3eZgeQmxJd1OQspNryME--MmdO8"
         }
       ],
       "services": {
@@ -37,6 +37,149 @@
             {
               "client_id": "1034636618673-54oca3ie06ok9q4jbbvkf1ogf13b4kp3.apps.googleusercontent.com",
               "client_type": 3
+            },
+            {
+              "client_id": "1034636618673-cnn7d3o1g3e7e6ohrcdmfvulj2sg4902.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.slimiot.dozemate"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1034636618673:android:10ff47ee2097d8afffab90",
+        "android_client_info": {
+          "package_name": "com.slimiot.dozemate1"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "1034636618673-fkm6ccspft2rvpvbjql4boajhfcrpds0.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.slimiot.dozemate1",
+            "certificate_hash": "f311d4c3143e4a6ee1132c8abc06e3b859572ad2"
+          }
+        },
+        {
+          "client_id": "1034636618673-qhuk8imsgaknsdojkkpfa9ec9hflqtt7.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.slimiot.dozemate1",
+            "certificate_hash": "803c79877eba11a0f4150b4845b923e09bee7bdf"
+          }
+        },
+        {
+          "client_id": "1034636618673-s6em5rtcteg47389q7a6ntevgnug9a3b.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.slimiot.dozemate1",
+            "certificate_hash": "7d0c3aa6345d0e0c2b3e1a816ca9fbf27ad4b3fe"
+          }
+        },
+        {
+          "client_id": "1034636618673-tekinfacoa7esiauj73l55mqhnjmadfg.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.slimiot.dozemate1",
+            "certificate_hash": "fa3f1c64db3fdd7443e9c5f2790e22b3dc098c0d"
+          }
+        },
+        {
+          "client_id": "1034636618673-54oca3ie06ok9q4jbbvkf1ogf13b4kp3.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAc8qxT3eZgeQmxJd1OQspNryME--MmdO8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "1034636618673-54oca3ie06ok9q4jbbvkf1ogf13b4kp3.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "1034636618673-cnn7d3o1g3e7e6ohrcdmfvulj2sg4902.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.slimiot.dozemate"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1034636618673:android:9dd66ef01883adc3ffab90",
+        "android_client_info": {
+          "package_name": "com.slimiot.dozemate2"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "1034636618673-fu5s0ihtkcecipro2b81dpkkvvg62ad5.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.slimiot.dozemate2",
+            "certificate_hash": "fa3f1c64db3fdd7443e9c5f2790e22b3dc098c0d"
+          }
+        },
+        {
+          "client_id": "1034636618673-sibdn0evgf2324bgqjq3gvf3trrn67r0.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.slimiot.dozemate2",
+            "certificate_hash": "803c79877eba11a0f4150b4845b923e09bee7bdf"
+          }
+        },
+        {
+          "client_id": "1034636618673-uvb50htbrrl8ic9pd16o2thlppp33bj1.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.slimiot.dozemate2",
+            "certificate_hash": "f311d4c3143e4a6ee1132c8abc06e3b859572ad2"
+          }
+        },
+        {
+          "client_id": "1034636618673-vu2bajv8arvg6i08d9a1pc7s0ukritr1.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.slimiot.dozemate2",
+            "certificate_hash": "7d0c3aa6345d0e0c2b3e1a816ca9fbf27ad4b3fe"
+          }
+        },
+        {
+          "client_id": "1034636618673-54oca3ie06ok9q4jbbvkf1ogf13b4kp3.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAc8qxT3eZgeQmxJd1OQspNryME--MmdO8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "1034636618673-54oca3ie06ok9q4jbbvkf1ogf13b4kp3.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "1034636618673-cnn7d3o1g3e7e6ohrcdmfvulj2sg4902.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.slimiot.dozemate"
+              }
             }
           ]
         }

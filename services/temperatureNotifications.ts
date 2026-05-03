@@ -92,12 +92,12 @@ async function saveNotificationState(state: NotificationState): Promise<void> {
 async function ensureAndroidChannel(): Promise<void> {
   if (Platform.OS !== 'android') return;
   await Notifications.setNotificationChannelAsync('temperature_alerts', {
-    name: 'Temperature Alerts',
+    name: 'Temperature Updates',
     importance: Notifications.AndroidImportance.HIGH,
     sound: 'default',
     vibrationPattern: [200, 100, 200, 100, 200],
     lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
-    description: 'Alerts when temperature exceeds or falls below thresholds',
+    description: 'Notifications when temperature exceeds or falls below thresholds',
   });
 }
 
@@ -174,8 +174,8 @@ export async function processTemperatureReading(
       // 2. Cooldown has expired
       if (!state.wasAboveHigh && isCooldownExpired(state.lastHighNotification, settings.cooldownMinutes)) {
         await sendTemperatureNotification(
-          'High Temperature Alert',
-          `Room temperature is ${Math.round(temperature * 10) / 10}°C, which is above your threshold of ${settings.highThreshold}°C.`,
+          'Temperature Update',
+          `Room temperature is ${Math.round(temperature * 10) / 10}°C, which is above your set threshold of ${settings.highThreshold}°C.`,
           'high'
         );
         
@@ -201,8 +201,8 @@ export async function processTemperatureReading(
       // 2. Cooldown has expired
       if (!state.wasBelowLow && isCooldownExpired(state.lastLowNotification, settings.cooldownMinutes)) {
         await sendTemperatureNotification(
-          'Low Temperature Alert',
-          `Room temperature is ${Math.round(temperature * 10) / 10}°C, which is below your threshold of ${settings.lowThreshold}°C.`,
+          'Temperature Update',
+          `Room temperature is ${Math.round(temperature * 10) / 10}°C, which is below your set threshold of ${settings.lowThreshold}°C.`,
           'low'
         );
         

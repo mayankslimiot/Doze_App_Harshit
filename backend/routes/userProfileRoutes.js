@@ -336,4 +336,71 @@ router.get('/user/organization-id', authMiddleware, async (req, res) => {
   }
 });
 
+// ─────────────── FCM Token Registration ───────────────
+
+/**
+ * POST /user/fcm-token
+ * Register or update an FCM push-notification token for the authenticated user.
+ * Body: { token: string, device?: string, platform?: 'ios' | 'android' }
+ */
+router.post("/fcm-token", authMiddleware, async (req, res) => {
+  try {
+    const userId = req.user?.userId || req.user?.id;
+    const { token, device, platform } = req.body;
+
+    if (!token || typeof token !== "string") {
+      return res.status(400).json({ message: "FCM token is required" });
+    }
+
+    const user = await User.findById(userId);
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    // Upsert: if a token for the same device already exists, update it
+    const existingIdx = user.fcmTokens.findIndex(
+      (t) => (device && t.device === device) || t.token === token
+    );
+
+    if (existingIdx >= 0) {
+      user.fcmTokens[existingIdx].token = token;
+      user.fcmTokens[existingIdx].device = device || user.fcmTokens[existingIdx].device;
+      user.fcmTokens[existingIdx].platform = platform || user.fcmTokens[existingIdx].platform;
+      user.fcmTokens[existingIdx].updatedAt = new Date();
+    } else {
+      user.fcmTokens.push({ token, device, platform, updatedAt: new Date() });
+    }
+
+    await user.save();
+
+    console.log(`[FCM] Token registered for user ${userId} (device: ${device || 'unknown'})`);
+    res.json({ status: "success", message: "FCM token registered" });
+  } catch (error) {
+    console.error("[FCM] Error registering token:", error);
+    res.status(500).json({ message: "Server error", error: error.message });
+  }
+});
+
+/**
+ * DELETE /user/fcm-token
+ * Remove an FCM token (e.g. on logout).
+ * Body: { token: string }
+ */
+router.delete("/fcm-token", authMiddleware, async (req, res) => {
+  try {
+    const userId = req.user?.userId || req.user?.id;
+    const { token } = req.body;
+
+    if (!token) return res.status(400).json({ message: "FCM token is required" });
+
+    await User.findByIdAndUpdate(userId, {
+      $pull: { fcmTokens: { token } },
+    });
+
+    console.log(`[FCM] Token removed for user ${userId}`);
+    res.json({ status: "success", message: "FCM token removed" });
+  } catch (error) {
+    console.error("[FCM] Error removing token:", error);
+    res.status(500).json({ message: "Server error", error: error.message });
+  }
+});
+
 module.exports = router;

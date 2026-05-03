@@ -2,6 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { apiUrl } from '@/services/api';
 import { AppState } from 'react-native';
+import { registerFCMToken } from '@/services/firebase';
 
 type AuthState = {
   isLoggedIn: boolean;
@@ -160,6 +161,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           hydrationTime: Date.now() - hydrationStart,
           timestamp: Date.now(),
         });
+
+        // Register FCM token on app relaunch (best-effort, non-blocking)
+        registerFCMToken(token).catch((e: any) =>
+          console.warn('[AUTH] FCM token registration failed (checkAuthState):', e)
+        );
       } else {
         setAuth({
           isLoggedIn: false,
@@ -208,6 +214,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     // Best-effort profile fetch after login
     fetchProfile();
+
+    // Register FCM token with the backend (best-effort, non-blocking)
+    registerFCMToken(token).catch((e: any) =>
+      console.warn('[AUTH] FCM token registration failed:', e)
+    );
   };
 
   const logout = async () => {
@@ -219,6 +230,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       'remember_me',
       'user_profile',
       'last_active_at',
+      'cached_devices',
     ]);
 
     setAuth({

@@ -93,12 +93,12 @@ async function saveNotificationState(state: NotificationState): Promise<void> {
 async function ensureAndroidChannel(): Promise<void> {
   if (Platform.OS !== 'android') return;
   await Notifications.setNotificationChannelAsync('heart_rate_alerts', {
-    name: 'Wellness Alerts',
+    name: 'Wellness Notifications',
     importance: Notifications.AndroidImportance.HIGH,
     sound: 'default',
     vibrationPattern: [200, 100, 200, 100, 200],
     lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
-    description: 'Alerts when estimated HR exceeds or falls below thresholds',
+    description: 'Notifications when estimated HR exceeds or falls below thresholds',
   });
 }
 
@@ -175,8 +175,8 @@ export async function processHeartRateReading(
       // 2. Cooldown has expired
       if (!state.wasAboveHigh && isCooldownExpired(state.lastHighNotification, settings.cooldownMinutes)) {
         await sendHeartRateNotification(
-          'High Estimated HR Alert',
-          `Your estimated HR is ${Math.round(heartRate)} BPM, which is above your threshold of ${settings.highThreshold} BPM.`,
+          'Heart Rate Trend Update',
+          `Your estimated HR is ${Math.round(heartRate)} BPM, which is above your set threshold of ${settings.highThreshold} BPM.`,
           'high'
         );
         
@@ -202,8 +202,8 @@ export async function processHeartRateReading(
       // 2. Cooldown has expired
       if (!state.wasBelowLow && isCooldownExpired(state.lastLowNotification, settings.cooldownMinutes)) {
         await sendHeartRateNotification(
-          'Low Estimated HR Alert',
-          `Your estimated HR is ${Math.round(heartRate)} BPM, which is below your threshold of ${settings.lowThreshold} BPM.`,
+          'Heart Rate Trend Update',
+          `Your estimated HR is ${Math.round(heartRate)} BPM, which is below your set threshold of ${settings.lowThreshold} BPM.`,
           'low'
         );
         

@@ -1,7 +1,15 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { addDeviceToUser, getUserDevices, validateDeviceId } from '@/services/deviceData';
 import { useAuth } from '@/contexts/AuthContext';
+
+// Safe NetInfo import — falls back to assuming online if module unavailable
+let NetInfo: any = null;
+try {
+  NetInfo = require('@react-native-community/netinfo').default;
+} catch (e) {
+  console.warn('[DEVICE] NetInfo not available, assuming online');
+}
 
 type Device = {
   _id: string;
@@ -10,6 +18,7 @@ type Device = {
   manufacturer?: string;
   status?: string;
   customName?: string | null;
+  defaultName?: string | null;
   isShared?: boolean;
   sharedWith?: Array<{ userId: string; email?: string }>;
   bleMac?: string | null;  // BLE MAC (12 hex) for scan matching
@@ -21,6 +30,7 @@ type DeviceContextType = {
   sharedDevices: Device[] | null;
   activeDevice: Device | null;
   isLoading: boolean;
+  isOnline: boolean;
   addDevice: (deviceId: string) => Promise<{ success: boolean; message?: string }>;
   refreshDevices: () => Promise<void>;
   setActiveDevice: (device: Device | null) => Promise<void>;
@@ -36,7 +46,26 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
   const [sharedDevices, setSharedDevices] = useState<Device[] | null>(null);
   const [activeDevice, setActiveDeviceState] = useState<Device | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isOnline, setIsOnline] = useState(true);
+  const retryCountRef = useRef(0);
+  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { auth } = useAuth();
+
+  // Monitor network state
+  useEffect(() => {
+    if (!NetInfo) return; // NetInfo unavailable — skip monitoring
+    const unsubscribe = NetInfo.addEventListener((state: any) => {
+      const online = !!(state.isConnected && state.isInternetReachable !== false);
+      setIsOnline(online);
+      // If network comes back and devices never loaded, auto-retry
+      if (online && devices === null && !isLoading && auth.isLoggedIn) {
+        console.log('[DEVICE] Network restored — auto-retrying loadDevices');
+        retryCountRef.current = 0;
+        loadDevices();
+      }
+    });
+    return () => unsubscribe();
+  }, [devices, isLoading, auth.isLoggedIn]);
 
   // Load devices on mount, but only if user is logged in
   useEffect(() => {
@@ -58,12 +87,42 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
       console.log('[DEVICE] loadDevices started', {
         timestamp: loadStart,
         isLoggedIn: auth.isLoggedIn,
+        retryCount: retryCountRef.current,
       });
       
       setIsLoading(true);
+
+      // === CACHE READ: Load cached devices for instant UI unblock ===
+      if (retryCountRef.current === 0) {
+        try {
+          const cachedRaw = await AsyncStorage.getItem('cached_devices');
+          if (cachedRaw) {
+            const cachedDevices = JSON.parse(cachedRaw) as Device[];
+            if (Array.isArray(cachedDevices)) {
+              setDevices(cachedDevices);
+              // Also restore active device from cache
+              const storedActiveId = await AsyncStorage.getItem('active_device_id');
+              if (storedActiveId && cachedDevices.length > 0) {
+                const cachedActive = cachedDevices.find(d => d.deviceId === storedActiveId) || cachedDevices[0];
+                setActiveDeviceState(cachedActive);
+              } else if (cachedDevices.length > 0) {
+                setActiveDeviceState(cachedDevices[0]);
+              }
+              console.log('[DEVICE] Cache loaded', { count: cachedDevices.length });
+            }
+          }
+        } catch (cacheErr) {
+          console.warn('[DEVICE] Cache read failed:', cacheErr);
+        }
+      }
+
+      // === API CALL: Fetch fresh device data ===
       const result = await getUserDevices();
       
       if (result.success) {
+        // Reset retry counter on success
+        retryCountRef.current = 0;
+
         const devicesList = result.devices || [];
         const ownedList = result.ownedDevices || [];
         const sharedList = result.sharedDevices || [];
@@ -71,6 +130,13 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
         setOwnedDevices(ownedList);
         setSharedDevices(sharedList);
         
+        // === CACHE WRITE: Save fresh data for next app launch ===
+        try {
+          await AsyncStorage.setItem('cached_devices', JSON.stringify(devicesList));
+        } catch (cacheErr) {
+          console.warn('[DEVICE] Cache write failed:', cacheErr);
+        }
+
         let active: Device | null = null;
         
         // First, try to set active device from backend result
@@ -89,7 +155,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
         // If still no active device but we have devices, set the first one as active
         if (!active && devicesList.length > 0) {
           active = devicesList[0];
-          console.log('[DeviceContext] Auto-setting first device as active:', active.deviceId);
+          console.log('[DeviceContext] Auto-setting first device as active:', active?.deviceId);
         }
         
         setActiveDeviceState(active);
@@ -109,25 +175,58 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
           timestamp: Date.now(),
         });
       } else {
-        // API call failed - set to null (unknown state)
-        setDevices(null);
-        setOwnedDevices(null);
-        setSharedDevices(null);
-        console.log('[DEVICE] loadDevices failed', {
+        // API call failed — trigger auto-retry
+        console.log('[DEVICE] loadDevices API failed', {
           error: result.message || 'Unknown error',
+          retryCount: retryCountRef.current,
           loadTime: Date.now() - loadStart,
           timestamp: Date.now(),
         });
+        scheduleRetry();
       }
     } catch (error) {
-      console.error('Failed to load devices:', error);
-      setDevices(null);
-      setOwnedDevices(null);
-      setSharedDevices(null);
+      console.error('[DEVICE] loadDevices error:', error);
+      scheduleRetry();
     } finally {
       setIsLoading(false);
     }
   };
+
+  // === AUTO-RETRY with exponential backoff ===
+  const MAX_RETRIES = 3;
+  const scheduleRetry = () => {
+    if (retryCountRef.current >= MAX_RETRIES) {
+      console.log('[DEVICE] Max retries reached, giving up. Cache will be used if available.');
+      return;
+    }
+    // Exponential backoff: 2s, 4s, 8s
+    const delay = Math.pow(2, retryCountRef.current + 1) * 1000;
+    retryCountRef.current += 1;
+    console.log(`[DEVICE] Scheduling retry #${retryCountRef.current} in ${delay}ms`);
+
+    if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+    retryTimerRef.current = setTimeout(() => {
+      // Only retry if online (or if NetInfo unavailable, always retry)
+      if (!NetInfo) {
+        loadDevices();
+        return;
+      }
+      NetInfo.fetch().then((state: any) => {
+        if (state.isConnected && state.isInternetReachable !== false) {
+          loadDevices();
+        } else {
+          console.log('[DEVICE] Skipping retry — no network');
+        }
+      });
+    }, delay);
+  };
+
+  // Cleanup retry timer on unmount
+  useEffect(() => {
+    return () => {
+      if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+    };
+  }, []);
 
   const refreshDevices = async () => {
     // TEMP: Log device refresh
@@ -204,6 +303,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
         sharedDevices,
         activeDevice,
         isLoading,
+        isOnline,
         addDevice,
         refreshDevices,
         setActiveDevice,

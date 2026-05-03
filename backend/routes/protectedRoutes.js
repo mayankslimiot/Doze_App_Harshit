@@ -189,6 +189,8 @@ router.get("/data/health/weekly/:deviceId", authMiddleware, async (req, res) => 
             getWeekEndIST,
             getDayStartIST,
             getDayEndIST,
+            getCycleStartIST,
+            getCycleEndIST,
             isTodayIST,
             formatISTDate
         } = require('../utils/timezoneHelper');
@@ -242,9 +244,9 @@ router.get("/data/health/weekly/:deviceId", authMiddleware, async (req, res) => 
             : { primary: 'heartRate', secondary: 'hr' };
 
         for (let i = 0; i < 7; i++) {
-            // Calculate day boundaries in IST, convert to UTC
-            const dayStartUTC = getDayStartIST(weekStartUTC, i);
-            const dayEndUTC = getDayEndIST(weekStartUTC, i);
+            // Calculate day boundaries using 12 PM - 12 PM cycles for all metrics
+            const dayStartUTC = getCycleStartIST(weekStartUTC, i);
+            const dayEndUTC = getCycleEndIST(weekStartUTC, i);
 
             // Check if this is today in IST (for isPartial flag)
             const isToday = isTodayIST(dayStartUTC);
@@ -380,6 +382,8 @@ router.get("/data/health/monthly/:deviceId", authMiddleware, async (req, res) =>
             getDaysInMonthIST,
             getDayStartIST,
             getDayEndIST,
+            getCycleStartIST,
+            getCycleEndIST,
             isTodayIST,
             formatISTDate
         } = require('../utils/timezoneHelper');
@@ -411,9 +415,9 @@ router.get("/data/health/monthly/:deviceId", authMiddleware, async (req, res) =>
         const monthData = [];
 
         for (let i = 0; i < daysInMonth; i++) {
-            // Calculate day boundaries in IST, convert to UTC
-            const dayStartUTC = getDayStartIST(monthStartUTC, i);
-            const dayEndUTC = getDayEndIST(monthStartUTC, i);
+            // Calculate day boundaries using 12 PM - 12 PM cycles for all metrics
+            const dayStartUTC = getCycleStartIST(monthStartUTC, i);
+            const dayEndUTC = getCycleEndIST(monthStartUTC, i);
 
             // Check if this is today in IST (for isPartial flag)
             const isToday = isTodayIST(dayStartUTC);
@@ -637,16 +641,22 @@ router.get("/data/health/heart-rate/graph/:deviceId", authMiddleware, async (req
         }
 
         const now = Date.now();
-        const twentyFourHoursAgo = now - (24 * 60 * 60 * 1000);
-        let queryStart = twentyFourHoursAgo;
-        let queryEnd = now;
+        let queryStart, queryEnd;
+        
         if (start != null && end != null) {
-            const startMs = parseInt(start, 10);
-            const endMs = parseInt(end, 10);
-            if (Number.isFinite(startMs) && Number.isFinite(endMs) && startMs < endMs) {
-                queryStart = startMs;
-                queryEnd = endMs;
-            }
+            queryStart = parseInt(start, 10);
+            queryEnd = parseInt(end, 10);
+        } else {
+            // Default: Show the CURRENT CYCLE (12:00 PM to 12:00 PM)
+            const { getCycleStartIST, getCycleEndIST, getISTComponents } = require('../utils/timezoneHelper');
+            const nowUTC = new Date();
+            const ist = getISTComponents(nowUTC);
+            
+            // If it's before 12 PM IST, we are in the cycle ending today at 12 PM
+            // If it's after 12 PM IST, we are in the cycle ending tomorrow at 12 PM
+            const offset = ist.hours >= 12 ? 1 : 0;
+            queryStart = getCycleStartIST(nowUTC, offset).getTime();
+            queryEnd = getCycleEndIST(nowUTC, offset).getTime();
         }
 
         // ✅ CRITICAL: Fetch raw health data including null values (gaps)
@@ -778,16 +788,29 @@ router.get("/data/health/respiration/graph/:deviceId", authMiddleware, async (re
         }
 
         const now = Date.now();
-        const twentyFourHoursAgo = now - (24 * 60 * 60 * 1000);
-        let queryStart = twentyFourHoursAgo;
-        let queryEnd = now;
+        let queryStart, queryEnd;
+        
         if (start != null && end != null) {
             const startMs = parseInt(start, 10);
             const endMs = parseInt(end, 10);
             if (Number.isFinite(startMs) && Number.isFinite(endMs) && startMs < endMs) {
                 queryStart = startMs;
                 queryEnd = endMs;
+            } else {
+                queryStart = now - (24 * 60 * 60 * 1000);
+                queryEnd = now;
             }
+        } else {
+            // Default: Show the CURRENT CYCLE (12:00 PM to 12:00 PM) — matching heart rate
+            const { getCycleStartIST, getCycleEndIST, getISTComponents } = require('../utils/timezoneHelper');
+            const nowUTC = new Date();
+            const ist = getISTComponents(nowUTC);
+            
+            // If it's before 12 PM IST, we are in the cycle ending today at 12 PM
+            // If it's after 12 PM IST, we are in the cycle ending tomorrow at 12 PM
+            const offset = ist.hours >= 12 ? 1 : 0;
+            queryStart = getCycleStartIST(nowUTC, offset).getTime();
+            queryEnd = getCycleEndIST(nowUTC, offset).getTime();
         }
 
         // ✅ CRITICAL: Fetch raw health data including null values (gaps)
@@ -920,12 +943,20 @@ router.get("/data/health/stress/graph/:deviceId", authMiddleware, async (req, re
                 $lte: new Date(to)
             };
         } else {
-            // Default to last 24 hours if no date range provided
-            const twentyFourHoursAgo = new Date(Date.now() - (24 * 60 * 60 * 1000));
-            const now = new Date();
+            // Default: Show the CURRENT CYCLE (12:00 PM to 12:00 PM) — matching heart rate and respiration
+            const { getCycleStartIST, getCycleEndIST, getISTComponents } = require('../utils/timezoneHelper');
+            const nowUTC = new Date();
+            const ist = getISTComponents(nowUTC);
+            
+            // If it's before 12 PM IST, we are in the cycle ending today at 12 PM
+            // If it's after 12 PM IST, we are in the cycle ending tomorrow at 12 PM
+            const offset = ist.hours >= 12 ? 1 : 0;
+            const cycleStart = getCycleStartIST(nowUTC, offset);
+            const cycleEnd = getCycleEndIST(nowUTC, offset);
+            
             query.timestamp = {
-                $gte: twentyFourHoursAgo,
-                $lte: now
+                $gte: cycleStart,
+                $lte: cycleEnd
             };
         }
 

@@ -162,12 +162,14 @@ export async function prepareStressGraph(
     // Step 2: Clear existing buffer data first to ensure fresh start
     clearBuffer(deviceId);
     
-    // Step 3: Calculate day range from selectedDate (00:00:00.000 to 23:59:59.999)
+    // Step 3: Calculate day range using 12 noon - 12 noon cycle
+    // selectedDate represents the cycle end date (e.g., "24th" means 23rd 12:00 PM to 24th 11:59 AM)
     const dayStart = new Date(targetDate);
-    dayStart.setHours(0, 0, 0, 0);
+    dayStart.setDate(dayStart.getDate() - 1);
+    dayStart.setHours(12, 0, 0, 0);
     
     const dayEnd = new Date(targetDate);
-    dayEnd.setHours(23, 59, 59, 999);
+    dayEnd.setHours(11, 59, 59, 999);
     
     const result = await getStressGraph(deviceId, dayStart, dayEnd);
     
@@ -258,42 +260,41 @@ export async function updateStressGraphData(deviceId: string): Promise<void> {
     });
   }
   
-  // Calculate 24-hour time domain based on selected date
-  // Use the selected date from state to determine the day range
+  // Calculate time domain based on selected date using 12 noon - 12 noon cycle
+  // Use the selected date from state to determine the cycle range
   const selectedDateStr = state.selectedDate;
   let dayStart: number;
   let dayEnd: number;
   
   if (selectedDateStr) {
-    // Parse the date string (YYYY-MM-DD) and create date at midnight UTC to avoid timezone issues
+    // Parse the date string (YYYY-MM-DD) — this is the cycle END date
     const [year, month, day] = selectedDateStr.split('-').map(Number);
-    // Use UTC to avoid timezone conversion issues
-    const date = new Date(Date.UTC(year, month - 1, day, 0, 0, 0, 0));
-    dayStart = date.getTime();
-    dayEnd = dayStart + (24 * 60 * 60 * 1000) - 1; // End of day (23:59:59.999)
+    // Cycle: (D-1) 12:00 PM to D 11:59 AM
+    const cycleStart = new Date(Date.UTC(year, month - 1, day - 1, 12, 0, 0, 0)); // Previous day noon
+    const cycleEnd = new Date(Date.UTC(year, month - 1, day, 11, 59, 59, 999)); // Selected day 11:59 AM
+    dayStart = cycleStart.getTime();
+    dayEnd = cycleEnd.getTime();
   } else {
-    // Fallback: use first and last point timestamps, or today's range
+    // Fallback: use first and last point timestamps, or today's cycle
     if (sortedPoints.length > 0) {
       const firstTimestamp = sortedPoints[0].timestamp;
-      const lastTimestamp = sortedPoints[sortedPoints.length - 1].timestamp;
-      // Use UTC to set hours to avoid timezone issues
       const firstDate = new Date(firstTimestamp);
       const utcDate = new Date(Date.UTC(
         firstDate.getUTCFullYear(),
         firstDate.getUTCMonth(),
-        firstDate.getUTCDate(),
-        0, 0, 0, 0
+        firstDate.getUTCDate() - 1,
+        12, 0, 0, 0
       ));
       dayStart = utcDate.getTime();
       dayEnd = dayStart + (24 * 60 * 60 * 1000) - 1;
     } else {
-      // No points - use today's range
+      // No points - use today's cycle
       const now = new Date();
       const todayUTC = new Date(Date.UTC(
         now.getUTCFullYear(),
         now.getUTCMonth(),
-        now.getUTCDate(),
-        0, 0, 0, 0
+        now.getUTCDate() - 1,
+        12, 0, 0, 0
       ));
       dayStart = todayUTC.getTime();
       dayEnd = dayStart + (24 * 60 * 60 * 1000) - 1;

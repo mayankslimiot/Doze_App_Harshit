@@ -144,7 +144,7 @@ export default function SettingsScreen() {
           <View style={styles.divider} />
           <Row
             title="Notifications"
-            subtitle="Manage HR alerts"
+            subtitle="Manage HR trends"
             icon="notifications-outline"
             iconColor="rgba(255, 165, 0, 0.2)"
             onPress={() => router.push('/notification-settings')}
@@ -186,7 +186,7 @@ export default function SettingsScreen() {
           <Row 
             title="Health Disclaimer & References" 
             subtitle="Wellness info & resources"
-            icon="medical-outline"
+            icon="information-circle-outline"
             iconColor="rgba(74, 144, 226, 0.2)"
             onPress={() => router.push('/health-disclaimer')}
           />
@@ -206,6 +206,21 @@ export default function SettingsScreen() {
         </View>
         
         <View style={{ height: 40 }} />
+
+        {/* Bottom footer with App Version, Terms, and Privacy - Scrolls with content */}
+        <View style={[styles.bottomFooter, { paddingBottom: Math.max(insets.bottom, 20) }]}>
+          <TouchableOpacity onPress={() => {}} activeOpacity={0.7}>
+            <Text style={styles.footerText}>{getAppVersion()}</Text>
+          </TouchableOpacity>
+          <Text style={styles.footerSeparator}>•</Text>
+          <TouchableOpacity onPress={() => router.push('/privacy-policy')} activeOpacity={0.7}>
+            <Text style={styles.footerText}>Privacy Policy</Text>
+          </TouchableOpacity>
+          <Text style={styles.footerSeparator}>•</Text>
+          <TouchableOpacity onPress={() => router.push('/terms-of-service')} activeOpacity={0.7}>
+            <Text style={styles.footerText}>Terms</Text>
+          </TouchableOpacity>
+        </View>
       </ScrollView>
 
       {/* Logout Confirmation Alert */}
@@ -258,20 +273,6 @@ export default function SettingsScreen() {
         </View>
       </Modal>
 
-      {/* Bottom footer with App Version, Terms, and Privacy - Fixed at bottom */}
-      <View style={[styles.bottomFooter, { paddingBottom: insets.bottom + 16 }]}>
-        <TouchableOpacity onPress={() => {}} activeOpacity={0.7}>
-          <Text style={styles.footerText}>{getAppVersion()}</Text>
-        </TouchableOpacity>
-        <Text style={styles.footerSeparator}>•</Text>
-        <TouchableOpacity onPress={() => router.push('/privacy-policy')} activeOpacity={0.7}>
-          <Text style={styles.footerText}>Privacy Policy</Text>
-        </TouchableOpacity>
-        <Text style={styles.footerSeparator}>•</Text>
-        <TouchableOpacity onPress={() => router.push('/terms-of-service')} activeOpacity={0.7}>
-          <Text style={styles.footerText}>Terms</Text>
-        </TouchableOpacity>
-      </View>
     </View>
   );
 }
@@ -294,17 +295,13 @@ const styles = StyleSheet.create({
   chevron: { color: 'rgba(255,255,255,0.5)', fontSize: 22, marginLeft: 8 },
   divider: { height: StyleSheet.hairlineWidth, backgroundColor: 'rgba(255,255,255,0.08)', marginLeft: 16 },
   bottomFooter: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     paddingTop: 16,
     paddingHorizontal: 16,
     flexWrap: 'wrap',
-    backgroundColor: 'transparent', // Match screen background
+    backgroundColor: 'transparent',
   },
   footerText: {
     color: 'rgba(255,255,255,0.4)',

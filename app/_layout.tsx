@@ -6,6 +6,7 @@ import { BootProvider } from "@/contexts/BootContext";
 import { Stack } from "expo-router";
 import { BluetoothProvider } from '../contexts/BluetoothProvider';
 import AnimatedSplash from '@/components/AnimatedSplash';
+import NetworkBanner from '@/components/NetworkBanner';
 import NavigationGuard from '@/components/NavigationGuard';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import React, { useEffect, useRef } from 'react';
@@ -76,7 +77,9 @@ function AppContent() {
   }
 
   return (
-    <>
+    <View style={{ flex: 1, backgroundColor: '#02041A' }}>
+      {/* Global network status banner — pushes content down when visible */}
+      <NetworkBanner />
       <NavigationGuard>
         <Stack
           screenOptions={{
@@ -99,7 +102,7 @@ function AppContent() {
       </NavigationGuard>
       {/* Global animated splash overlay */}
       <AnimatedSplash />
-    </>
+    </View>
   );
 }
 

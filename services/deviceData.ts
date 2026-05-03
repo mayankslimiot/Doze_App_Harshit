@@ -163,10 +163,17 @@ export async function getUserDevices(): Promise<{
   try {
     const headers = await getAuthHeaders();
     
+    // 12-second timeout to prevent hanging on slow/dead server
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 12000);
+
     const response = await fetch(apiUrl('/api/devices/user'), {
       method: 'GET',
       headers,
+      signal: controller.signal,
     });
+
+    clearTimeout(timeoutId);
 
     const data = await response.json();
 
@@ -1258,6 +1265,8 @@ export async function autoRegisterDevice(
     status: string;
     wifiStatus: string;
     wifiConnectedAt: string;
+    defaultName?: string | null;
+    customName?: string | null;
   };
   wasReassigned?: boolean;
   error?: string;

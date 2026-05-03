@@ -12,7 +12,7 @@ const { sendCaretakerShareNotification } = require("../utils/mailer");
 const router = express.Router();
 const ID_RX = /^\d{4}-[0-9A-F]{12}$/i;; // 4 digits 12 hex chars
 const pad5 = (n) => String(n).padStart(5, '0');
-const deviceController= require('../controllers/deviceManagementController');
+const deviceController = require('../controllers/deviceManagementController');
 
 /**
  * Generate default device name (Dozemate_1, Dozemate_2, etc.)
@@ -24,7 +24,7 @@ async function generateDefaultDeviceName(userId) {
   try {
     // Find all devices owned by this user
     const devices = await Device.find({ userId: new mongoose.Types.ObjectId(userId) }).select("customName defaultName").lean();
-    
+
     // Set to track used indices
     const usedIndices = new Set();
     const nameRegex = /Dozemate_(\d+)/i;
@@ -131,8 +131,8 @@ router.post("/add", authMiddleware, async (req, res) => {
       createdAt: now,
       lastActiveAt: now,
       userId: req.user.userId,
-      accountId,  
-      profileId  
+      accountId,
+      profileId
     };
     if (profileId) {
       payload.profileId = new mongoose.Types.ObjectId(profileId);
@@ -147,12 +147,12 @@ router.post("/add", authMiddleware, async (req, res) => {
       );
       if (!p) throw new Error("Invalid prefixId");
 
-      const second = pad5(p.sequence);                    
-      payload.deviceId = `${p.prefix}-${second}`;        
-      payload.deviceType = p.deviceName;                
-      payload.manufacturer = p.manufacturer;       
+      const second = pad5(p.sequence);
+      payload.deviceId = `${p.prefix}-${second}`;
+      payload.deviceType = p.deviceName;
+      payload.manufacturer = p.manufacturer;
     } else {
-     
+
       if (!deviceId || !deviceType || !manufacturer) {
         throw new Error("deviceId, deviceType and manufacturer are required (or provide prefixId)");
       }
@@ -512,9 +512,9 @@ router.get("/user", authMiddleware, async (req, res) => {
     const sharedIds = user.sharedDevices || [];
     const sharedDevicesRaw = sharedIds.length
       ? await Device.find(
-          { deviceId: { $in: sharedIds } },
-          "deviceId name deviceType manufacturer firmwareVersion location status _id customName defaultName bleMac"
-        ).lean()
+        { deviceId: { $in: sharedIds } },
+        "deviceId name deviceType manufacturer firmwareVersion location status _id customName defaultName bleMac"
+      ).lean()
       : [];
     const sharedDevices = sharedDevicesRaw.map((d) => ({ ...d, isShared: true }));
 
@@ -782,7 +782,7 @@ router.post("/auto-register", authMiddleware, async (req, res) => {
       if (previousUserId && previousUserId !== currentUserIdStr) {
         // Device is registered to another user - transfer ownership
         wasReassigned = true;
-        
+
         // Remove device from previous user's devices array and ownedDevices
         const previousUser = await User.findById(previousUserId);
         if (previousUser) {
@@ -794,8 +794,8 @@ router.post("/auto-register", authMiddleware, async (req, res) => {
               id => id !== device.deviceId
             );
           }
-          if (previousUser.activeDevice && 
-              previousUser.activeDevice.toString() === device._id.toString()) {
+          if (previousUser.activeDevice &&
+            previousUser.activeDevice.toString() === device._id.toString()) {
             previousUser.activeDevice = null;
           }
           await previousUser.save();
@@ -810,37 +810,37 @@ router.post("/auto-register", authMiddleware, async (req, res) => {
       device.lastActiveAt = now;
       if (normalizedBleMac) device.bleMac = normalizedBleMac;
 
-      // Set default name if customName is not set
-      if (!device.defaultName) {
+      // Regenerate default name if missing OR device was reassigned to a new owner
+      if (!device.defaultName || wasReassigned) {
         const defaultName = await generateDefaultDeviceName(currentUserId);
         device.defaultName = defaultName;
-        if (!device.customName) {
+        if (!device.customName || wasReassigned) {
           device.customName = defaultName;
         }
       }
-      
+
       await device.save();
 
       // ✅ WebSocket cleanup and audit logging for ownership transfer
       if (wasReassigned && previousUserId) {
         const io = getIO();
-        
+
         if (io) {
           try {
             // Find all sockets for old owner
             const sockets = await io.in(`user:${previousUserId}`).fetchSockets();
-            
+
             sockets.forEach(socket => {
               // Force leave device room
               socket.leave(`device:${deviceId}`);
-              
+
               // Emit ownership transfer event
               socket.emit('device_ownership_transferred', {
                 deviceId,
                 message: 'Device ownership has been transferred to another account'
               });
             });
-            
+
             logger.info('WebSocket cleanup on ownership shift', {
               deviceId,
               previousUserId,
@@ -848,10 +848,10 @@ router.post("/auto-register", authMiddleware, async (req, res) => {
               socketsDisconnected: sockets.length
             });
           } catch (wsError) {
-            logger.err(wsError, { 
+            logger.err(wsError, {
               where: 'auto-register: WebSocket cleanup',
               deviceId,
-              previousUserId 
+              previousUserId
             });
           }
         }
@@ -911,7 +911,7 @@ router.post("/auto-register", authMiddleware, async (req, res) => {
       const deviceIdInArray = currentUser.devices.find(
         d => d.toString() === device._id.toString()
       );
-      
+
       if (!deviceIdInArray) {
         currentUser.devices.push(device._id);
       }
@@ -941,10 +941,10 @@ router.post("/auto-register", authMiddleware, async (req, res) => {
             });
           });
         } catch (wsError) {
-          logger.err(wsError, { 
+          logger.err(wsError, {
             where: 'auto-register: Notify new owner',
             deviceId,
-            currentUserId 
+            currentUserId
           });
         }
       }
@@ -952,7 +952,7 @@ router.post("/auto-register", authMiddleware, async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      message: wasReassigned 
+      message: wasReassigned
         ? "Device registered successfully (transferred from another user)"
         : "Device registered successfully",
       device: {
@@ -962,14 +962,16 @@ router.post("/auto-register", authMiddleware, async (req, res) => {
         status: device.status,
         wifiStatus: device.wifiStatus,
         wifiConnectedAt: device.wifiConnectedAt,
-        bleMac: device.bleMac
+        bleMac: device.bleMac,
+        defaultName: device.defaultName || null,
+        customName: device.customName || null
       },
       wasReassigned
     });
 
   } catch (error) {
     console.error("Error in auto-register device:", error);
-    
+
     // Handle duplicate key error (shouldn't happen but just in case)
     if (error.code === 11000) {
       return res.status(409).json({

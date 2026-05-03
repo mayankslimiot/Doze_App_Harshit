@@ -109,6 +109,14 @@ const UserSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
+  // FCM push notification tokens (one per physical device)
+  fcmTokens: [{
+    token:     { type: String, required: true },
+    device:    { type: String },              // unique device identifier (e.g. Device.uniqueId)
+    platform:  { type: String, enum: ['ios', 'android'] },
+    updatedAt: { type: Date, default: Date.now }
+  }],
+
   // User-specific device names (deviceId -> customName mapping)
   deviceNames: {
     type: Map,

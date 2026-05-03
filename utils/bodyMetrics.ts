@@ -1,130 +1,142 @@
 /**
- * Body Metrics Calculation Utilities
+ * Calculate user's age based on DOB string
  */
-
-/**
- * Convert height from feet and inches string (e.g., "6'0\"") to total inches
- */
-export function parseHeightToInches(heightStr: string): number {
-  const match = heightStr.match(/(\d+)'(\d+)"/);
-  if (match) {
-    const feet = parseInt(match[1], 10);
-    const inches = parseInt(match[2], 10);
-    return feet * 12 + inches;
+export function calculateAge(dobString: string): number {
+  if (!dobString) return 0;
+  const dob = new Date(dobString);
+  if (isNaN(dob.getTime())) return 0;
+  const today = new Date();
+  let age = today.getFullYear() - dob.getFullYear();
+  const m = today.getMonth() - dob.getMonth();
+  if (m < 0 || (m === 0 && today.getDate() < dob.getDate())) {
+    age--;
   }
-  // Fallback: try to parse as number (assuming inches)
-  return parseFloat(heightStr) || 72; // Default to 6 feet
-}
-
-/**
- * Convert height from feet and inches to meters
- */
-export function heightToMeters(heightStr: string): number {
-  const inches = parseHeightToInches(heightStr);
-  return inches * 0.0254; // 1 inch = 0.0254 meters
+  return age;
 }
 
 /**
  * Calculate BMI (Body Mass Index)
- * BMI = weight (kg) / height (m)^2
+ * New BMI Formula: 1.3 * weight (kg) / height (m)^2.5
  */
 export function calculateBMI(weightKg: number, heightM: number): number {
   if (heightM <= 0 || weightKg <= 0) return 0;
-  return weightKg / (heightM * heightM);
+  return (1.3 * weightKg) / Math.pow(heightM, 2.5);
 }
 
 /**
  * Calculate Waist Height Ratio
- * WHtR = waist (inches) / height (inches)
+ * WHtR = waist (m) / height (m)
  */
-export function calculateWaistHeightRatio(waistInches: number, heightInches: number): number {
-  if (heightInches <= 0) return 0;
-  return waistInches / heightInches;
+export function calculateWaistHeightRatio(waistM: number, heightM: number): number {
+  if (heightM <= 0) return 0;
+  return waistM / heightM;
 }
 
 /**
  * Calculate ABSI (A Body Shape Index)
- * ABSI = waist (m) / (BMI^(2/3) * height^(1/2))
+ * Formula: (1000 * waistM) / (massKg^0.66666 * heightM^0.83333)
  */
-export function calculateABSI(waistM: number, bmi: number, heightM: number): number {
-  if (bmi <= 0 || heightM <= 0) return 0;
-  const denominator = Math.pow(bmi, 2/3) * Math.pow(heightM, 1/2);
+export function calculateABSI(waistM: number, massKg: number, heightM: number): number {
+  if (massKg <= 0 || heightM <= 0) return 0;
+  const denominator = Math.pow(massKg, 0.66666) * Math.pow(heightM, 0.83333);
   if (denominator <= 0) return 0;
-  return (waistM / denominator) * 1000; // Scale by 1000 for readability
+  return (1000 * waistM) / denominator;
 }
 
 /**
  * Get BMI category and score (0-10)
  */
-export function getBMIScore(bmi: number): { score: number; category: string } {
-  if (bmi < 18.5) {
-    // Underweight
-    const score = Math.max(0, (bmi / 18.5) * 5);
-    return { score: Math.round(score * 10) / 10, category: 'Underweight' };
-  } else if (bmi < 25) {
-    // Normal weight
-    const score = 5 + ((bmi - 18.5) / (25 - 18.5)) * 5;
-    return { score: Math.round(score * 10) / 10, category: 'Normal' };
-  } else if (bmi < 30) {
-    // Overweight
-    const score = 10 - ((bmi - 25) / (30 - 25)) * 3;
-    return { score: Math.round(score * 10) / 10, category: 'Overweight' };
-  } else {
-    // Obese
-    const score = Math.max(0, 7 - ((bmi - 30) / 10) * 2);
-    return { score: Math.round(score * 10) / 10, category: 'Obese' };
+export function getBMIScore(bmiVal: number, age: number, gender: string = 'Male'): { score: number; category: string } {
+  // 1. Determine Adjustment Factor (bmiAdj)
+  let bmiAdj = 0;
+  if (age > 29) {
+    if (gender.toLowerCase() === 'male') {
+      bmiAdj = (age - 30) * 0.07 / 5;
+    } else {
+      // Female or Other
+      bmiAdj = (age - 30) * 0.1 / 5;
+    }
   }
+
+  // 2. Scoring (Scale of 1-10)
+  let score = 0;
+  if (bmiVal < 21.5) {
+    score = (0.6667 * bmiVal - 4.3333) + bmiAdj;
+  } else {
+    score = (0.011 * bmiVal * bmiVal - 1.2032 * bmiVal + 30.79) + bmiAdj;
+  }
+
+  const finalScore = Math.min(10, Math.max(0, score));
+
+  // 3. Category (Standard WHO BMI is used for categorization only)
+  // Note: We use the raw bmiVal for categorization to keep it consistent with standard readings
+  let category = 'Normal';
+  if (bmiVal < 18.5) category = 'Underweight';
+  else if (bmiVal < 25) category = 'Normal';
+  else if (bmiVal < 30) category = 'Overweight';
+  else category = 'Obese';
+
+  return { score: Math.round(finalScore * 10) / 10, category };
 }
 
 /**
  * Get Waist Height Ratio score (0-10)
- * Optimal range: 0.4-0.5 for men, 0.35-0.42 for women
  */
-export function getWaistHeightRatioScore(ratio: number, gender: string = 'Male'): number {
-  const isMale = gender.toLowerCase() === 'male';
-  const optimalMin = isMale ? 0.4 : 0.35;
-  const optimalMax = isMale ? 0.5 : 0.42;
+export function getWaistHeightRatioScore(ratioWH: number, gender: string = 'Male'): number {
+  const g = gender.toLowerCase();
   
-  if (ratio < optimalMin) {
-    const score = (ratio / optimalMin) * 7;
-    return Math.round(score * 10) / 10;
-  } else if (ratio <= optimalMax) {
-    const score = 7 + ((ratio - optimalMin) / (optimalMax - optimalMin)) * 3;
-    return Math.round(score * 10) / 10;
+  const calculateMaleScore = (r: number) => {
+    if (r > 0.48) return 10 - (r - 0.48) * 100;
+    return Math.min(10, 10 + (r - 0.45) * 100);
+  };
+
+  const calculateFemaleScore = (r: number) => {
+    if (r > 0.49) return 10 - (r - 0.49) * 100;
+    return Math.min(10, 10 + (r - 0.43) * 100);
+  };
+
+  let score = 0;
+  if (g === 'male') {
+    score = calculateMaleScore(ratioWH);
+  } else if (g === 'female') {
+    score = calculateFemaleScore(ratioWH);
   } else {
-    const excess = ratio - optimalMax;
-    const score = Math.max(0, 10 - (excess / 0.1) * 3);
-    return Math.round(score * 10) / 10;
+    // "Other" takes the average
+    score = (calculateMaleScore(ratioWH) + calculateFemaleScore(ratioWH)) / 2;
   }
+
+  return Math.round(Math.max(0, score) * 10) / 10;
 }
 
 /**
  * Get ABSI score (0-10)
- * Lower ABSI is generally better
  */
-export function getABSIScore(absi: number): number {
-  // ABSI typically ranges from 0.06 to 0.10
-  // Lower is better, so we invert the scale
-  const normalized = Math.max(0, Math.min(1, (0.10 - absi / 1000) / 0.04));
-  const score = normalized * 10;
-  return Math.round(score * 10) / 10;
+export function getABSIScore(absiVal: number): number {
+  let score = 0;
+  if (absiVal < 76) {
+    score = 0.2 * absiVal - 5.2;
+  } else {
+    score = (-0.2 * absiVal) + 25.2;
+  }
+  return Math.round(Math.min(10, Math.max(0, score)) * 10) / 10;
 }
 
 /**
- * Calculate Overall Body Index (average of all scores)
+ * Calculate Overall Body Index (Weighted Average)
+ * WHR: 50%, BMI: 25%, ABSI: 25%
  */
 export function calculateOverallBodyIndex(
-  waistHeightScore: number,
-  bmiScore: number,
-  absiScore: number
+  wHOutOf10: number,
+  bmiOutOf10: number,
+  absiOutOf10: number
 ): number {
-  const average = (waistHeightScore + bmiScore + absiScore) / 3;
+  const weightedSum = (wHOutOf10 * 50) + (absiOutOf10 * 25) + (bmiOutOf10 * 25);
+  const average = weightedSum / 100;
   return Math.round(average * 10) / 10;
 }
 
 /**
  * Get gauge percentage for visualization (0-100)
- * Maps score (0-10) to percentage
  */
 export function scoreToGaugePercentage(score: number): number {
   return Math.max(0, Math.min(100, (score / 10) * 100));
@@ -138,3 +150,17 @@ export function getGaugeColor(score: number): string {
   if (score >= 6) return '#FFA500'; // Yellow/Orange
   return '#FF5252'; // Red
 }
+
+/**
+ * Wellness-focused descriptions for body metrics.
+ */
+export const HINTS = {
+  BMI: `BMI (Body Mass Index)\n\nBody Mass Index (BMI) is a general measure of body composition that uses your height and weight to estimate if you are in a healthy weight range for your height.\n\nIn general:\n• At the same BMI, women tend to have more body fat than men.\n• The amount of body fat may vary depending on racial or ethnic groups.\n• Older adults often have a different body composition than younger adults.\n• Athletes may have a higher BMI due to increased muscle mass.\n\nWhile BMI is a helpful screening tool, it does not directly measure body fat. This metric is for general wellness observation and should not be used as a substitute for professional health assessments.\n\nGeneral BMI Categories:\n• < 18.5 – Underweight\n• 18.5 to 24.9 - Normal range\n• 25 to 29.9 – Overweight\n• > 29.9 Obese`,
+  
+  ABSI: `ABSI (A Body Shape Index)\n\nA Body Shape Index (ABSI) is a wellness metric that considers your waist circumference relative to your height and weight. It provides additional perspective on body composition beyond BMI alone.\n\nABSI was designed to help observe variations in body shape that are less dependent on weight or height. This information is intended for general wellness and lifestyle observation purposes only.\n\nFor ease of understanding, we have converted the ABSI to a scale of 1 to 10, where 10 indicates a score more aligned with general wellness guidelines.`,
+  
+  WHR: `Waist-to-Height Ratio\n\nThe waist-to-height ratio is a simple lifestyle metric calculated by dividing your waist circumference by your height. It is often used as an indicator of general body composition and wellness.\n\nThis index is easy to use and provides a helpful way to track your wellness journey. A common general guideline is to maintain a waist circumference that is less than half your height. This information is for general observation and is not intended for medical use or as a substitute for professional advice.`,
+  
+  OBI: `Overall Body Index\n\nThe Overall Body Index combines multiple wellness metrics—ABSI, waist-to-height ratio, and BMI—to provide a comprehensive overview of your body composition trends. For ease of use, we have rated this index on a scale of 1 to 10. This index is intended to help you track general lifestyle and wellness trends over time.`
+};
+

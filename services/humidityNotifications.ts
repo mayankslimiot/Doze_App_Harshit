@@ -92,12 +92,12 @@ async function saveNotificationState(state: NotificationState): Promise<void> {
 async function ensureAndroidChannel(): Promise<void> {
   if (Platform.OS !== 'android') return;
   await Notifications.setNotificationChannelAsync('humidity_alerts', {
-    name: 'Humidity Alerts',
+    name: 'Humidity Updates',
     importance: Notifications.AndroidImportance.HIGH,
     sound: 'default',
     vibrationPattern: [200, 100, 200, 100, 200],
     lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
-    description: 'Alerts when humidity exceeds or falls below thresholds',
+    description: 'Notifications when humidity exceeds or falls below thresholds',
   });
 }
 
@@ -174,8 +174,8 @@ export async function processHumidityReading(
       // 2. Cooldown has expired
       if (!state.wasAboveHigh && isCooldownExpired(state.lastHighNotification, settings.cooldownMinutes)) {
         await sendHumidityNotification(
-          'High Humidity Alert',
-          `Room humidity is ${Math.round(humidity * 10) / 10}%, which is above your threshold of ${settings.highThreshold}%.`,
+          'Humidity Update',
+          `Room humidity is ${Math.round(humidity * 10) / 10}%, which is above your set threshold of ${settings.highThreshold}%.`,
           'high'
         );
         
@@ -201,8 +201,8 @@ export async function processHumidityReading(
       // 2. Cooldown has expired
       if (!state.wasBelowLow && isCooldownExpired(state.lastLowNotification, settings.cooldownMinutes)) {
         await sendHumidityNotification(
-          'Low Humidity Alert',
-          `Room humidity is ${Math.round(humidity * 10) / 10}%, which is below your threshold of ${settings.lowThreshold}%.`,
+          'Humidity Update',
+          `Room humidity is ${Math.round(humidity * 10) / 10}%, which is below your set threshold of ${settings.lowThreshold}%.`,
           'low'
         );
         

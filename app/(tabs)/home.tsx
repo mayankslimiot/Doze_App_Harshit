@@ -35,6 +35,8 @@ import {
   getWaistHeightRatioScore,
   getABSIScore,
   calculateOverallBodyIndex,
+  calculateAge,
+  HINTS,
 } from '@/utils/bodyMetrics';
 import { API_BASE_URL } from '@/services/api';
 import { getHealthData, getHistoricalData, getStressGraph, updateDeviceName, deleteDevice, activateDevice, removeSharedDevice, cleanupLocalBleStores } from '@/services/deviceData';
@@ -276,6 +278,13 @@ export default function HomeScreen() {
       // Reset data loaded flag when device changes
       if (didInitialFetchRef.current !== activeDevice.deviceId) {
         didInitialFetchRef.current = null; // Reset flag for new device
+        
+        // MANDATORY: Clear dashboard state whenever device changes
+        // This prevents showing stale data from the previously active device
+        console.log('[Home] Device changed, resetting dashboard state');
+        setLatestHealthData(null);
+        setHistoricalData([]);
+        setActiveSleepSession(null);
       }
       return () => {
         // Cleanup: clear Day graph state when device changes
@@ -285,6 +294,9 @@ export default function HomeScreen() {
     } else {
       // Reset flag if no device
       didInitialFetchRef.current = null;
+      setLatestHealthData(null);
+      setHistoricalData([]);
+      setActiveSleepSession(null);
     }
   }, [activeDevice?.deviceId]);
   const [sleepDate, setSleepDate] = React.useState(new Date());
@@ -357,7 +369,11 @@ export default function HomeScreen() {
       // Fetch latest health data
       const healthResult = await getHealthData(activeDevice.deviceId, { limit: 1 });
       if (healthResult.success && healthResult.data && healthResult.data.length > 0) {
-        setLatestHealthData(healthResult.data[0]);
+        // Include _deviceId metadata for consistent merging logic in messageHandler
+        setLatestHealthData({ 
+          ...healthResult.data[0], 
+          _deviceId: activeDevice.deviceId 
+        });
         setLastUpdateTime(new Date());
         didInitialFetchRef.current = activeDevice.deviceId; // Mark as fetched for this device
       } else {
@@ -549,41 +565,56 @@ export default function HomeScreen() {
       // CRITICAL: Update state in a way that React Native will definitely detect
       // Use functional update to ensure we always have latest previous values
       setLatestHealthData((prev: any) => {
+        // Refined Merging: Ensure we ONLY merge with previous state if it belongs to the SAME device
+        // This prevents blending data from two different devices during a transition
+        const prevDeviceId = prev?._deviceId;
+        const currentActiveDeviceId = activeDevice?.deviceId;
+        
+        const isSameDevice = prevDeviceId && currentActiveDeviceId && prevDeviceId === currentActiveDeviceId;
+        const safePrev = isSameDevice ? prev : null;
+
+        if (!isSameDevice && prevDeviceId) {
+          console.log('[Home] ⚠️ WebSocket data received for new device, ignoring previous state from:', prevDeviceId);
+        }
+
         // Handle respiration data - prioritize new data, but keep previous if new is invalid/zero
         // Accept any positive value, or keep previous if new data is missing/zero
         const newRespiration = (data.respiration !== undefined && data.respiration > 0)
           ? data.respiration
           : ((data.resp !== undefined && data.resp > 0)
             ? data.resp
-            : ((prev?.respiration && prev.respiration > 0)
-              ? prev.respiration
-              : ((prev?.resp && prev.resp > 0)
-                ? prev.resp
+            : ((safePrev?.respiration && safePrev.respiration > 0)
+              ? safePrev.respiration
+              : ((safePrev?.resp && safePrev.resp > 0)
+                ? safePrev.resp
                 : 0)));
 
         // Create a completely new object with all fields to ensure reference change
         const newHealthData = {
+          // Metadata for tracking
+          _deviceId: currentActiveDeviceId,
+
           // Core health metrics (handle both formats: temp/hr/resp and temperature/heartRate/respiration)
           temperature: data.temperature !== undefined ? data.temperature :
-            (data.temp !== undefined ? data.temp : (prev?.temperature ?? 0)),
+            (data.temp !== undefined ? data.temp : (safePrev?.temperature ?? 0)),
           heartRate: data.heartRate !== undefined ? data.heartRate :
-            (data.hr !== undefined ? data.hr : (prev?.heartRate ?? 0)),
+            (data.hr !== undefined ? data.hr : (safePrev?.heartRate ?? 0)),
           respiration: newRespiration,
           resp: newRespiration, // Also set resp field for compatibility
-          stress: data.stress !== undefined ? data.stress : (prev?.stress ?? 0),
-          hrv: data.hrv !== undefined ? data.hrv : (prev?.hrv ?? 0),
+          stress: data.stress !== undefined ? data.stress : (safePrev?.stress ?? 0),
+          hrv: data.hrv !== undefined ? data.hrv : (safePrev?.hrv ?? 0),
 
           // Environment metrics
-          humidity: data.humidity !== undefined ? data.humidity : (prev?.humidity ?? 0),
-          iaq: data.iaq !== undefined ? data.iaq : (prev?.iaq ?? 0),
-          eco2: data.eco2 !== undefined ? data.eco2 : (prev?.eco2 ?? 0),
-          tvoc: data.tvoc !== undefined ? data.tvoc : (prev?.tvoc ?? 0),
-          etoh: data.etoh !== undefined ? data.etoh : (prev?.etoh ?? 0),
+          humidity: data.humidity !== undefined ? data.humidity : (safePrev?.humidity ?? 0),
+          iaq: data.iaq !== undefined ? data.iaq : (safePrev?.iaq ?? 0),
+          eco2: data.eco2 !== undefined ? data.eco2 : (safePrev?.eco2 ?? 0),
+          tvoc: data.tvoc !== undefined ? data.tvoc : (safePrev?.tvoc ?? 0),
+          etoh: data.etoh !== undefined ? data.etoh : (safePrev?.etoh ?? 0),
 
           // Additional fields - create new objects to ensure reference change
-          metrics: data.metrics ? { ...data.metrics } : (prev?.metrics ? { ...prev.metrics } : {}),
-          signals: data.signals ? { ...data.signals } : (prev?.signals ? { ...prev.signals } : {}),
-          raw: data.raw ? { ...data.raw } : (prev?.raw ? { ...prev.raw } : {}),
+          metrics: data.metrics ? { ...data.metrics } : (safePrev?.metrics ? { ...safePrev.metrics } : {}),
+          signals: data.signals ? { ...data.signals } : (safePrev?.signals ? { ...safePrev.signals } : {}),
+          raw: data.raw ? { ...data.raw } : (safePrev?.raw ? { ...safePrev.raw } : {}),
           timestamp: updateTimestamp, // Always use new timestamp to force update
           _updateKey: updateKey, // Force React to detect change
         };
@@ -1102,7 +1133,7 @@ export default function HomeScreen() {
 
       const metrics = [
         { key: 'heartRate', name: 'Estimated HR', value: hr > 0 ? String(Math.round(hr)) : '--', unit: 'BPM', icon: '❤️', colors: ['#2B2E57', '#1B1E3D'] as const },
-        { key: 'respiration', name: 'Estimated Breathing', value: resp > 0 ? String(Math.round(resp)) : '--', unit: 'RPM', icon: '🫁', colors: ['#24425F', '#18253A'] as const },
+        { key: 'respiration', name: 'Estimated Respiration', value: resp > 0 ? String(Math.round(resp)) : '--', unit: 'RPM', icon: '🫁', colors: ['#24425F', '#18253A'] as const },
         { key: 'stress', name: 'Stress', value: stressText, unit: '', icon: '😮‍💨', colors: ['#4A2B2B', '#1E1414'] as const },
         { key: 'sleep', name: 'Sleep', value: sleepDuration, unit: '', icon: '😴', colors: ['#2B2E57', '#1B1E3D'] as const },
       ];
@@ -1159,11 +1190,13 @@ export default function HomeScreen() {
     const waistInches = waistCm / 2.54;
     const waistM = waistCm / 100;
 
-    const bmi = calculateBMI(weightKg, heightM);
-    const waistHeightRatio = calculateWaistHeightRatio(waistInches, heightInches);
-    const absi = calculateABSI(waistM, bmi, heightM);
+    const age = calculateAge(p.dateOfBirth);
 
-    const bmiScore = getBMIScore(bmi);
+    const bmi = calculateBMI(weightKg, heightM);
+    const waistHeightRatio = calculateWaistHeightRatio(waistM, heightM);
+    const absi = calculateABSI(waistM, weightKg, heightM);
+
+    const bmiScore = getBMIScore(bmi, age, gender);
     const waistHeightScore = getWaistHeightRatioScore(waistHeightRatio, gender);
     const absiScore = getABSIScore(absi);
     const overallScore = calculateOverallBodyIndex(waistHeightScore, bmiScore.score, absiScore);
@@ -1261,7 +1294,7 @@ export default function HomeScreen() {
 
   // Helper function to get display name for device
   const getDeviceDisplayName = (device: any) => {
-    return device.customName || device.deviceId;
+    return device.customName || device.defaultName || device.deviceId;
   };
 
   // Handle rename device
@@ -1503,7 +1536,7 @@ export default function HomeScreen() {
         <View style={[styles.sectionHeaderRow, { marginTop: insets.top + 10 }]}>
           <Text style={styles.sectionTitle}>My Health</Text>
           <View style={styles.cardHeaderRight}>
-            {activeDevice && (
+            {activeDevice ? (
               <TouchableOpacity
                 style={styles.deviceNameIndicator}
                 onPress={() => debouncedPush('/(tabs)/all-devices')}
@@ -1516,8 +1549,15 @@ export default function HomeScreen() {
                   ]}
                 />
                 <Text style={styles.deviceNameText}>
-                  {activeDevice.customName || activeDevice.deviceId}
+                  {activeDevice && getDeviceDisplayName(activeDevice)}
                 </Text>
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity 
+                onPress={() => debouncedPush('/(bluetooth)/ScanScreen')}
+                style={{ marginRight: 8 }}
+              >
+                <Text style={styles.viewAll}>Add Device</Text>
               </TouchableOpacity>
             )}
             <TouchableOpacity
@@ -1565,8 +1605,6 @@ export default function HomeScreen() {
                             <View style={{ flex: 1 }}>
                               <Text style={styles.envName} numberOfLines={1} ellipsizeMode="tail">{m.name}</Text>
                             </View>
-                            {/* small status dot (color-coded) */}
-                            <View style={[styles.statusDot, { backgroundColor: '#7EA6FF' }]} />
                           </View>
 
                           <View style={styles.envValueRow}>
@@ -1677,25 +1715,25 @@ export default function HomeScreen() {
               label="Waist Height ratio"
               value={bodyMetrics.waistHeightRatio}
               score={bodyMetrics.waistHeightScore}
-              onInfoPress={() => Alert.alert('Waist Height Ratio', 'The ratio of waist circumference to height. Optimal range is 0.4-0.5 for men and 0.35-0.42 for women.')}
+              onInfoPress={() => Alert.alert('Waist-to-height ratio', HINTS.WHR)}
             />
             <CalculatedIndexRow
               label="BMI"
               value={bodyMetrics.bmi}
               score={bodyMetrics.bmiScore}
-              onInfoPress={() => router.push('/health-disclaimer')}
+              onInfoPress={() => Alert.alert('BMI', HINTS.BMI)}
             />
             <CalculatedIndexRow
               label="ABSI"
               value={bodyMetrics.absi}
               score={bodyMetrics.absiScore}
-              onInfoPress={() => Alert.alert('A Body Shape Index (ABSI)', 'ABSI is a measure of body shape that accounts for BMI and height. Lower values generally indicate better health.')}
+              onInfoPress={() => Alert.alert('ABSI', HINTS.ABSI)}
             />
             <CalculatedIndexRow
               label="Overall Body Index"
               value={bodyMetrics.allFieldsFilled ? bodyMetrics.overallScore.toFixed(1) : '—'}
               score={bodyMetrics.overallScore}
-              onInfoPress={() => Alert.alert('Overall Body Index', 'A composite score (0-10) calculated from Waist Height Ratio, BMI, and ABSI metrics.')}
+              onInfoPress={() => Alert.alert('Overall Body Index', HINTS.OBI)}
             />
           </View>
         </BlurView>
@@ -1730,8 +1768,6 @@ export default function HomeScreen() {
                             <View style={{ flex: 1 }}>
                               <Text style={styles.envName} numberOfLines={1} ellipsizeMode="tail">{m.name}</Text>
                             </View>
-                            {/* small status dot (color-coded) */}
-                            <View style={[styles.statusDot, { backgroundColor: '#7EA6FF' }]} />
                           </View>
 
                           <View style={styles.envValueRow}>
@@ -1777,6 +1813,11 @@ export default function HomeScreen() {
           </View>
         </View>
 
+        <View style={styles.disclaimerContainer}>
+          <Text style={styles.disclaimerText}>
+            This app is not a medical device and does not diagnose, treat, cure, or prevent any disease. For general wellness and lifestyle purposes only.
+          </Text>
+        </View>
         <View style={{ height: 40 }} />
       </ScrollView>
 
@@ -1879,7 +1920,9 @@ export default function HomeScreen() {
                                     </View>
                                   )}
                                 </View>
-                                <Text style={styles.deviceCardId}>{device.deviceId}</Text>
+                                {device.customName || device.defaultName ? (
+                                  <Text style={styles.deviceCardId}>{device.deviceId}</Text>
+                                ) : null}
                               </View>
                             </View>
                             <View style={styles.deviceActions}>
@@ -2010,6 +2053,19 @@ export default function HomeScreen() {
 }
 
 const styles = StyleSheet.create({
+  disclaimerContainer: {
+    paddingHorizontal: 20,
+    marginTop: 10,
+    marginBottom: 10,
+    alignItems: 'center',
+  },
+  disclaimerText: {
+    color: 'rgba(255,255,255,0.4)',
+    fontSize: 11,
+    fontStyle: 'italic',
+    textAlign: 'center',
+    lineHeight: 16,
+  },
   container: { flex: 1, backgroundColor: '#02041A' },
   gradientBackground: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0 },
   scrollContent: { paddingTop: 26, paddingHorizontal: 16 },

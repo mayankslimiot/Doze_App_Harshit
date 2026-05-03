@@ -71,7 +71,7 @@ const STATUS_CONFIG = {
 export default function ConnectScreen() {
   const { selectedDeviceId, wifiSSID, wifiPassword, sendWifiCredentials, setWifiProvisioningSuccess, serialNumber, setSerialNumber } = useProvisioning();
   const router = useRouter();
-  const { refreshDevices } = useDevice();
+  const { refreshDevices, setActiveDevice } = useDevice();
 
   const [currentStatus, setCurrentStatus] = useState<ProvisioningStatus>(ProvisioningStatus.IDLE);
   const [statusMessage, setStatusMessage] = useState<string>('');
@@ -285,9 +285,15 @@ export default function ConnectScreen() {
           console.log('[WiFi Provisioning] 🔄 Refreshing device list...');
           await refreshDevices();
           console.log('[WiFi Provisioning] ✅ Device list refreshed');
-          // DeviceContext will automatically set the first device (or the one from backend activeDevice) as active
+          
+          // AUTO-ACTIVATION: Explicitly set the new device as active
+          // This ensures the user immediately sees data for the device they just added
+          if (registrationResult.device) {
+            console.log('[WiFi Provisioning] 🎯 Auto-activating new device:', registrationResult.device.deviceId);
+            await setActiveDevice(registrationResult.device);
+          }
         } catch (refreshError) {
-          console.error('[WiFi Provisioning] ⚠️ Failed to refresh device list:', refreshError);
+          console.error('[WiFi Provisioning] ⚠️ Failed to refresh or activate device:', refreshError);
         }
 
         // Save BLE id → backend deviceId so Scan screen can show custom name for "Previously Connected"
@@ -936,9 +942,7 @@ const styles = StyleSheet.create({
     borderRadius: 25,
     gap: 8,
   },
-  retryButton: {
-    backgroundColor: '#4A90E2',
-  },
+
   cancelButton: {
     backgroundColor: 'rgba(255, 255, 255, 0.15)',
   },

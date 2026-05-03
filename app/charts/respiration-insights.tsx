@@ -86,20 +86,44 @@ export default function RespirationInsightsScreen() {
       });
     }, [auth.isLoggedIn, activeDevice?.deviceId, onboardingSeen])
   );
-  const [selectedDate, setSelectedDate] = React.useState(new Date());
+  const [selectedDate, setSelectedDate] = React.useState(() => {
+    const now = new Date();
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    // If past 12 PM, we are in the next cycle (D to D+1)
+    if (now.getHours() >= 12) {
+      const tomorrow = new Date(today);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      return tomorrow;
+    }
+    return today;
+  });
   const [isLoading, setIsLoading] = React.useState(false);
   const [isLoadingHistoricalDay, setIsLoadingHistoricalDay] = React.useState(false);
+  const [navDirection, setNavDirection] = React.useState<'prev' | 'next' | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [respirationData, setRespirationData] = React.useState<RespirationDataPoint[]>([]);
 
-  // True when Day view is showing today (same calendar day). Past date = historical fetch from API; today = buffer + live.
+  // True when Day view is showing today's cycle. Past date = historical fetch from API; today = buffer + live.
+  // Uses 12 noon cycle: if it's past 12 PM, the current cycle date is "tomorrow".
   const isTodaySelected = React.useMemo(() => {
     if (selectedPeriod !== 'Day') return true;
-    const today = new Date();
+    const now = new Date();
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    
+    let currentCycleDate;
+    if (now.getHours() >= 12) {
+      currentCycleDate = new Date(todayStart);
+      currentCycleDate.setDate(currentCycleDate.getDate() + 1);
+    } else {
+      currentCycleDate = todayStart;
+    }
+    
     return (
-      selectedDate.getFullYear() === today.getFullYear() &&
-      selectedDate.getMonth() === today.getMonth() &&
-      selectedDate.getDate() === today.getDate()
+      selectedDate.getFullYear() === currentCycleDate.getFullYear() &&
+      selectedDate.getMonth() === currentCycleDate.getMonth() &&
+      selectedDate.getDate() === currentCycleDate.getDate()
     );
   }, [selectedPeriod, selectedDate]);
   
@@ -654,10 +678,12 @@ export default function RespirationInsightsScreen() {
     if (!activeDevice?.deviceId || selectedPeriod !== 'Day' || isTodaySelected || !auth.isLoggedIn) {
       return;
     }
+    // 12 noon to 12 noon cycle: fetch from (selectedDate - 1 day) 12:00 PM to selectedDate 11:59 AM
     const dayStart = new Date(selectedDate);
-    dayStart.setHours(0, 0, 0, 0);
+    dayStart.setDate(dayStart.getDate() - 1);
+    dayStart.setHours(12, 0, 0, 0);
     const dayEnd = new Date(selectedDate);
-    dayEnd.setHours(23, 59, 59, 999);
+    dayEnd.setHours(11, 59, 59, 999);
     const startMs = dayStart.getTime();
     const endMs = dayEnd.getTime();
     const dateKey = `${selectedDate.getFullYear()}-${String(selectedDate.getMonth() + 1).padStart(2, '0')}-${String(selectedDate.getDate()).padStart(2, '0')}`;
@@ -710,10 +736,12 @@ export default function RespirationInsightsScreen() {
     if (!activeDevice?.deviceId || selectedPeriod !== 'Day' || isTodaySelected) return;
     const dateKey = `${selectedDate.getFullYear()}-${String(selectedDate.getMonth() + 1).padStart(2, '0')}-${String(selectedDate.getDate()).padStart(2, '0')}`;
     if (historicalDayDateRef.current !== dateKey || historicalDayRawPointsRef.current.length === 0) return;
+    // 12 noon to 12 noon cycle for re-aggregation
     const dayStart = new Date(selectedDate);
-    dayStart.setHours(0, 0, 0, 0);
+    dayStart.setDate(dayStart.getDate() - 1);
+    dayStart.setHours(12, 0, 0, 0);
     const dayEnd = new Date(selectedDate);
-    dayEnd.setHours(23, 59, 59, 999);
+    dayEnd.setHours(11, 59, 59, 999);
     const startMs = dayStart.getTime();
     const endMs = dayEnd.getTime();
     applyHistoricalAggregation(historicalDayRawPointsRef.current, startMs, endMs, zoomIndex);
@@ -1202,12 +1230,20 @@ export default function RespirationInsightsScreen() {
   // Format date for display based on period
   const formattedDate = React.useMemo(() => {
     if (selectedPeriod === 'Day') {
-      return selectedDate.toLocaleDateString('en-US', {
-        weekday: 'short',
-        day: '2-digit',
-        month: 'short',
-        year: 'numeric',
-      });
+      // Show cycle range: e.g. "23 - 24 Apr 2026"
+      const cycleStart = new Date(selectedDate);
+      cycleStart.setDate(cycleStart.getDate() - 1);
+      
+      const startDay = cycleStart.getDate();
+      const startMonth = cycleStart.toLocaleDateString('en-US', { month: 'short' });
+      const endDay = selectedDate.getDate();
+      const endMonth = selectedDate.toLocaleDateString('en-US', { month: 'short' });
+      const year = selectedDate.getFullYear();
+      
+      if (startMonth === endMonth) {
+        return `${startDay} - ${endDay} ${startMonth} ${year}`;
+      }
+      return `${startDay} ${startMonth} - ${endDay} ${endMonth} ${year}`;
     } else if (selectedPeriod === 'Week') {
       const weekStart = getWeekStart(selectedDate);
       const weekEnd = getWeekEnd(selectedDate);
@@ -1224,6 +1260,7 @@ export default function RespirationInsightsScreen() {
 
   // Navigate to previous period
   const goToPrevious = () => {
+    setNavDirection('prev');
     const newDate = new Date(selectedDate);
     if (selectedPeriod === 'Day') {
       newDate.setDate(newDate.getDate() - 1);
@@ -1235,8 +1272,21 @@ export default function RespirationInsightsScreen() {
     setSelectedDate(newDate);
   };
 
-  // Navigate to next period
+  // Navigate to next period - prevent going to future dates (cycle-aware)
   const goToNext = () => {
+    setNavDirection('next');
+    const now = new Date();
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    
+    let maxCycleDate;
+    if (now.getHours() >= 12) {
+      maxCycleDate = new Date(todayStart);
+      maxCycleDate.setDate(maxCycleDate.getDate() + 1);
+    } else {
+      maxCycleDate = todayStart;
+    }
+
     const newDate = new Date(selectedDate);
     if (selectedPeriod === 'Day') {
       newDate.setDate(newDate.getDate() + 1);
@@ -1245,13 +1295,26 @@ export default function RespirationInsightsScreen() {
     } else {
       newDate.setMonth(newDate.getMonth() + 1);
     }
-    setSelectedDate(newDate);
+    // Only update if new date is not in the future
+    if (newDate <= maxCycleDate) {
+      setSelectedDate(newDate);
+    }
   };
 
-  // Check if next button should be disabled (already at or past today)
+  // Check if next button should be disabled (already at or past today) - cycle-aware
   const canGoNext = React.useMemo(() => {
-    const today = new Date();
-    today.setHours(23, 59, 59, 999);
+    const now = new Date();
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    
+    let maxCycleDate;
+    if (now.getHours() >= 12) {
+      maxCycleDate = new Date(todayStart);
+      maxCycleDate.setDate(maxCycleDate.getDate() + 1);
+    } else {
+      maxCycleDate = todayStart;
+    }
+
     const testDate = new Date(selectedDate);
     if (selectedPeriod === 'Day') {
       testDate.setDate(testDate.getDate() + 1);
@@ -1260,13 +1323,10 @@ export default function RespirationInsightsScreen() {
     } else {
       testDate.setMonth(testDate.getMonth() + 1);
     }
-    return testDate <= today;
+    return testDate <= maxCycleDate;
   }, [selectedDate, selectedPeriod]);
 
-  // Reset to today when period changes
-  React.useEffect(() => {
-    setSelectedDate(new Date());
-  }, [selectedPeriod]);
+
 
   // Format time for X-axis labels
   const formatTime = (timestamp: number) => {
@@ -1417,6 +1477,14 @@ export default function RespirationInsightsScreen() {
 
   const customGestures = React.useMemo(() => Gesture.Race(doubleTapGesture), [doubleTapGesture]);
 
+  const isFetchingData = isLoadingHistoricalDay || isLoading || isLoadingWeekly || isLoadingMonthly;
+
+  React.useEffect(() => {
+    if (!isFetchingData) {
+      setNavDirection(null);
+    }
+  }, [isFetchingData]);
+
   // Show skeleton only when we have a device and are loading. When no device, show "No data available".
   const isInitialLoading = 
     (selectedPeriod === 'Day' && activeDevice?.deviceId && (isTodaySelected ? (isLoading && respirationData.length === 0) : isLoadingHistoricalDay)) ||
@@ -1437,7 +1505,7 @@ export default function RespirationInsightsScreen() {
         <TouchableOpacity onPress={() => router.back()} style={styles.backButton} activeOpacity={0.8}>
           <Ionicons name="arrow-back" size={24} color="#FFFFFF" />
         </TouchableOpacity>
-        <Text style={styles.headerTitle} numberOfLines={1}>Estimated Breathing Trends</Text>
+        <Text style={styles.headerTitle} numberOfLines={1}>{activeDevice?.customName || activeDevice?.defaultName || 'Estimated Respiration Trends'}</Text>
         <View style={{ width: 40 }} />
       </View>
 
@@ -1463,17 +1531,30 @@ export default function RespirationInsightsScreen() {
 
         {/* Date Navigation */}
         <View style={styles.dateNavigation}>
-          <TouchableOpacity onPress={goToPrevious} style={styles.dateNavButton} activeOpacity={0.8}>
-            <Ionicons name="chevron-back" size={20} color="#C7D6FF" />
+          <TouchableOpacity 
+            onPress={goToPrevious} 
+            style={isFetchingData ? [styles.dateNavButton, styles.dateNavButtonDisabled] : styles.dateNavButton} 
+            activeOpacity={0.8}
+            disabled={isFetchingData}
+          >
+            {(isFetchingData && navDirection === 'prev') ? (
+              <ActivityIndicator size="small" color="rgba(199,214,255,0.5)" />
+            ) : (
+              <Ionicons name="chevron-back" size={20} color={isFetchingData ? "rgba(199,214,255,0.3)" : "#C7D6FF"} />
+            )}
           </TouchableOpacity>
           <Text style={styles.dateText}>{formattedDate}</Text>
-          <TouchableOpacity
-            onPress={goToNext}
-            style={[styles.dateNavButton, !canGoNext && styles.dateNavButtonDisabled]}
-            disabled={!canGoNext}
+          <TouchableOpacity 
+            onPress={goToNext} 
+            style={(canGoNext && !isFetchingData) ? styles.dateNavButton : [styles.dateNavButton, styles.dateNavButtonDisabled]} 
             activeOpacity={0.8}
+            disabled={!canGoNext || isFetchingData}
           >
-            <Ionicons name="chevron-forward" size={20} color={canGoNext ? '#C7D6FF' : 'rgba(199,214,255,0.35)'} />
+            {(isFetchingData && navDirection === 'next') ? (
+              <ActivityIndicator size="small" color="rgba(199,214,255,0.5)" />
+            ) : (
+              <Ionicons name="chevron-forward" size={20} color={(canGoNext && !isFetchingData) ? "#C7D6FF" : "rgba(199,214,255,0.3)"} />
+            )}
           </TouchableOpacity>
         </View>
 
@@ -1485,19 +1566,19 @@ export default function RespirationInsightsScreen() {
             {/* Key Respiration Metrics */}
             <View style={styles.metricsRow}>
               <View style={styles.metricCard}>
-                <Text style={styles.metricLabel}>Min Breathing</Text>
+                <Text style={styles.metricLabel}>Min Respiration</Text>
                 <Text style={styles.metricValue}>{displayMetrics.min}</Text>
-                <Text style={styles.metricUnit}>Resp/Min</Text>
+                <Text style={styles.metricUnit}>RPM</Text>
               </View>
               <View style={styles.metricCard}>
-                <Text style={styles.metricLabel}>Avg Breathing</Text>
+                <Text style={styles.metricLabel}>Avg Respiration</Text>
                 <Text style={styles.metricValue}>{displayMetrics.average}</Text>
-                <Text style={styles.metricUnit}>Resp/Min</Text>
+                <Text style={styles.metricUnit}>RPM</Text>
               </View>
               <View style={styles.metricCard}>
-                <Text style={styles.metricLabel}>Max Breathing</Text>
+                <Text style={styles.metricLabel}>Max Respiration</Text>
                 <Text style={styles.metricValue}>{displayMetrics.max}</Text>
-                <Text style={styles.metricUnit}>Resp/Min</Text>
+                <Text style={styles.metricUnit}>RPM</Text>
               </View>
             </View>
 
@@ -1640,6 +1721,13 @@ export default function RespirationInsightsScreen() {
                     </CartesianChart>
                   </View>
 
+              {/* Disclaimer for 12 PM - 12 PM cycle */}
+              <View style={styles.disclaimerContainer}>
+                <Text style={styles.disclaimerText}>
+                  Disclaimer: Our day cycle is 12 noon to 12 noon. For example, Monday data counts from Sunday 12 noon to Monday 12 noon.
+                </Text>
+              </View>
+
                 </View>
               )
             ) : selectedPeriod === 'Week' ? (
@@ -1759,6 +1847,13 @@ export default function RespirationInsightsScreen() {
                       }}
                     </CartesianChart>
                   </View>
+
+              {/* Disclaimer for 12 PM - 12 PM cycle */}
+              <View style={styles.disclaimerContainer}>
+                <Text style={styles.disclaimerText}>
+                  Disclaimer: Our day cycle is 12 noon to 12 noon. For example, Monday data counts from Sunday 12 noon to Monday 12 noon.
+                </Text>
+              </View>
 
                 </View>
               )
@@ -2324,5 +2419,21 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 13,
     fontWeight: '700',
+  },
+  disclaimerContainer: {
+    paddingHorizontal: 12,
+    paddingTop: 12,
+    paddingBottom: 4,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,255,255,0.06)',
+    marginTop: 8,
+    width: '100%',
+  },
+  disclaimerText: {
+    color: 'rgba(199,214,255,0.5)',
+    fontSize: 10,
+    lineHeight: 14,
+    textAlign: 'center',
+    fontStyle: 'italic',
   },
 });

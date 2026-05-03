@@ -92,12 +92,12 @@ async function saveNotificationState(state: NotificationState): Promise<void> {
 async function ensureAndroidChannel(): Promise<void> {
   if (Platform.OS !== 'android') return;
   await Notifications.setNotificationChannelAsync('respiration_alerts', {
-    name: 'Breathing Alerts',
+    name: 'Breathing Notifications',
     importance: Notifications.AndroidImportance.HIGH,
     sound: 'default',
     vibrationPattern: [200, 100, 200, 100, 200],
     lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
-    description: 'Alerts when estimated breathing exceeds or falls below thresholds',
+    description: 'Notifications when estimated breathing exceeds or falls below thresholds',
   });
 }
 
@@ -174,8 +174,8 @@ export async function processRespirationReading(
       // 2. Cooldown has expired
       if (!state.wasAboveHigh && isCooldownExpired(state.lastHighNotification, settings.cooldownMinutes)) {
         await sendRespirationNotification(
-          'High Estimated Breathing Alert',
-          `Your estimated breathing is ${Math.round(respiration * 10) / 10} RPM, which is above your threshold of ${settings.highThreshold} RPM.`,
+          'Breathing Trend Update',
+          `Your estimated breathing is ${Math.round(respiration * 10) / 10} RPM, which is above your set threshold of ${settings.highThreshold} RPM.`,
           'high'
         );
         
@@ -201,8 +201,8 @@ export async function processRespirationReading(
       // 2. Cooldown has expired
       if (!state.wasBelowLow && isCooldownExpired(state.lastLowNotification, settings.cooldownMinutes)) {
         await sendRespirationNotification(
-          'Low Estimated Breathing Alert',
-          `Your estimated breathing is ${Math.round(respiration * 10) / 10} RPM, which is below your threshold of ${settings.lowThreshold} RPM.`,
+          'Breathing Trend Update',
+          `Your estimated breathing is ${Math.round(respiration * 10) / 10} RPM, which is below your set threshold of ${settings.lowThreshold} RPM.`,
           'low'
         );
         

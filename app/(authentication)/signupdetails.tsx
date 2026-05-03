@@ -1,4 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import { BlurView } from 'expo-blur';
 import Checkbox from 'expo-checkbox';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -10,7 +11,9 @@ import {
   Dimensions,
   KeyboardAvoidingView,
   KeyboardTypeOptions,
+  Modal,
   Platform,
+  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -30,6 +33,7 @@ type CustomInputProps = {
   onChangeText: (text: string) => void;
   secureTextEntry?: boolean;
   keyboardType?: KeyboardTypeOptions;
+  containerStyle?: object;
 };
 
 type FormErrors = {
@@ -41,8 +45,8 @@ type FormErrors = {
 
 
 // Custom Input Component for consistent styling
-const CustomInput = ({ icon, placeholder, value, onChangeText, secureTextEntry = false, keyboardType = 'default' }: CustomInputProps) => (
-  <BlurView intensity={30} tint="dark" style={styles.inputContainer}>
+const CustomInput = ({ icon, placeholder, value, onChangeText, secureTextEntry = false, keyboardType = 'default', containerStyle }: CustomInputProps) => (
+  <BlurView intensity={30} tint="dark" style={[styles.inputContainer, containerStyle]}>
     <Ionicons name={icon} size={22} color="rgba(255, 255, 255, 0.7)" style={styles.inputIcon} />
     <TextInput
       style={styles.input}
@@ -59,6 +63,12 @@ const CustomInput = ({ icon, placeholder, value, onChangeText, secureTextEntry =
 export default function SignUpDetailsScreen() {
   const router = useRouter();
   const [email, setEmail] = useState('');
+  const [phone, setPhone] = useState('');
+  const [dob, setDob] = useState('');
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [dateObject, setDateObject] = useState(new Date());
+  const [sex, setSex] = useState('');
+  const [sexModalVisible, setSexModalVisible] = useState(false);
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [name, setName] = useState('');
@@ -92,6 +102,11 @@ export default function SignUpDetailsScreen() {
       password: password,
       name: name.trim(),
       role: 'user',
+      mobile: phone.trim(),
+      weightProfile: {
+        dob: dob ? dob.split('-').reverse().join('-') : undefined,
+        gender: sex || undefined,
+      }
     };
 
     try {
@@ -170,6 +185,28 @@ export default function SignUpDetailsScreen() {
         <CustomInput icon="mail-outline" placeholder="Email" value={email} onChangeText={setEmail} keyboardType="email-address" />
         {errors.email && <Text style={styles.errorText}>{errors.email}</Text>}
 
+        <CustomInput icon="call-outline" placeholder="Phone Number (Optional)" value={phone} onChangeText={setPhone} keyboardType="phone-pad" />
+
+        <View style={styles.rowContainer}>
+          <TouchableOpacity 
+            style={[styles.inputContainer, { flex: 1, marginTop: 0, marginRight: 10 }]} 
+            onPress={() => setShowDatePicker(true)}
+          >
+            <Ionicons name="calendar-outline" size={22} color="rgba(255, 255, 255, 0.7)" style={styles.inputIcon} />
+            <Text style={[styles.input, { paddingVertical: 16, color: (dob ? '#fff' : 'rgba(255, 255, 255, 0.5)') }]}>
+              {dob ? dob : 'DD-MM-YYYY'}
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity style={[styles.inputContainer, { flex: 1, marginTop: 0 }]} onPress={() => setSexModalVisible(true)}>
+            <Ionicons name="person-outline" size={22} color="rgba(255, 255, 255, 0.7)" style={styles.inputIcon} />
+            <Text style={[styles.input, { paddingVertical: 16, color: (sex ? '#fff' : 'rgba(255, 255, 255, 0.5)') }]}>
+              {sex ? (sex.charAt(0).toUpperCase() + sex.slice(1)) : 'Sex'}
+            </Text>
+            <Ionicons name="chevron-down" size={18} color="#fff" />
+          </TouchableOpacity>
+        </View>
+
         <CustomInput icon="lock-closed-outline" placeholder="Password" value={password} onChangeText={setPassword} secureTextEntry />
         {errors.password && <Text style={styles.errorText}>{errors.password}</Text>}
 
@@ -202,6 +239,99 @@ export default function SignUpDetailsScreen() {
           </TouchableOpacity>
         </View>
       </ScrollView>
+
+      {/* Floating Modal: Sex selector */}
+      <Modal
+        visible={sexModalVisible}
+        animationType="fade"
+        transparent
+        statusBarTranslucent
+        onRequestClose={() => setSexModalVisible(false)}
+      >
+        <Pressable style={styles.modalBackdrop} onPress={() => setSexModalVisible(false)} />
+        <View style={styles.modalCenter}>
+          <View style={styles.modalCard}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Select Sex</Text>
+              <TouchableOpacity onPress={() => setSexModalVisible(false)}>
+                <Ionicons name="close" size={22} color="#fff" />
+              </TouchableOpacity>
+            </View>
+
+            <TouchableOpacity
+              style={styles.modalItem}
+              onPress={() => { setSex(''); setSexModalVisible(false); }}
+            >
+              <Text style={styles.modalItemText}>Select</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.modalItem}
+              onPress={() => { setSex('female'); setSexModalVisible(false); }}
+            >
+              <Text style={styles.modalItemText}>Female</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.modalItem}
+              onPress={() => { setSex('male'); setSexModalVisible(false); }}
+            >
+              <Text style={styles.modalItemText}>Male</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.modalItem}
+              onPress={() => { setSex('other'); setSexModalVisible(false); }}
+            >
+              <Text style={styles.modalItemText}>Other / Undisclosed</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* DatePicker Modals/Views */}
+      {showDatePicker && (
+        Platform.OS === 'ios' ? (
+          <Modal transparent visible={showDatePicker} animationType="slide">
+            <Pressable style={styles.modalBackdrop} onPress={() => setShowDatePicker(false)} />
+            <View style={{ position: 'absolute', bottom: 0, width: '100%', backgroundColor: '#fff', paddingBottom: 30, paddingTop: 10, borderTopRightRadius: 20, borderTopLeftRadius: 20 }}>
+              <View style={{ flexDirection: 'row', justifyContent: 'flex-end', paddingHorizontal: 20, marginBottom: 10 }}>
+                <TouchableOpacity onPress={() => {
+                  const d = dateObject.getDate().toString().padStart(2, '0');
+                  const m = (dateObject.getMonth() + 1).toString().padStart(2, '0');
+                  const y = dateObject.getFullYear();
+                  setDob(`${d}-${m}-${y}`);
+                  setShowDatePicker(false);
+                }}>
+                  <Text style={{ color: '#007AFF', fontWeight: 'bold', fontSize: 18 }}>Done</Text>
+                </TouchableOpacity>
+              </View>
+              <DateTimePicker
+                value={dateObject}
+                mode="date"
+                display="spinner"
+                maximumDate={new Date()}
+                onChange={(e, d) => d && setDateObject(d)}
+                textColor="#000"
+              />
+            </View>
+          </Modal>
+        ) : (
+          <DateTimePicker
+            value={dateObject}
+            mode="date"
+            display="default"
+            maximumDate={new Date()}
+            onChange={(event, selectedDate) => {
+              setShowDatePicker(false);
+              if (event.type === 'set' && selectedDate) {
+                setDateObject(selectedDate);
+                const d = selectedDate.getDate().toString().padStart(2, '0');
+                const m = (selectedDate.getMonth() + 1).toString().padStart(2, '0');
+                const y = selectedDate.getFullYear();
+                setDob(`${d}-${m}-${y}`);
+              }
+            }}
+          />
+        )
+      )}
     </KeyboardAvoidingView>
   );
 }
@@ -286,4 +416,30 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     marginTop: 15,
   },
+  modalBackdrop: {
+    position: 'absolute', left: 0, right: 0, top: 0, bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.5)'
+  },
+  modalCenter: {
+    position: 'absolute', left: 0, right: 0, top: 0, bottom: 0,
+    justifyContent: 'center', alignItems: 'center', paddingHorizontal: 20
+  },
+  modalCard: {
+    width: '100%',
+    maxWidth: 520,
+    backgroundColor: 'rgba(20,24,60,0.95)',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+    padding: 14,
+  },
+  modalHeader: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8
+  },
+  modalTitle: { color: '#fff', fontSize: 18, fontWeight: '700' },
+  modalItem: {
+    paddingVertical: 12, paddingHorizontal: 8, borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: 'rgba(255,255,255,0.1)'
+  },
+  modalItemText: { color: '#fff', fontSize: 15 },
 });

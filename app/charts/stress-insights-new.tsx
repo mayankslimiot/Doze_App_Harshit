@@ -87,6 +87,7 @@ export default function HeartRateInsightsScreen() {
   );
   const [selectedDate, setSelectedDate] = React.useState(new Date());
   const [isLoading, setIsLoading] = React.useState(false);
+  const [navDirection, setNavDirection] = React.useState<'prev' | 'next' | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [heartRateData, setHeartRateData] = React.useState<HeartRateDataPoint[]>([]);
   
@@ -1225,6 +1226,7 @@ export default function HeartRateInsightsScreen() {
 
   // Navigate to previous period
   const goToPrevious = () => {
+    setNavDirection('prev');
     const newDate = new Date(selectedDate);
     if (selectedPeriod === 'Day') {
       newDate.setDate(newDate.getDate() - 1);
@@ -1238,6 +1240,9 @@ export default function HeartRateInsightsScreen() {
 
   // Navigate to next period
   const goToNext = () => {
+    setNavDirection('next');
+    const today = new Date();
+    today.setHours(23, 59, 59, 999);
     const newDate = new Date(selectedDate);
     if (selectedPeriod === 'Day') {
       newDate.setDate(newDate.getDate() + 1);
@@ -1249,10 +1254,7 @@ export default function HeartRateInsightsScreen() {
     setSelectedDate(newDate);
   };
 
-  // Reset to today when period changes
-  React.useEffect(() => {
-    setSelectedDate(new Date());
-  }, [selectedPeriod]);
+
 
   // Domain is now updated in the effect above (immediately when graphData changes)
   // This effect is no longer needed - domain updates are handled by the live mode effect
@@ -1405,6 +1407,14 @@ export default function HeartRateInsightsScreen() {
 
   const customGestures = React.useMemo(() => Gesture.Race(doubleTapGesture), [doubleTapGesture]);
 
+  const isFetchingData = isLoading || isLoadingWeekly || isLoadingMonthly;
+
+  React.useEffect(() => {
+    if (!isFetchingData) {
+      setNavDirection(null);
+    }
+  }, [isFetchingData]);
+
   // Show skeleton immediately while data is loading
   const isInitialLoading = shouldShowDayLoading || 
     (selectedPeriod === 'Week' && isLoadingWeekly && weeklyHeartRateData.length === 0) ||
@@ -1451,12 +1461,30 @@ export default function HeartRateInsightsScreen() {
 
         {/* Date Navigation */}
         <View style={styles.dateNavigation}>
-          <TouchableOpacity onPress={goToPrevious} style={styles.dateNavButton} activeOpacity={0.8}>
-            <Ionicons name="chevron-back" size={20} color="#C7D6FF" />
+          <TouchableOpacity 
+            onPress={goToPrevious} 
+            style={isFetchingData ? [styles.dateNavButton, styles.dateNavButtonDisabled] : styles.dateNavButton} 
+            activeOpacity={0.8}
+            disabled={isFetchingData}
+          >
+            {(isFetchingData && navDirection === 'prev') ? (
+              <ActivityIndicator size="small" color="rgba(199,214,255,0.5)" />
+            ) : (
+              <Ionicons name="chevron-back" size={20} color={isFetchingData ? "rgba(199,214,255,0.3)" : "#C7D6FF"} />
+            )}
           </TouchableOpacity>
           <Text style={styles.dateText}>{formattedDate}</Text>
-          <TouchableOpacity onPress={goToNext} style={styles.dateNavButton} activeOpacity={0.8}>
-            <Ionicons name="chevron-forward" size={20} color="#C7D6FF" />
+          <TouchableOpacity 
+            onPress={goToNext} 
+            style={(canGoNext && !isFetchingData) ? styles.dateNavButton : [styles.dateNavButton, styles.dateNavButtonDisabled]} 
+            activeOpacity={0.8}
+            disabled={!canGoNext || isFetchingData}
+          >
+            {(isFetchingData && navDirection === 'next') ? (
+              <ActivityIndicator size="small" color="rgba(199,214,255,0.5)" />
+            ) : (
+              <Ionicons name="chevron-forward" size={20} color={(canGoNext && !isFetchingData) ? "#C7D6FF" : "rgba(199,214,255,0.3)"} />
+            )}
           </TouchableOpacity>
         </View>
 
@@ -1539,7 +1567,7 @@ export default function HeartRateInsightsScreen() {
               <View style={styles.legendContainer}>
                 <View style={styles.legendItem}>
                   <View style={[styles.legendRectangle, { backgroundColor: 'rgba(126,166,255,0.3)' }]} />
-                  <Text style={styles.legendText}>Your healthy range</Text>
+                  <Text style={styles.legendText}>Your typical range</Text>
                 </View>
               </View>
 
@@ -1659,7 +1687,7 @@ export default function HeartRateInsightsScreen() {
               <View style={styles.legendContainer}>
                 <View style={styles.legendItem}>
                   <View style={[styles.legendRectangle, { backgroundColor: 'rgba(126,166,255,0.3)' }]} />
-                  <Text style={styles.legendText}>Your healthy range</Text>
+                  <Text style={styles.legendText}>Your typical range</Text>
                 </View>
               </View>
 
@@ -1793,7 +1821,7 @@ export default function HeartRateInsightsScreen() {
             <View style={styles.legendContainer}>
               <View style={styles.legendItem}>
                 <View style={[styles.legendRectangle, { backgroundColor: 'rgba(126,166,255,0.3)' }]} />
-                <Text style={styles.legendText}>Your healthy range</Text>
+                <Text style={styles.legendText}>Your typical range</Text>
               </View>
               
               {/* Zoom Controls - Only for Day view, small buttons on right */}

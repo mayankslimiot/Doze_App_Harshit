@@ -198,8 +198,8 @@ export default function UserInfoScreen() {
         <Text style={styles.updateText}>Update</Text>
       </TouchableOpacity>
 
-      <TouchableOpacity style={styles.pillPrimary} activeOpacity={0.9}>
-        <Text style={styles.pillText}>Set Alerts</Text>
+      <TouchableOpacity style={styles.pillPrimary} activeOpacity={0.9} onPress={() => router.push('/notification-settings')}>
+        <Text style={styles.pillText}>Set Notifications</Text>
       </TouchableOpacity>
 
       <View style={{ height: 8 }} />

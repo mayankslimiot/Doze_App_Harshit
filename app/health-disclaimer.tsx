@@ -57,10 +57,10 @@ export default function HealthDisclaimerScreen() {
       >
         <View style={styles.card}>
           <Text style={styles.disclaimerText}>
-            DozeMate is a wellness product designed to help users observe general heart rate and breathing trends during rest and sleep.
+            DozeMate is a wellness product designed to help users observe general heart rate and respiration trends during rest and sleep.
           </Text>
           <Text style={[styles.disclaimerText, { marginBottom: 0 }]}>
-            The information provided by DozeMate is for general wellness and lifestyle purposes only and is not intended for medical use, diagnosis, or treatment of any medical condition. Always consult a qualified healthcare professional for medical advice.
+            This app is not a medical device and does not diagnose, treat, cure, or prevent any disease. The information provided by DozeMate is for general wellness and lifestyle purposes only and is not intended for medical use. Always consult a qualified healthcare professional for medical advice.
           </Text>
         </View>
 

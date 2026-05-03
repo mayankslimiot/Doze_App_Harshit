@@ -96,20 +96,43 @@ export default function HeartRateInsightsScreen() {
       });
     }, [auth.isLoggedIn, activeDevice?.deviceId, onboardingSeen])
   );
-  const [selectedDate, setSelectedDate] = React.useState(new Date());
+  const [selectedDate, setSelectedDate] = React.useState(() => {
+    const now = new Date();
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    // If past 12 PM, we are in the next cycle (D to D+1)
+    if (now.getHours() >= 12) {
+      const tomorrow = new Date(today);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      return tomorrow;
+    }
+    return today;
+  });
   const [isLoadingHistoricalDay, setIsLoadingHistoricalDay] = React.useState(false);
   const [isLoading, setIsLoading] = React.useState(false);
+  const [navDirection, setNavDirection] = React.useState<'prev' | 'next' | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [heartRateData, setHeartRateData] = React.useState<HeartRateDataPoint[]>([]);
 
   // True when Day view is showing today (same calendar day). Past date = historical fetch from API; today = buffer + live.
   const isTodaySelected = React.useMemo(() => {
     if (selectedPeriod !== 'Day') return true;
-    const today = new Date();
+    const now = new Date();
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    
+    let currentCycleDate;
+    if (now.getHours() >= 12) {
+      currentCycleDate = new Date(todayStart);
+      currentCycleDate.setDate(currentCycleDate.getDate() + 1);
+    } else {
+      currentCycleDate = todayStart;
+    }
+    
     return (
-      selectedDate.getFullYear() === today.getFullYear() &&
-      selectedDate.getMonth() === today.getMonth() &&
-      selectedDate.getDate() === today.getDate()
+      selectedDate.getFullYear() === currentCycleDate.getFullYear() &&
+      selectedDate.getMonth() === currentCycleDate.getMonth() &&
+      selectedDate.getDate() === currentCycleDate.getDate()
     );
   }, [selectedPeriod, selectedDate]);
   
@@ -122,6 +145,8 @@ export default function HeartRateInsightsScreen() {
     zoomLevel: { index: number; label: string; rangeSec: number };
   } | null>(null);
   const [dayGraphReady, setDayGraphReady] = React.useState(false);
+  // Gate to force-unmount charts during date/period transitions to prevent Skia/Reanimated race conditions
+  const [chartMounted, setChartMounted] = React.useState(true);
   const [respirationOverlayChecked, setRespirationOverlayChecked] = React.useState(false);
   // Trigger re-run of Day metrics when historical raw points are set (refs don't trigger re-renders)
   const [historicalDayRawPointsKey, setHistoricalDayRawPointsKey] = React.useState(0);
@@ -355,9 +380,10 @@ export default function HeartRateInsightsScreen() {
       return;
     }
     const dayStart = new Date(selectedDate);
-    dayStart.setHours(0, 0, 0, 0);
+    dayStart.setDate(dayStart.getDate() - 1);
+    dayStart.setHours(12, 0, 0, 0);
     const dayEnd = new Date(selectedDate);
-    dayEnd.setHours(23, 59, 59, 999);
+    dayEnd.setHours(11, 59, 59, 999);
     const startMs = dayStart.getTime();
     const endMs = dayEnd.getTime();
     const dateKey = `${selectedDate.getFullYear()}-${String(selectedDate.getMonth() + 1).padStart(2, '0')}-${String(selectedDate.getDate()).padStart(2, '0')}`;
@@ -412,9 +438,10 @@ export default function HeartRateInsightsScreen() {
       return;
     }
     const dayStart = new Date(selectedDate);
-    dayStart.setHours(0, 0, 0, 0);
+    dayStart.setDate(dayStart.getDate() - 1);
+    dayStart.setHours(12, 0, 0, 0);
     const dayEnd = new Date(selectedDate);
-    dayEnd.setHours(23, 59, 59, 999);
+    dayEnd.setHours(11, 59, 59, 999);
     const startMs = dayStart.getTime();
     const endMs = dayEnd.getTime();
     const dateKey = `${selectedDate.getFullYear()}-${String(selectedDate.getMonth() + 1).padStart(2, '0')}-${String(selectedDate.getDate()).padStart(2, '0')}`;
@@ -465,9 +492,10 @@ export default function HeartRateInsightsScreen() {
     const dateKey = `${selectedDate.getFullYear()}-${String(selectedDate.getMonth() + 1).padStart(2, '0')}-${String(selectedDate.getDate()).padStart(2, '0')}`;
     if (historicalDayRespirationDateRef.current !== dateKey || historicalDayRespirationRawPointsRef.current.length === 0) return;
     const dayStart = new Date(selectedDate);
-    dayStart.setHours(0, 0, 0, 0);
+    dayStart.setDate(dayStart.getDate() - 1);
+    dayStart.setHours(12, 0, 0, 0);
     const dayEnd = new Date(selectedDate);
-    dayEnd.setHours(23, 59, 59, 999);
+    dayEnd.setHours(11, 59, 59, 999);
     const startMs = dayStart.getTime();
     const endMs = dayEnd.getTime();
     applyHistoricalRespirationAggregation(historicalDayRespirationRawPointsRef.current, startMs, endMs, zoomIndex);
@@ -479,9 +507,10 @@ export default function HeartRateInsightsScreen() {
     const dateKey = `${selectedDate.getFullYear()}-${String(selectedDate.getMonth() + 1).padStart(2, '0')}-${String(selectedDate.getDate()).padStart(2, '0')}`;
     if (historicalDayDateRef.current !== dateKey || historicalDayRawPointsRef.current.length === 0) return;
     const dayStart = new Date(selectedDate);
-    dayStart.setHours(0, 0, 0, 0);
+    dayStart.setDate(dayStart.getDate() - 1);
+    dayStart.setHours(12, 0, 0, 0);
     const dayEnd = new Date(selectedDate);
-    dayEnd.setHours(23, 59, 59, 999);
+    dayEnd.setHours(11, 59, 59, 999);
     const startMs = dayStart.getTime();
     const endMs = dayEnd.getTime();
     applyHistoricalAggregation(historicalDayRawPointsRef.current, startMs, endMs, zoomIndex);
@@ -504,6 +533,16 @@ export default function HeartRateInsightsScreen() {
     if (selectedPeriod !== 'Day') return;
     setZoomIndex(ZOOM_INDEX_10M);
   }, [selectedPeriod, selectedDate, isTodaySelected]);
+
+  // Force-unmount charts briefly when date or period changes to avoid Skia/Reanimated race condition.
+  // The NativeReanimatedContainer's worklet mapper holds a stale picture reference during transitions,
+  // which causes C++ to throw "Expected arraybuffer as first parameter". By unmounting the chart
+  // for one frame, we ensure the old mapper is stopped before new data arrives.
+  React.useEffect(() => {
+    setChartMounted(false);
+    const timer = setTimeout(() => setChartMounted(true), 50);
+    return () => clearTimeout(timer);
+  }, [selectedDate, selectedPeriod]);
 
   // PHASE 3: Respiration graph subscription for overlay
   React.useEffect(() => {
@@ -1626,12 +1665,19 @@ export default function HeartRateInsightsScreen() {
   // Format date for display based on period
   const formattedDate = React.useMemo(() => {
     if (selectedPeriod === 'Day') {
-      return selectedDate.toLocaleDateString('en-US', {
-        weekday: 'short',
-        day: '2-digit',
-        month: 'short',
-        year: 'numeric',
-      });
+      const cycleStart = new Date(selectedDate);
+      cycleStart.setDate(cycleStart.getDate() - 1);
+      
+      const startDay = cycleStart.getDate();
+      const startMonth = cycleStart.toLocaleDateString('en-US', { month: 'short' });
+      const endDay = selectedDate.getDate();
+      const endMonth = selectedDate.toLocaleDateString('en-US', { month: 'short' });
+      const year = selectedDate.getFullYear();
+      
+      if (startMonth === endMonth) {
+        return `${startDay} - ${endDay} ${startMonth} ${year}`;
+      }
+      return `${startDay} ${startMonth} - ${endDay} ${endMonth} ${year}`;
     } else if (selectedPeriod === 'Week') {
       const weekStart = getWeekStart(selectedDate);
       const weekEnd = getWeekEnd(selectedDate);
@@ -1648,6 +1694,7 @@ export default function HeartRateInsightsScreen() {
 
   // Navigate to previous period
   const goToPrevious = () => {
+    setNavDirection('prev');
     const newDate = new Date(selectedDate);
     if (selectedPeriod === 'Day') {
       newDate.setDate(newDate.getDate() - 1);
@@ -1661,8 +1708,19 @@ export default function HeartRateInsightsScreen() {
 
   // Navigate to next period - prevent going to future dates
   const goToNext = () => {
-    const today = new Date();
-    today.setHours(23, 59, 59, 999); // End of today
+    setNavDirection('next');
+    const now = new Date();
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    
+    let maxCycleDate;
+    if (now.getHours() >= 12) {
+      maxCycleDate = new Date(todayStart);
+      maxCycleDate.setDate(maxCycleDate.getDate() + 1);
+    } else {
+      maxCycleDate = todayStart;
+    }
+
     const newDate = new Date(selectedDate);
     if (selectedPeriod === 'Day') {
       newDate.setDate(newDate.getDate() + 1);
@@ -1672,15 +1730,25 @@ export default function HeartRateInsightsScreen() {
       newDate.setMonth(newDate.getMonth() + 1);
     }
     // Only update if new date is not in the future
-    if (newDate <= today) {
+    if (newDate <= maxCycleDate) {
       setSelectedDate(newDate);
     }
   };
 
   // Check if next button should be disabled (already at or past today)
   const canGoNext = React.useMemo(() => {
-    const today = new Date();
-    today.setHours(23, 59, 59, 999);
+    const now = new Date();
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    
+    let maxCycleDate;
+    if (now.getHours() >= 12) {
+      maxCycleDate = new Date(todayStart);
+      maxCycleDate.setDate(maxCycleDate.getDate() + 1);
+    } else {
+      maxCycleDate = todayStart;
+    }
+
     const testDate = new Date(selectedDate);
     if (selectedPeriod === 'Day') {
       testDate.setDate(testDate.getDate() + 1);
@@ -1689,13 +1757,10 @@ export default function HeartRateInsightsScreen() {
     } else {
       testDate.setMonth(testDate.getMonth() + 1);
     }
-    return testDate <= today;
+    return testDate <= maxCycleDate;
   }, [selectedDate, selectedPeriod]);
 
-  // Reset to today when period changes
-  React.useEffect(() => {
-    setSelectedDate(new Date());
-  }, [selectedPeriod]);
+
 
   // Domain is now updated in the effect above (immediately when graphData changes)
   // This effect is no longer needed - domain updates are handled by the live mode effect
@@ -2133,6 +2198,14 @@ export default function HeartRateInsightsScreen() {
 
   const customGestures = React.useMemo(() => Gesture.Race(doubleTapGesture), [doubleTapGesture]);
 
+  const isFetchingData = isLoadingHistoricalDay || isLoading || isLoadingWeekly || isLoadingMonthly;
+
+  React.useEffect(() => {
+    if (!isFetchingData) {
+      setNavDirection(null);
+    }
+  }, [isFetchingData]);
+
   // Show skeleton immediately while data is loading
   const isInitialLoading = shouldShowDayLoading || 
     (selectedPeriod === 'Week' && isLoadingWeekly) ||
@@ -2153,7 +2226,7 @@ export default function HeartRateInsightsScreen() {
         <TouchableOpacity onPress={() => router.back()} style={styles.backButton} activeOpacity={0.8}>
           <Ionicons name="arrow-back" size={24} color="#FFFFFF" />
         </TouchableOpacity>
-        <Text style={styles.headerTitle} numberOfLines={1}>Estimated HR Trends</Text>
+        <Text style={styles.headerTitle} numberOfLines={1}>{activeDevice?.customName || activeDevice?.defaultName || 'Estimated HR Trends'}</Text>
         <View style={{ width: 40 }} />
       </View>
 
@@ -2179,17 +2252,30 @@ export default function HeartRateInsightsScreen() {
 
         {/* Date Navigation */}
         <View style={styles.dateNavigation}>
-          <TouchableOpacity onPress={goToPrevious} style={styles.dateNavButton} activeOpacity={0.8}>
-            <Ionicons name="chevron-back" size={20} color="#C7D6FF" />
+          <TouchableOpacity 
+            onPress={goToPrevious} 
+            style={isFetchingData ? [styles.dateNavButton, styles.dateNavButtonDisabled] : styles.dateNavButton} 
+            activeOpacity={0.8}
+            disabled={isFetchingData}
+          >
+            {(isFetchingData && navDirection === 'prev') ? (
+              <ActivityIndicator size="small" color="rgba(199,214,255,0.5)" />
+            ) : (
+              <Ionicons name="chevron-back" size={20} color={isFetchingData ? "rgba(199,214,255,0.3)" : "#C7D6FF"} />
+            )}
           </TouchableOpacity>
           <Text style={styles.dateText}>{formattedDate}</Text>
           <TouchableOpacity 
             onPress={goToNext} 
-            style={canGoNext ? styles.dateNavButton : [styles.dateNavButton, styles.dateNavButtonDisabled]} 
+            style={(canGoNext && !isFetchingData) ? styles.dateNavButton : [styles.dateNavButton, styles.dateNavButtonDisabled]} 
             activeOpacity={0.8}
-            disabled={!canGoNext}
+            disabled={!canGoNext || isFetchingData}
           >
-            <Ionicons name="chevron-forward" size={20} color={canGoNext ? "#C7D6FF" : "rgba(199,214,255,0.3)"} />
+            {(isFetchingData && navDirection === 'next') ? (
+              <ActivityIndicator size="small" color="rgba(199,214,255,0.5)" />
+            ) : (
+              <Ionicons name="chevron-forward" size={20} color={(canGoNext && !isFetchingData) ? "#C7D6FF" : "rgba(199,214,255,0.3)"} />
+            )}
           </TouchableOpacity>
         </View>
 
@@ -2307,7 +2393,9 @@ export default function HeartRateInsightsScreen() {
 
               {/* Victory Native Bar Chart */}
               <View style={styles.chartWrapper}>
+                {chartMounted && (
                 <CartesianChart
+                  key={`chart-monthly-${selectedDate.getTime()}`}
                   data={monthlyChartData}
                   xKey="x"
                   yKeys={['y']}
@@ -2395,6 +2483,14 @@ export default function HeartRateInsightsScreen() {
                     return allBars;
                   }}
                 </CartesianChart>
+                )}
+              </View>
+
+              {/* Disclaimer for 12 PM - 12 PM cycle */}
+              <View style={styles.disclaimerContainer}>
+                <Text style={styles.disclaimerText}>
+                  Disclaimer: Our day cycle is 12 noon to 12 noon. For example, Monday data counts from Sunday 12 noon to Monday 12 noon.
+                </Text>
               </View>
 
             </View>
@@ -2429,7 +2525,9 @@ export default function HeartRateInsightsScreen() {
 
               {/* Victory Native Bar Chart */}
               <View style={styles.chartWrapper}>
+                {chartMounted && (
                 <CartesianChart
+                  key={`chart-weekly-${selectedDate.getTime()}`}
                   data={weeklyChartData}
                   xKey="x"
                   yKeys={['y']}
@@ -2528,6 +2626,14 @@ export default function HeartRateInsightsScreen() {
                     return allBars;
                   }}
                 </CartesianChart>
+                )}
+              </View>
+
+              {/* Disclaimer for 12 PM - 12 PM cycle */}
+              <View style={styles.disclaimerContainer}>
+                <Text style={styles.disclaimerText}>
+                  Disclaimer: Our day cycle is 12 noon to 12 noon. For example, Monday data counts from Sunday 12 noon to Monday 12 noon.
+                </Text>
               </View>
 
             </View>
@@ -2647,7 +2753,7 @@ export default function HeartRateInsightsScreen() {
             {/* Prevents Victory from mounting with invalid props (zero-width domains, etc.) */}
             <View style={styles.chartWrapper}>
               {(() => {
-                const canRender = isChartReady && chartData && chartData.length > 0 && resolvedXDomain;
+                const canRender = chartMounted && isChartReady && chartData && chartData.length > 0 && resolvedXDomain;
                 if (process.env.NODE_ENV === 'development' && selectedPeriod === 'Day') {
                   console.log('[HeartRateInsights] Chart render check:', {
                     isChartReady,
@@ -2668,7 +2774,7 @@ export default function HeartRateInsightsScreen() {
                   {/* Heart Rate Chart - Upper Half */}
                   <View style={{ height: '49%', width: '100%' }}>
                     <CartesianChart
-                      key={`chart-hr-${selectedPeriod}`}
+                      key={`chart-hr-split-${selectedPeriod}-${selectedDate.getTime()}`}
                       data={chartData}
                       xKey="x"
                       yKeys={['y']}
@@ -2761,7 +2867,7 @@ export default function HeartRateInsightsScreen() {
                   {/* Respiration Chart - Lower Half */}
                   <View style={{ height: '49%', width: '100%' }}>
                     <CartesianChart
-                      key={`chart-resp-${selectedPeriod}`}
+                      key={`chart-resp-split-${selectedPeriod}-${selectedDate.getTime()}`}
                       data={respirationChartData}
                       xKey="x"
                       yKeys={['y']}
@@ -2872,7 +2978,7 @@ export default function HeartRateInsightsScreen() {
                 // Single view: Heart Rate only - Full Area
                 <View style={{ position: 'relative', width: '100%', height: '100%' }}>
                   <CartesianChart
-                    key={`chart-${selectedPeriod}`}
+                    key={`chart-full-${selectedPeriod}-${selectedDate.getTime()}`}
                     data={chartData}
                     xKey="x"
                     yKeys={['y']}
@@ -3402,6 +3508,22 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 13,
     fontWeight: '700',
+  },
+  disclaimerContainer: {
+    paddingHorizontal: 12,
+    paddingTop: 12,
+    paddingBottom: 4,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,255,255,0.06)',
+    marginTop: 8,
+    width: '100%',
+  },
+  disclaimerText: {
+    color: 'rgba(199,214,255,0.5)',
+    fontSize: 10,
+    lineHeight: 14,
+    textAlign: 'center',
+    fontStyle: 'italic',
   },
 });
 

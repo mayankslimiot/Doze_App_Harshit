@@ -2,9 +2,9 @@
   "expo": {
     "name": "Dozemate",
     "slug": "Dozemate",
-    "version": "1.0.0",
+    "version": "1.0.2",
     "orientation": "portrait",
-    "icon": "./assets/images/image_5.png",
+    "icon": "./assets/images/image_5.jpeg",
     "scheme": "dozemate",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
@@ -29,11 +29,11 @@
     },
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./assets/images/image_5.png",
+        "foregroundImage": "./assets/images/image_5.jpeg",
         "backgroundColor": "#ffffff"
       },
       "package": "com.slimiot.dozemate1",
-      "versionCode": 1,
+      "versionCode": 2,
       "backgroundColor": "#02041A",
       "edgeToEdgeEnabled": true,
       "googleServicesFile": "./google-services.json",
@@ -85,6 +85,7 @@
         }
       ],
       "@react-native-firebase/app",
+      "@react-native-firebase/messaging",
       "@react-native-google-signin/google-signin",
       "expo-apple-authentication",
       "expo-web-browser",
