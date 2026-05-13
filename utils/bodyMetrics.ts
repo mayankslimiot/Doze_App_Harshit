@@ -34,13 +34,12 @@ export function calculateWaistHeightRatio(waistM: number, heightM: number): numb
 
 /**
  * Calculate ABSI (A Body Shape Index)
- * Formula: (1000 * waistM) / (massKg^0.66666 * heightM^0.83333)
+ * Formula: 1000 × WC(m) × Weight(kg)^(−2/3) × Height(m)^(5/6)
+ * Source: Krakauer & Krakauer (2012), as implemented in reference Excel
  */
 export function calculateABSI(waistM: number, massKg: number, heightM: number): number {
-  if (massKg <= 0 || heightM <= 0) return 0;
-  const denominator = Math.pow(massKg, 0.66666) * Math.pow(heightM, 0.83333);
-  if (denominator <= 0) return 0;
-  return (1000 * waistM) / denominator;
+  if (massKg <= 0 || heightM <= 0 || waistM <= 0) return 0;
+  return 1000 * waistM * Math.pow(massKg, -2/3) * Math.pow(heightM, 5/6);
 }
 
 /**
@@ -81,31 +80,26 @@ export function getBMIScore(bmiVal: number, age: number, gender: string = 'Male'
 
 /**
  * Get Waist Height Ratio score (0-10)
+ * Male:   Score = 10 − 40 × (WHtR − 0.45)
+ * Female: Score = 10 − 35 × (WHtR − 0.47)
+ * Source: PDF reference sheet
  */
 export function getWaistHeightRatioScore(ratioWH: number, gender: string = 'Male'): number {
   const g = gender.toLowerCase();
-  
-  const calculateMaleScore = (r: number) => {
-    if (r > 0.48) return 10 - (r - 0.48) * 100;
-    return Math.min(10, 10 + (r - 0.45) * 100);
-  };
-
-  const calculateFemaleScore = (r: number) => {
-    if (r > 0.49) return 10 - (r - 0.49) * 100;
-    return Math.min(10, 10 + (r - 0.43) * 100);
-  };
 
   let score = 0;
   if (g === 'male') {
-    score = calculateMaleScore(ratioWH);
+    score = 10 - 40 * (ratioWH - 0.45);
   } else if (g === 'female') {
-    score = calculateFemaleScore(ratioWH);
+    score = 10 - 35 * (ratioWH - 0.47);
   } else {
-    // "Other" takes the average
-    score = (calculateMaleScore(ratioWH) + calculateFemaleScore(ratioWH)) / 2;
+    // "Other" takes the average of both
+    const maleScore = 10 - 40 * (ratioWH - 0.45);
+    const femaleScore = 10 - 35 * (ratioWH - 0.47);
+    score = (maleScore + femaleScore) / 2;
   }
 
-  return Math.round(Math.max(0, score) * 10) / 10;
+  return Math.round(Math.min(10, Math.max(0, score)) * 10) / 10;
 }
 
 /**

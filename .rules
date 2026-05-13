@@ -1,0 +1,59 @@
+# Dozemate Project Rules
+
+## Tech Stack
+- **Frontend**: React Native (0.79), Expo (v53), TypeScript, Expo Router.
+- **UI/Graphics**: Skia, Reanimated (v3), Victory Native.
+- **Connectivity**: BLE (ble-plx), MQTT, WebSockets, Maps.
+- **Backend**: Node.js/Express, MongoDB.
+
+## Code Style
+- **TypeScript**: Always use strict typing. Avoid `any`.
+- **Components**: Functional components only. Use hooks for state.
+- **Styling**: Use `StyleSheet` or Skia/Reanimated for animations.
+- **Theming**: Always use `useAppTheme` or `useThemeColors` for colors.
+- **Async**: Use `async/await` with proper `try/catch` error handling.
+
+## Folder Structure
+- `/app`: Routing and Screen components.
+- `/components`: Reusable atomic UI elements.
+- `/contexts`: Global state (Auth, Bluetooth, Device, Theme).
+- `/services`: API services, MQTT/WS logic, and Notifications.
+- `/backend`: Node.js backend logic and routes.
+- `/hooks`: Custom logic hooks.
+
+## Critical Files (Do Not Touch Unless Explicitly Asked)
+- `/contexts/BluetoothProvider.tsx`
+- `/contexts/DeviceContext.tsx`
+- `/services/mqttService.ts`
+- `/backend/` (entire backend folder)
+
+## Agent Behavior
+- **Plan First**: Before making ANY changes, list every file you plan to edit and explain why. Wait for my approval before proceeding.
+- **Minimal Changes**: Only edit files directly related to the task. Do not refactor, reformat, or clean up unrelated code.
+- **No New Packages**: Always ask before installing any new library or dependency.
+- **One Task at a Time**: Focus only on what I asked. Do not combine multiple changes in one go.
+- **No Duplicates**: If a component, hook, or service already exists, use it. Do not create a duplicate.
+- **Preserve Comments**: Never remove existing comments or technical documentation.
+- **Never Hardcode Keys**: Always use `.env` or constants file for API keys, URLs, and secrets.
+
+## Performance Rules
+- Use Skia or Reanimated for any UI updating at 10Hz or faster.
+- Never use `setState` inside high-frequency sensor data loops.
+- Avoid unnecessary re-renders — use `useMemo` and `useCallback` where appropriate.
+
+## BLE & MQTT Rules (Critical)
+- Never modify BLE scanning, connection, or data flow logic unless explicitly asked.
+- All MQTT data parsing must follow the established structure in `mqttService.ts`.
+- Never change telemetry field names or data types.
+
+## Naming Conventions
+- Components: PascalCase → `SensorCard.tsx`
+- Hooks: camelCase with `use` prefix → `useSensorData.ts`
+- Services: camelCase → `mqttService.ts`
+- Constants: UPPER_SNAKE_CASE → `MAX_RETRY_COUNT`
+
+## My Knowledge Level
+- I am not always aware of which files need to change.
+- Always explain what you are changing and why, in simple terms.
+- If something might break other parts of the app, warn me first.
+- Suggest the safest approach, not the most complex one.

@@ -1164,17 +1164,72 @@ export default function HomeScreen() {
   // --- Body Measurement Calculations ---
   const bodyMetrics = React.useMemo(() => {
     const p: any = auth.user?.profile || {};
-    const gender = p.gender || 'Male';
+    const gender = p.gender || '';
+    const dateOfBirth = p.dateOfBirth || p.dob || '';
 
-    const weightKg = parseFloat(p.weight || '0');
-    const heightCm = parseFloat(p.height || '0');
-    const waistCm = parseFloat(p.waist || '0');
+    const hasProfileInfo = !!(gender && gender.trim() !== '' && dateOfBirth && dateOfBirth.trim() !== '');
 
-    const allFieldsFilled = weightKg > 0 && heightCm > 0 && waistCm > 0;
+    // Read raw values and units from profile
+    const rawWeight = parseFloat(p.weight || '0');
+    const rawHeight = String(p.height || '');
+    const rawWaist = parseFloat(p.waist || '0');
+    const weightUnitStr = String(p.weightUnit || 'kg');
+    const heightUnitStr = String(p.heightUnit || 'ft_in');
+    const waistUnitStr = String(p.waistUnit || 'in');
+
+    // Convert weight to kg
+    let weightKg = 0;
+    if (rawWeight > 0) {
+      weightKg = weightUnitStr === 'lbs' ? rawWeight * 0.453592 : rawWeight;
+    }
+
+    // Convert height to cm
+    let heightCm = 0;
+    if (heightUnitStr === 'ft_in') {
+      // Height might be stored as cm from server, or as "5'4\"" format
+      const feetInchMatch = rawHeight.match(/(\d+)'(\d+)"/);
+      if (feetInchMatch) {
+        const feet = parseFloat(feetInchMatch[1]);
+        const inches = parseFloat(feetInchMatch[2]);
+        heightCm = (feet * 12 + inches) * 2.54;
+      } else {
+        // Server stores height in cm even when unit is ft_in
+        const numVal = parseFloat(rawHeight);
+        if (!isNaN(numVal) && numVal > 0) {
+          // If value > 100, it's likely already in cm from server
+          // If value < 10, it's likely feet (raw display value)
+          heightCm = numVal > 10 ? numVal : numVal * 30.48;
+        }
+      }
+    } else if (heightUnitStr === 'm') {
+      const numVal = parseFloat(rawHeight);
+      if (!isNaN(numVal) && numVal > 0) {
+        heightCm = numVal > 3 ? numVal : numVal * 100; // > 3 means already cm
+      }
+    } else {
+      // cm
+      const numVal = parseFloat(rawHeight);
+      if (!isNaN(numVal) && numVal > 0) heightCm = numVal;
+    }
+
+    // Convert waist to cm
+    let waistCm = 0;
+    if (rawWaist > 0) {
+      if (waistUnitStr === 'in') {
+        // Could be raw inches OR already cm from server
+        // Server stores in cm; if value > 50, it's likely cm already
+        waistCm = rawWaist > 50 ? rawWaist : rawWaist * 2.54;
+      } else {
+        waistCm = rawWaist;
+      }
+    }
+
+    const allFieldsFilled = weightKg > 0 && heightCm > 0 && waistCm > 0 && hasProfileInfo;
 
     if (!allFieldsFilled) {
       return {
         allFieldsFilled,
+        hasProfileInfo,
         bmi: '—',
         waistHeightRatio: '—',
         absi: '—',
@@ -1186,11 +1241,9 @@ export default function HomeScreen() {
     }
 
     const heightM = heightCm / 100;
-    const heightInches = heightCm / 2.54;
-    const waistInches = waistCm / 2.54;
     const waistM = waistCm / 100;
 
-    const age = calculateAge(p.dateOfBirth);
+    const age = calculateAge(dateOfBirth);
 
     const bmi = calculateBMI(weightKg, heightM);
     const waistHeightRatio = calculateWaistHeightRatio(waistM, heightM);
@@ -1203,6 +1256,7 @@ export default function HomeScreen() {
 
     return {
       allFieldsFilled,
+      hasProfileInfo,
       bmi: bmi.toFixed(2),
       waistHeightRatio: waistHeightRatio.toFixed(2),
       absi: absi.toFixed(2),
@@ -1710,31 +1764,46 @@ export default function HomeScreen() {
           <Text style={styles.sectionTitle}>Body Measurement</Text>
         </View>
         <BlurView intensity={25} tint="dark" style={styles.bodyMeasurementCard}>
-          <View style={styles.calculatedIndicesGrid}>
-            <CalculatedIndexRow
-              label="Waist Height ratio"
-              value={bodyMetrics.waistHeightRatio}
-              score={bodyMetrics.waistHeightScore}
-              onInfoPress={() => Alert.alert('Waist-to-height ratio', HINTS.WHR)}
-            />
-            <CalculatedIndexRow
-              label="BMI"
-              value={bodyMetrics.bmi}
-              score={bodyMetrics.bmiScore}
-              onInfoPress={() => Alert.alert('BMI', HINTS.BMI)}
-            />
-            <CalculatedIndexRow
-              label="ABSI"
-              value={bodyMetrics.absi}
-              score={bodyMetrics.absiScore}
-              onInfoPress={() => Alert.alert('ABSI', HINTS.ABSI)}
-            />
-            <CalculatedIndexRow
-              label="Overall Body Index"
-              value={bodyMetrics.allFieldsFilled ? bodyMetrics.overallScore.toFixed(1) : '—'}
-              score={bodyMetrics.overallScore}
-              onInfoPress={() => Alert.alert('Overall Body Index', HINTS.OBI)}
-            />
+          <View style={{ position: 'relative' }}>
+            <View style={styles.calculatedIndicesGrid}>
+              <CalculatedIndexRow
+                label="Waist Height ratio"
+                value={bodyMetrics.waistHeightRatio}
+                score={bodyMetrics.waistHeightScore}
+                onInfoPress={() => Alert.alert('Waist-to-height ratio', HINTS.WHR)}
+              />
+              <CalculatedIndexRow
+                label="BMI"
+                value={bodyMetrics.bmi}
+                score={bodyMetrics.bmiScore}
+                onInfoPress={() => Alert.alert('BMI', HINTS.BMI)}
+              />
+              <CalculatedIndexRow
+                label="ABSI"
+                value={bodyMetrics.absi}
+                score={bodyMetrics.absiScore}
+                onInfoPress={() => Alert.alert('ABSI', HINTS.ABSI)}
+              />
+              <CalculatedIndexRow
+                label="Overall Body Index"
+                value={bodyMetrics.allFieldsFilled ? bodyMetrics.overallScore.toFixed(1) : '—'}
+                score={bodyMetrics.overallScore}
+                onInfoPress={() => Alert.alert('Overall Body Index', HINTS.OBI)}
+              />
+            </View>
+
+            {/* Blur overlay when DOB or Sex is missing */}
+            {!bodyMetrics.hasProfileInfo && (
+              <View style={styles.gaugeOverlay}>
+                <BlurView intensity={80} tint="dark" style={styles.gaugeBlur}>
+                  <Ionicons name="person-circle-outline" size={36} color="rgba(199, 185, 255, 0.8)" />
+                  <Text style={styles.gaugeOverlayTitle}>Complete Your Profile</Text>
+                  <Text style={styles.gaugeOverlayMessage}>
+                    Please add your Date of Birth and Sex in Profile to see your body metrics.
+                  </Text>
+                </BlurView>
+              </View>
+            )}
           </View>
         </BlurView>
 
@@ -2559,5 +2628,37 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
     textDecorationLine: 'underline',
+  },
+
+  // Gauge blur overlay (when DOB/Sex missing)
+  gaugeOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    borderRadius: 12,
+    overflow: 'hidden',
+    zIndex: 10,
+  },
+  gaugeBlur: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 24,
+    gap: 10,
+    backgroundColor: 'rgba(2, 4, 26, 0.55)',
+  },
+  gaugeOverlayTitle: {
+    color: '#fff',
+    fontSize: 17,
+    fontWeight: '800',
+    textAlign: 'center',
+  },
+  gaugeOverlayMessage: {
+    color: 'rgba(255,255,255,0.7)',
+    fontSize: 13,
+    textAlign: 'center',
+    lineHeight: 18,
   },
 });

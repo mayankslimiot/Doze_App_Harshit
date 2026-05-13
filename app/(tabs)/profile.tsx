@@ -360,7 +360,6 @@ export default function ProfileScreen() {
     };
   }, [auth.user]);
 
-  const [isCardExpanded, setIsCardExpanded] = useState(false);
   const [isEditingDetails, setIsEditingDetails] = useState(false);
   
   const formattedName = [initial.firstName, initial.lastName].filter(Boolean).join(' ') || '—';
@@ -623,6 +622,12 @@ export default function ProfileScreen() {
   }, [waist, weight, heightFeet, heightInches, waistUnit, weightUnit, heightUnit]);
 
   // Check if all required fields are filled
+  const hasProfileInfo = useMemo(() => {
+    const hasDob = editDob && editDob.trim() !== '';
+    const hasGender = editGender && editGender.trim() !== '';
+    return hasDob && hasGender;
+  }, [editDob, editGender]);
+
   const allFieldsFilled = useMemo(() => {
     const hasWeight = weight && weight.trim() !== '' && !isNaN(parseFloat(weight)) && parseFloat(weight) > 0;
     const hasWaist = waist && waist.trim() !== '' && !isNaN(parseFloat(waist)) && parseFloat(waist) > 0;
@@ -635,8 +640,8 @@ export default function ProfileScreen() {
       hasHeight = heightFeet && heightFeet.trim() !== '' && !isNaN(parseFloat(heightFeet)) && parseFloat(heightFeet) > 0;
     }
     
-    return hasWeight && hasWaist && hasHeight;
-  }, [weight, waist, heightFeet, heightInches, heightUnit]);
+    return hasWeight && hasWaist && hasHeight && hasProfileInfo;
+  }, [weight, waist, heightFeet, heightInches, heightUnit, hasProfileInfo]);
 
   // Calculate all metrics
   const metrics = useMemo(() => {
@@ -699,16 +704,16 @@ export default function ProfileScreen() {
     const waistInches = waistCm / 2.54; // cm to inches
     const waistM = waistCm / 100; // cm to meters
 
-    // 4. Age: Calculate from DOB
-    const age = calculateAge(initial.dateOfBirth);
+    // 4. Age: Calculate from DOB (use live edited DOB value)
+    const age = calculateAge(editDob);
 
     // Now calculate metrics with converted values
     const bmi = calculateBMI(weightKg, heightM);
     const waistHeightRatio = calculateWaistHeightRatio(waistM, heightM);
     const absi = calculateABSI(waistM, weightKg, heightM);
 
-    const bmiScore = getBMIScore(bmi, age, initial.gender);
-    const waistHeightScore = getWaistHeightRatioScore(waistHeightRatio, initial.gender);
+    const bmiScore = getBMIScore(bmi, age, editGender);
+    const waistHeightScore = getWaistHeightRatioScore(waistHeightRatio, editGender);
     const absiScore = getABSIScore(absi);
     const overallScore = calculateOverallBodyIndex(waistHeightScore, bmiScore.score, absiScore);
 
@@ -721,7 +726,7 @@ export default function ProfileScreen() {
       absiScore,
       overallScore,
     };
-  }, [weight, waist, heightFeet, heightInches, weightUnit, waistUnit, heightUnit, initial.gender, allFieldsFilled]);
+  }, [weight, waist, heightFeet, heightInches, weightUnit, waistUnit, heightUnit, editGender, editDob, allFieldsFilled]);
 
 
   const showInfo = (title: string, description: string) => {
@@ -749,7 +754,7 @@ export default function ProfileScreen() {
       <ScrollView contentContainerStyle={[styles.scroll, { paddingBottom: 100 }]} showsVerticalScrollIndicator={false}>
 
         {/* Identity compact card */}
-        <BlurView intensity={25} tint="dark" style={[styles.identityCard, isCardExpanded && { flexDirection: 'column', alignItems: 'stretch' }]}>
+        <BlurView intensity={25} tint="dark" style={[styles.identityCard, { flexDirection: 'column', alignItems: 'stretch' }]}>
             {/* Top row */}
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                 <TouchableOpacity 
@@ -784,20 +789,12 @@ export default function ProfileScreen() {
                     </>
                   )}
                 </View>
-                
-                {/* Expand / Edit Actions */}
+                {/* Edit Actions */}
                 <View style={{ alignItems: 'flex-end', justifyContent: 'center' }}>
                   {!isEditingDetails ? (
-                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                      {isCardExpanded && (
-                        <TouchableOpacity onPress={() => setIsEditingDetails(true)} style={{ marginRight: 12 }}>
-                          <Ionicons name="pencil" size={20} color="rgba(255,255,255,0.7)" />
-                        </TouchableOpacity>
-                      )}
-                      <TouchableOpacity onPress={() => setIsCardExpanded(!isCardExpanded)} style={{ padding: 4 }}>
-                        <Ionicons name={isCardExpanded ? "chevron-up" : "chevron-down"} size={22} color="rgba(255,255,255,0.7)" />
-                      </TouchableOpacity>
-                    </View>
+                    <TouchableOpacity onPress={() => setIsEditingDetails(true)} style={{ padding: 4 }}>
+                      <Ionicons name="pencil" size={20} color="rgba(255,255,255,0.7)" />
+                    </TouchableOpacity>
                   ) : (
                     <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                       <TouchableOpacity onPress={handleSaveProfileDetails} style={{ marginRight: 6 }}>
@@ -811,9 +808,8 @@ export default function ProfileScreen() {
                 </View>
             </View>
 
-            {/* Expanded Content */}
-            {isCardExpanded && (
-               <View style={{ marginTop: 20, borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.1)', paddingTop: 15 }}>
+            {/* Personal Details Content */}
+            <View style={{ marginTop: 20, borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.1)', paddingTop: 15 }}>
                   <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 13, marginBottom: 4 }}>Phone Number</Text>
                   {!isEditingDetails ? (
                     <Text style={{ color: '#fff', fontSize: 16, marginBottom: 15 }}>{editMobile || '—'}</Text>
@@ -855,8 +851,7 @@ export default function ProfileScreen() {
                         )}
                       </View>
                   </View>
-               </View>
-            )}
+            </View>
         </BlurView>
 
         {/* Photo Management Modal */}
@@ -958,31 +953,50 @@ export default function ProfileScreen() {
           </View>
 
           {/* Calculated Indices - 2x2 Grid */}
-          <View style={styles.calculatedIndicesGrid}>
-            <CalculatedIndexRow
-              label="Waist Height ratio"
-              value={metrics.waistHeightRatio}
-              score={metrics.waistHeightScore}
-              onInfoPress={() => showInfo('Waist-to-height ratio', HINTS.WHR)}
-            />
-            <CalculatedIndexRow
-              label="BMI"
-              value={metrics.bmi}
-              score={metrics.bmiScore}
-              onInfoPress={() => showInfo('BMI', HINTS.BMI)}
-            />
-            <CalculatedIndexRow
-              label="ABSI"
-              value={metrics.absi}
-              score={metrics.absiScore}
-              onInfoPress={() => showInfo('ABSI', HINTS.ABSI)}
-            />
-            <CalculatedIndexRow
-              label="Overall Body Index"
-              value={allFieldsFilled ? metrics.overallScore.toFixed(1) : '—'}
-              score={metrics.overallScore}
-              onInfoPress={() => showInfo('Overall Body Index', HINTS.OBI)}
-            />
+          <View style={{ position: 'relative' }}>
+            <View style={styles.calculatedIndicesGrid}>
+              <CalculatedIndexRow
+                label="Waist Height ratio"
+                value={metrics.waistHeightRatio}
+                score={metrics.waistHeightScore}
+                onInfoPress={() => showInfo('Waist-to-height ratio', HINTS.WHR)}
+              />
+              <CalculatedIndexRow
+                label="BMI"
+                value={metrics.bmi}
+                score={metrics.bmiScore}
+                onInfoPress={() => showInfo('BMI', HINTS.BMI)}
+              />
+              <CalculatedIndexRow
+                label="ABSI"
+                value={metrics.absi}
+                score={metrics.absiScore}
+                onInfoPress={() => showInfo('ABSI', HINTS.ABSI)}
+              />
+              <CalculatedIndexRow
+                label="Overall Body Index"
+                value={allFieldsFilled ? metrics.overallScore.toFixed(1) : '—'}
+                score={metrics.overallScore}
+                onInfoPress={() => showInfo('Overall Body Index', HINTS.OBI)}
+              />
+            </View>
+
+            {/* Blur overlay when DOB or Sex is missing */}
+            {!hasProfileInfo && (
+              <View style={styles.gaugeOverlay}>
+                <BlurView intensity={80} tint="dark" style={styles.gaugeBlur}>
+                  <Ionicons name="person-circle-outline" size={36} color="rgba(199, 185, 255, 0.8)" />
+                  <Text style={styles.gaugeOverlayTitle}>Complete Your Profile</Text>
+                  <Text style={styles.gaugeOverlayMessage}>
+                    {!editDob && !editGender
+                      ? 'Please add your Date of Birth and Sex to see your body metrics.'
+                      : !editDob
+                      ? 'Please add your Date of Birth to see your body metrics.'
+                      : 'Please select your Sex to see your body metrics.'}
+                  </Text>
+                </BlurView>
+              </View>
+            )}
           </View>
         </BlurView>
 
@@ -1383,5 +1397,54 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     color: '#fff',
     fontSize: 16
+  },
+
+  // Gauge blur overlay (when DOB/Sex missing)
+  gaugeOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    borderRadius: 12,
+    overflow: 'hidden',
+    zIndex: 10,
+  },
+  gaugeBlur: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 24,
+    gap: 10,
+    backgroundColor: 'rgba(2, 4, 26, 0.55)',
+  },
+  gaugeOverlayTitle: {
+    color: '#fff',
+    fontSize: 17,
+    fontWeight: '800',
+    textAlign: 'center',
+  },
+  gaugeOverlayMessage: {
+    color: 'rgba(255,255,255,0.7)',
+    fontSize: 13,
+    textAlign: 'center',
+    lineHeight: 18,
+  },
+  gaugeOverlayButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(199, 185, 255, 0.25)',
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(199, 185, 255, 0.4)',
+    marginTop: 4,
+  },
+  gaugeOverlayButtonText: {
+    color: '#C7B9FF',
+    fontSize: 14,
+    fontWeight: '700',
   },
 });
