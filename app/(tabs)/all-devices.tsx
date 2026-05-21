@@ -21,6 +21,7 @@ import { useBluetooth } from '@/contexts/BluetoothProvider';
 import { useDevice } from '@/contexts/DeviceContext';
 import { useProvisioning } from '@/contexts/ProvisioningContext';
 import { isWebSocketConnected, disconnectWebSocket, unsubscribeFromDevice } from '@/services/websocketService';
+import { useTheme } from '@/contexts/ThemeContext';
 import { activateDevice, updateDeviceName, deleteDevice, removeSharedDevice, cleanupLocalBleStores } from '@/services/deviceData';
 
 const BLE_TO_BACKEND_DEVICE_ID_KEY = '@slimiot_ble_to_backend_device_id';
@@ -41,6 +42,7 @@ function macFromBackendDeviceId(deviceId: string): string {
 
 export default function AllDevicesScreen() {
   const insets = useSafeAreaInsets();
+  const { isLightTheme } = useTheme();
   const router = useRouter();
   const { devices, ownedDevices, sharedDevices, activeDevice, refreshDevices, setActiveDevice } = useDevice();
   const { connectedDevice, connectionStatus, startScan, stopScan, scannedDevices, connectToDevice } = useBluetooth();
@@ -530,29 +532,29 @@ export default function AllDevicesScreen() {
   );
 
   return (
-    <View style={styles.container}>
-      <StatusBar barStyle="light-content" backgroundColor="#02041A" />
+    <View style={[styles.container, isLightTheme && { backgroundColor: '#F8F9FA' }]}>
+      <StatusBar barStyle={isLightTheme ? "dark-content" : "light-content"} backgroundColor={isLightTheme ? "#F8F9FA" : "#02041A"} />
       <LinearGradient
-        colors={['#1D244D', '#02041A', '#1A1D3E']}
+        colors={isLightTheme ? ['#F8F9FA', '#F8F9FA', '#F8F9FA'] : ['#1D244D', '#02041A', '#1A1D3E']}
         style={styles.gradientBackground}
       />
 
       {/* Header */}
       <View style={[styles.header, { paddingTop: insets.top + 6 }]}>
-        <Text style={styles.headerTitle}>All Devices</Text>
+        <Text style={[styles.headerTitle, isLightTheme && { color: '#111111' }]}>All Devices</Text>
         <View style={styles.headerActions}>
           <TouchableOpacity
             onPress={() => router.push('/(bluetooth)/ScanScreen')}
-            style={styles.headerAddButton}
+            style={[styles.headerAddButton, isLightTheme && { backgroundColor: 'rgba(0,97,164,0.06)', borderColor: 'rgba(0,97,164,0.12)', borderWidth: 1 }]}
           >
-            <Ionicons name="add-circle-outline" size={18} color="#C7B9FF" />
-            <Text style={styles.headerAddButtonText}>Add Device</Text>
+            <Ionicons name="add-circle-outline" size={18} color={isLightTheme ? "#0061A4" : "#C7B9FF"} />
+            <Text style={[styles.headerAddButtonText, isLightTheme && { color: '#0061A4' }]}>Add Device</Text>
           </TouchableOpacity>
           <TouchableOpacity
             onPress={() => router.back()}
-            style={styles.headerIconBtn}
+            style={[styles.headerIconBtn, isLightTheme && { backgroundColor: 'rgba(0,0,0,0.04)' }]}
           >
-            <Text style={styles.headerIconText}>Close</Text>
+            <Text style={[styles.headerIconText, isLightTheme && { color: '#666666' }]}>Close</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -567,19 +569,19 @@ export default function AllDevicesScreen() {
           <RefreshControl
             refreshing={isRefreshing}
             onRefresh={handleRefresh}
-            tintColor="#FFFFFF"
+            tintColor={isLightTheme ? '#0061A4' : '#FFFFFF'}
           />
         }
       >
         {!devices || devices.length === 0 ? (
           <View style={styles.emptyContainer}>
-            <Ionicons name="phone-portrait-outline" size={64} color="rgba(255,255,255,0.3)" />
-            <Text style={styles.emptyTitle}>No Devices Found</Text>
-            <Text style={styles.emptySubtitle}>
+            <Ionicons name="phone-portrait-outline" size={64} color={isLightTheme ? "rgba(0,0,0,0.2)" : "rgba(255,255,255,0.3)"} />
+            <Text style={[styles.emptyTitle, isLightTheme && { color: '#111111' }]}>No Devices Found</Text>
+            <Text style={[styles.emptySubtitle, isLightTheme && { color: '#666666' }]}>
               Register a device to get started
             </Text>
             <TouchableOpacity
-              style={styles.scanButton}
+              style={[styles.scanButton, isLightTheme && { backgroundColor: '#0061A4' }]}
               onPress={() => router.push('/(bluetooth)/ScanScreen')}
             >
               <Text style={styles.scanButtonText}>Scan for Devices</Text>
@@ -590,31 +592,31 @@ export default function AllDevicesScreen() {
             {/* Active Device Section */}
             {activeDevice && (
               <View style={styles.section}>
-                <Text style={styles.sectionTitle}>Active Device</Text>
-                <View style={styles.activeDeviceCard}>
+                <Text style={[styles.sectionTitle, isLightTheme && { color: '#666666' }]}>Active Device</Text>
+                <View style={[styles.activeDeviceCard, isLightTheme && { backgroundColor: 'rgba(76, 175, 80, 0.08)' }]}>
                   <View style={styles.deviceHeader}>
                     <View style={styles.deviceInfo}>
                       <View style={styles.deviceIdRow}>
                         <Ionicons name="phone-portrait" size={20} color="#4CAF50" />
                         <View style={styles.deviceNameContainer}>
                           <View style={styles.deviceNameRow}>
-                            <Text style={styles.deviceName}>{getDeviceDisplayName(activeDevice)}</Text>
+                            <Text style={[styles.deviceName, isLightTheme && { color: '#111111' }]}>{getDeviceDisplayName(activeDevice)}</Text>
                             {(activeDevice as any).isShared && (
-                              <View style={styles.sharedBadge}>
-                                <Text style={styles.sharedBadgeText}>Shared</Text>
+                              <View style={[styles.sharedBadge, isLightTheme && { backgroundColor: 'rgba(0, 97, 164, 0.08)' }]}>
+                                <Text style={[styles.sharedBadgeText, isLightTheme && { color: '#0061A4' }]}>Shared</Text>
                               </View>
                             )}
                             {!(activeDevice as any).isShared && (
                               <TouchableOpacity
                                 onPress={() => handleRenameDevice(activeDevice)}
-                                style={styles.editButtonInline}
+                                style={[styles.editButtonInline, isLightTheme && { backgroundColor: 'rgba(0,0,0,0.04)' }]}
                                 hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                               >
                                 <Text style={styles.editButtonText}>Edit</Text>
                               </TouchableOpacity>
                             )}
                           </View>
-                          <Text style={styles.deviceIdSubtext}>
+                          <Text style={[styles.deviceIdSubtext, isLightTheme && { color: 'rgba(0,0,0,0.4)' }]}>
                             {activeDevice.customName || activeDevice.defaultName ? activeDevice.deviceId : ''}
                           </Text>
                         </View>
@@ -648,7 +650,7 @@ export default function AllDevicesScreen() {
                           const animValue = radioAnimations.current[activeDevice.deviceId];
                           const borderColor = animValue.interpolate({
                             inputRange: [0, 1],
-                            outputRange: ['rgba(255,255,255,0.5)', '#4CAF50'],
+                            outputRange: [isLightTheme ? 'rgba(0,0,0,0.2)' : 'rgba(255,255,255,0.5)', '#4CAF50'],
                           });
                           const scale = animValue.interpolate({
                             inputRange: [0, 1],
@@ -670,7 +672,7 @@ export default function AllDevicesScreen() {
             {/* Other Devices Section */}
             {otherDevices.length > 0 && (
               <View style={styles.section}>
-                <Text style={styles.sectionTitle}>
+                <Text style={[styles.sectionTitle, isLightTheme && { color: '#666666' }]}>
                   Other Devices ({otherDevices.length})
                 </Text>
                 {otherDevices.map((device, index) => {
@@ -681,31 +683,32 @@ export default function AllDevicesScreen() {
                       style={[
                         styles.deviceCard,
                         index === otherDevices.length - 1 && styles.lastDeviceCard,
+                        isLightTheme && { backgroundColor: '#FFFFFF', borderColor: 'rgba(0,0,0,0.06)', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.04, shadowRadius: 3, elevation: 1 }
                       ]}
                     >
                       <View style={styles.deviceHeader}>
                         <View style={styles.deviceInfo}>
                           <View style={styles.deviceIdRow}>
-                            <Ionicons name="phone-portrait-outline" size={20} color="rgba(255,255,255,0.6)" />
+                            <Ionicons name="phone-portrait-outline" size={20} color={isLightTheme ? "rgba(0,0,0,0.4)" : "rgba(255,255,255,0.6)"} />
                             <View style={styles.deviceNameContainer}>
                               <View style={styles.deviceNameRow}>
-                                <Text style={styles.deviceId}>{getDeviceDisplayName(device)}</Text>
+                                <Text style={[styles.deviceId, isLightTheme && { color: '#111111' }]}>{getDeviceDisplayName(device)}</Text>
                                 {isShared && (
-                                  <View style={styles.sharedBadge}>
-                                    <Text style={styles.sharedBadgeText}>Shared</Text>
+                                  <View style={[styles.sharedBadge, isLightTheme && { backgroundColor: 'rgba(0, 97, 164, 0.08)' }]}>
+                                    <Text style={[styles.sharedBadgeText, isLightTheme && { color: '#0061A4' }]}>Shared</Text>
                                   </View>
                                 )}
                                 {!isShared && (
                                   <TouchableOpacity
                                     onPress={() => handleRenameDevice(device)}
-                                    style={styles.editButtonInline}
+                                    style={[styles.editButtonInline, isLightTheme && { backgroundColor: 'rgba(0,0,0,0.04)' }]}
                                     hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                                   >
-                                    <Text style={styles.editButtonTextInactive}>Edit</Text>
+                                    <Text style={[styles.editButtonTextInactive, isLightTheme && { color: '#666666' }]}>Edit</Text>
                                   </TouchableOpacity>
                                 )}
                               </View>
-                              <Text style={styles.deviceIdSubtext}>
+                              <Text style={[styles.deviceIdSubtext, isLightTheme && { color: 'rgba(0,0,0,0.4)' }]}>
                                 {device.customName || device.defaultName ? device.deviceId : ''}
                               </Text>
                             </View>
@@ -744,7 +747,7 @@ export default function AllDevicesScreen() {
                               const animValue = radioAnimations.current[device.deviceId];
                               const borderColor = animValue.interpolate({
                                 inputRange: [0, 1],
-                                outputRange: ['rgba(255,255,255,0.5)', '#4CAF50'],
+                                outputRange: [isLightTheme ? 'rgba(0,0,0,0.2)' : 'rgba(255,255,255,0.5)', '#4CAF50'],
                               });
                               const scale = animValue.interpolate({
                                 inputRange: [0, 1],
@@ -783,80 +786,81 @@ export default function AllDevicesScreen() {
             onPress={handleCancelEdit}
           />
           <View style={styles.popupContentWrapper}>
-            <View style={styles.popupContent}>
-            <View style={styles.popupHeader}>
-              <Text style={styles.popupTitle}>Rename Device</Text>
-              <TouchableOpacity onPress={handleCancelEdit}>
-                <Ionicons name="close" size={24} color="#FFF" />
-              </TouchableOpacity>
-            </View>
+            <View style={[styles.popupContent, isLightTheme && { backgroundColor: '#FFFFFF', borderColor: 'rgba(0,0,0,0.06)' }]}>
+              <View style={styles.popupHeader}>
+                <Text style={[styles.popupTitle, isLightTheme && { color: '#111111' }]}>Rename Device</Text>
+                <TouchableOpacity onPress={handleCancelEdit}>
+                  <Ionicons name="close" size={24} color={isLightTheme ? "#333333" : "#FFF"} />
+                </TouchableOpacity>
+              </View>
 
-            <Text style={styles.popupSubtitle}>
-              Enter a custom name for this device (optional)
-            </Text>
-            <Text style={styles.popupHint}>
-              Leave empty to use device ID as name
-            </Text>
+              <Text style={[styles.popupSubtitle, isLightTheme && { color: '#333333' }]}>
+                Enter a custom name for this device (optional)
+              </Text>
+              <Text style={[styles.popupHint, isLightTheme && { color: '#666666' }]}>
+                Leave empty to use device ID as name
+              </Text>
 
-            <TextInput
-              style={[
-                styles.nameInput,
-                nameError && styles.nameInputError
-              ]}
-              placeholder="e.g., Bedroom Device, Living Room"
-              placeholderTextColor="rgba(255,255,255,0.5)"
-              value={editingName}
-              onChangeText={handleNameChange}
-              maxLength={50}
-              autoFocus
-            />
-            {nameError ? (
-              <Text style={styles.nameErrorText}>{nameError}</Text>
-            ) : null}
+              <TextInput
+                style={[
+                  styles.nameInput,
+                  nameError && styles.nameInputError,
+                  isLightTheme && { backgroundColor: 'rgba(0,0,0,0.03)', color: '#111111', borderColor: 'rgba(0,0,0,0.1)' }
+                ]}
+                placeholder="e.g., Bedroom Device, Living Room"
+                placeholderTextColor={isLightTheme ? "rgba(0,0,0,0.4)" : "rgba(255,255,255,0.5)"}
+                value={editingName}
+                onChangeText={handleNameChange}
+                maxLength={50}
+                autoFocus
+              />
+              {nameError ? (
+                <Text style={styles.nameErrorText}>{nameError}</Text>
+              ) : null}
 
-            <View style={styles.popupButtons}>
+              <View style={styles.popupButtons}>
+                <TouchableOpacity
+                  style={[styles.popupButton, styles.popupButtonCancel, isLightTheme && { backgroundColor: 'rgba(0,0,0,0.05)' }]}
+                  onPress={handleCancelEdit}
+                  disabled={isSavingName || isDeletingDevice}
+                >
+                  <Text style={[styles.popupButtonTextCancel, isLightTheme && { color: '#666666' }]}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.popupButton, styles.popupButtonSave, (isSavingName || nameError) && styles.popupButtonDisabled, isLightTheme && { backgroundColor: '#0061A4' }]}
+                  onPress={handleSaveName}
+                  disabled={isSavingName || isDeletingDevice || !!nameError}
+                >
+                  {isSavingName ? (
+                    <ActivityIndicator size="small" color={isLightTheme ? "#FFFFFF" : "#1D244D"} />
+                  ) : (
+                    <Text style={[styles.popupButtonTextSave, isLightTheme && { color: '#FFFFFF' }]}>Save</Text>
+                  )}
+                </TouchableOpacity>
+              </View>
               <TouchableOpacity
-                style={[styles.popupButton, styles.popupButtonCancel]}
-                onPress={handleCancelEdit}
-                disabled={isSavingName || isDeletingDevice}
+                style={[styles.popupButtonWifi, isLightTheme && { backgroundColor: 'rgba(0, 97, 164, 0.06)', borderColor: 'rgba(0, 97, 164, 0.15)' }]}
+                onPress={handleChangeWifi}
+                disabled={isSavingName || isDeletingDevice || isCheckingWifiDevice || isConnectingToWifiDevice}
               >
-                <Text style={styles.popupButtonTextCancel}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.popupButton, styles.popupButtonSave, (isSavingName || nameError) && styles.popupButtonDisabled]}
-                onPress={handleSaveName}
-                disabled={isSavingName || isDeletingDevice || !!nameError}
-              >
-                {isSavingName ? (
-                  <ActivityIndicator size="small" color="#1D244D" />
+                {isConnectingToWifiDevice ? (
+                  <>
+                    <ActivityIndicator size="small" color={isLightTheme ? "#0061A4" : "#C7B9FF"} />
+                    <Text style={[styles.popupButtonWifiText, isLightTheme && { color: '#0061A4' }]}>Connecting to device...</Text>
+                  </>
+                ) : isCheckingWifiDevice ? (
+                  <>
+                    <ActivityIndicator size="small" color={isLightTheme ? "#0061A4" : "#C7B9FF"} />
+                    <Text style={[styles.popupButtonWifiText, isLightTheme && { color: '#0061A4' }]}>Checking if Dozemate is live...</Text>
+                  </>
                 ) : (
-                  <Text style={styles.popupButtonTextSave}>Save</Text>
+                  <>
+                    <Ionicons name="wifi-outline" size={18} color={isLightTheme ? "#0061A4" : "#C7B9FF"} />
+                    <Text style={[styles.popupButtonWifiText, isLightTheme && { color: '#0061A4' }]}>Change WiFi Network</Text>
+                  </>
                 )}
               </TouchableOpacity>
             </View>
-            <TouchableOpacity
-              style={styles.popupButtonWifi}
-              onPress={handleChangeWifi}
-              disabled={isSavingName || isDeletingDevice || isCheckingWifiDevice || isConnectingToWifiDevice}
-            >
-              {isConnectingToWifiDevice ? (
-                <>
-                  <ActivityIndicator size="small" color="#C7B9FF" />
-                  <Text style={styles.popupButtonWifiText}>Connecting to device...</Text>
-                </>
-              ) : isCheckingWifiDevice ? (
-                <>
-                  <ActivityIndicator size="small" color="#C7B9FF" />
-                  <Text style={styles.popupButtonWifiText}>Checking if Dozemate is live...</Text>
-                </>
-              ) : (
-                <>
-                  <Ionicons name="wifi-outline" size={18} color="#C7B9FF" />
-                  <Text style={styles.popupButtonWifiText}>Change WiFi Network</Text>
-                </>
-              )}
-            </TouchableOpacity>
-          </View>
           </View>
         </View>
       )}

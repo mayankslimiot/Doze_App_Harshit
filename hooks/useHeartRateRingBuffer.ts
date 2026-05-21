@@ -143,7 +143,6 @@ export function useHeartRateRingBuffer(deviceId: string | null, isLoggedIn: bool
             pendingRenderRef.current = null;
           }, remainingTime);
         }
-      }
     },
     [triggerRender]
   );

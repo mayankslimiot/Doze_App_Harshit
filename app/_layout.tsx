@@ -30,12 +30,14 @@ global.process = process;
 // Initialize Firebase
 import '@/services/firebase';
 
+import { ThemeProvider, useTheme } from "@/contexts/ThemeContext";
 import { useBoot } from '@/contexts/BootContext';
 
 function AppContent() {
   const { bootReady } = useBoot();
   const { activeDevice } = useDevice();
   const { auth } = useAuth();
+  const { isLightTheme } = useTheme();
   const appStateRef = useRef<AppStateStatus>(AppState.currentState);
 
   // On app resume (background → active), backfill heart rate buffer from API to fill gaps.
@@ -70,21 +72,21 @@ function AppContent() {
   // Block rendering until boot flags are loaded
   if (!bootReady) {
     return (
-      <View style={styles.bootLoader}>
-        <ActivityIndicator size="large" color="#C7B9FF" />
+      <View style={[styles.bootLoader, isLightTheme && { backgroundColor: '#F8F9FA' }]}>
+        <ActivityIndicator size="large" color={isLightTheme ? '#0061A4' : '#C7B9FF'} />
       </View>
     );
   }
 
   return (
-    <View style={{ flex: 1, backgroundColor: '#02041A' }}>
+    <View style={{ flex: 1, backgroundColor: isLightTheme ? '#F8F9FA' : '#02041A' }}>
       {/* Global network status banner — pushes content down when visible */}
       <NetworkBanner />
       <NavigationGuard>
         <Stack
           screenOptions={{
             headerShown: false,
-            contentStyle: { backgroundColor: "#02041A" },
+            contentStyle: { backgroundColor: isLightTheme ? '#F8F9FA' : "#02041A" },
             animation: "fade_from_bottom",
             animationDuration: 250,
           }}
@@ -109,19 +111,21 @@ function AppContent() {
 export default function RootLayout() {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
-      <BootProvider>
-        <AuthProvider>
-          <SignupProvider>
-            <DeviceProvider>
-              <BluetoothProvider>
-                <ProvisioningProvider>
-                  <AppContent />
-                </ProvisioningProvider>
-              </BluetoothProvider>
-            </DeviceProvider>
-          </SignupProvider>
-        </AuthProvider>
-      </BootProvider>
+      <ThemeProvider>
+        <BootProvider>
+          <AuthProvider>
+            <SignupProvider>
+              <DeviceProvider>
+                <BluetoothProvider>
+                  <ProvisioningProvider>
+                    <AppContent />
+                  </ProvisioningProvider>
+                </BluetoothProvider>
+              </DeviceProvider>
+            </SignupProvider>
+          </AuthProvider>
+        </BootProvider>
+      </ThemeProvider>
     </GestureHandlerRootView>
   );
 }

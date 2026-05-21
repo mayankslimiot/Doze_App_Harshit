@@ -5,6 +5,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
+import { useTheme } from '@/contexts/ThemeContext';
 import { requestNotifications } from 'react-native-permissions';
 import { sendTestNotification } from '@/services/Notifications';
 import { 
@@ -46,32 +47,34 @@ type RowProps = {
 };
 
 function SectionHeader({ label }: { label: string }) {
+  const { isLightTheme } = useTheme();
   return (
-    <Text style={styles.sectionHeader}>{label}</Text>
+    <Text style={[styles.sectionHeader, isLightTheme && { color: '#666666' }]}>{label}</Text>
   );
 }
 
 function Row({ title, subtitle, showToggle, toggleValue, onToggle, toggleDisabled, onPress, isLoading, rightComponent }: RowProps) {
+  const { isLightTheme } = useTheme();
   return (
     <TouchableOpacity activeOpacity={onPress ? 0.8 : 1} onPress={onPress} style={styles.row} disabled={isLoading || !onPress}>
       <View style={styles.rowTextContainer}>
-        <Text style={styles.rowTitle}>{title}</Text>
-        {!!subtitle && <Text style={styles.rowSubtitle}>{subtitle}</Text>}
+        <Text style={[styles.rowTitle, isLightTheme && { color: '#111111' }]}>{title}</Text>
+        {!!subtitle && <Text style={[styles.rowSubtitle, isLightTheme && { color: '#666666' }]}>{subtitle}</Text>}
       </View>
       {showToggle ? (
         <Switch
           value={!!toggleValue}
           onValueChange={onToggle}
           disabled={!!toggleDisabled}
-          trackColor={{ false: '#3A3F65', true: '#4A90E2' }}
+          trackColor={{ false: isLightTheme ? '#E5E5E5' : '#3A3F65', true: isLightTheme ? '#0061A4' : '#4A90E2' }}
           thumbColor={'#FFFFFF'}
         />
       ) : isLoading ? (
-        <ActivityIndicator size="small" color="#4A90E2" />
+        <ActivityIndicator size="small" color={isLightTheme ? '#0061A4' : '#4A90E2'} />
       ) : rightComponent ? (
         rightComponent
       ) : (
-        <Text style={styles.chevron}>›</Text>
+        <Text style={[styles.chevron, isLightTheme && { color: 'rgba(0,0,0,0.3)' }]}>›</Text>
       )}
     </TouchableOpacity>
   );
@@ -80,6 +83,7 @@ function Row({ title, subtitle, showToggle, toggleValue, onToggle, toggleDisable
 export default function NotificationSettingsScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const { isLightTheme } = useTheme();
   const [isLoading, setIsLoading] = useState(true);
   const [settings, setSettings] = useState<HeartRateNotificationSettings>({
     enabled: false,
@@ -440,17 +444,30 @@ export default function NotificationSettingsScreen() {
   };
 
 
+  const cardStyle = [styles.card, isLightTheme && { backgroundColor: '#FFFFFF', borderColor: 'rgba(0,0,0,0.06)' }];
+  const rowTitleStyle = [styles.rowTitle, isLightTheme && { color: '#111111' }];
+  const rowSubtitleStyle = [styles.rowSubtitle, isLightTheme && { color: '#666666' }];
+  const inputContainerStyle = [styles.inputContainer, isLightTheme && { backgroundColor: 'rgba(0,0,0,0.04)' }];
+  const inputStyle = [styles.input, isLightTheme && { color: '#111111' }];
+  const inputUnitStyle = [styles.inputUnit, isLightTheme && { color: '#666666' }];
+  const valueButtonStyle = [styles.valueButton, isLightTheme && { backgroundColor: 'rgba(0,0,0,0.04)' }];
+  const valueTextStyle = [styles.valueText, isLightTheme && { color: '#111111' }];
+  const valueUnitStyle = [styles.valueUnit, isLightTheme && { color: '#666666' }];
+  const dividerStyle = [styles.divider, isLightTheme && { backgroundColor: 'rgba(0,0,0,0.05)' }];
+
   return (
-    <View style={styles.container}>
-      <StatusBar barStyle="light-content" backgroundColor="#02041A" />
-      <LinearGradient colors={['#1D244D', '#02041A', '#1A1D3E']} style={styles.gradientBackground} />
+    <View style={[styles.container, isLightTheme && { backgroundColor: '#F8F9FA' }]}>
+      <StatusBar barStyle={isLightTheme ? 'dark-content' : 'light-content'} backgroundColor={isLightTheme ? '#F8F9FA' : '#02041A'} />
+      {isLightTheme ? null : (
+        <LinearGradient colors={['#1D244D', '#02041A', '#1A1D3E']} style={styles.gradientBackground} />
+      )}
 
       {/* Header (match Settings style) */}
       <View style={[styles.header, { paddingTop: insets.top + 6 }]}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
-          <Ionicons name="arrow-back" size={24} color="#FFFFFF" />
+          <Ionicons name="arrow-back" size={24} color={isLightTheme ? '#333333' : '#FFFFFF'} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Notifications</Text>
+        <Text style={[styles.headerTitle, isLightTheme && { color: '#111111' }]}>Notifications</Text>
         <View style={{ width: 32 }} />
       </View>
 
@@ -467,7 +484,7 @@ export default function NotificationSettingsScreen() {
           <>
             {/* App Notifications */}
             <SectionHeader label="App Notifications" />
-            <View style={styles.card}>
+            <View style={cardStyle}>
               <Row
                 title="Enable App Notifications"
                 subtitle="Enable app alerts and updates"
@@ -481,7 +498,7 @@ export default function NotificationSettingsScreen() {
             {notificationsEnabled && (
               <>
                 <SectionHeader label="Heart Rate Trends" />
-                <View style={styles.card}>
+                <View style={cardStyle}>
                   <Row
                     title="Enable Heart Rate Notifications"
                     subtitle="Get notified when your heart rate trend goes above or below your set thresholds"
@@ -491,19 +508,19 @@ export default function NotificationSettingsScreen() {
                   />
                   {settings.enabled && (
                     <>
-                      <View style={styles.divider} />
+                      <View style={dividerStyle} />
                       {/* High Threshold */}
                       <View style={styles.row}>
                         <View style={styles.rowTextContainer}>
-                          <Text style={styles.rowTitle}>High Threshold</Text>
-                          <Text style={styles.rowSubtitle}>
+                          <Text style={rowTitleStyle}>High Threshold</Text>
+                          <Text style={rowSubtitleStyle}>
                             Notify when heart rate exceeds this value (BPM)
                           </Text>
                         </View>
                         {isEditingHigh ? (
-                          <View style={styles.inputContainer}>
+                          <View style={inputContainerStyle}>
                             <TextInput
-                              style={styles.input}
+                              style={inputStyle}
                               value={highInput}
                               onChangeText={setHighInput}
                               keyboardType="numeric"
@@ -528,33 +545,33 @@ export default function NotificationSettingsScreen() {
                                 }
                               }}
                             />
-                            <Text style={styles.inputUnit}>BPM</Text>
+                            <Text style={inputUnitStyle}>BPM</Text>
                           </View>
                         ) : (
                           <TouchableOpacity
                             onPress={() => setIsEditingHigh(true)}
-                            style={styles.valueButton}
+                            style={valueButtonStyle}
                           >
-                            <Text style={styles.valueText}>{settings.highThreshold}</Text>
-                            <Text style={styles.valueUnit}> BPM</Text>
-                            <Ionicons name="pencil" size={16} color="rgba(255,255,255,0.5)" style={{ marginLeft: 4 }} />
+                            <Text style={valueTextStyle}>{settings.highThreshold}</Text>
+                            <Text style={valueUnitStyle}> BPM</Text>
+                            <Ionicons name="pencil" size={16} color={isLightTheme ? "rgba(0,0,0,0.4)" : "rgba(255,255,255,0.5)"} style={{ marginLeft: 4 }} />
                           </TouchableOpacity>
                         )}
                       </View>
-                      <View style={styles.divider} />
+                      <View style={dividerStyle} />
                       
                       {/* Low Threshold */}
                       <View style={styles.row}>
                         <View style={styles.rowTextContainer}>
-                          <Text style={styles.rowTitle}>Low Threshold</Text>
-                          <Text style={styles.rowSubtitle}>
+                          <Text style={rowTitleStyle}>Low Threshold</Text>
+                          <Text style={rowSubtitleStyle}>
                             Notify when heart rate falls below this value (BPM)
                           </Text>
                         </View>
                         {isEditingLow ? (
-                          <View style={styles.inputContainer}>
+                          <View style={inputContainerStyle}>
                             <TextInput
-                              style={styles.input}
+                              style={inputStyle}
                               value={lowInput}
                               onChangeText={setLowInput}
                               keyboardType="numeric"
@@ -579,16 +596,16 @@ export default function NotificationSettingsScreen() {
                                 }
                               }}
                             />
-                            <Text style={styles.inputUnit}>BPM</Text>
+                            <Text style={inputUnitStyle}>BPM</Text>
                           </View>
                         ) : (
                           <TouchableOpacity
                             onPress={() => setIsEditingLow(true)}
-                            style={styles.valueButton}
+                            style={valueButtonStyle}
                           >
-                            <Text style={styles.valueText}>{settings.lowThreshold}</Text>
-                            <Text style={styles.valueUnit}> BPM</Text>
-                            <Ionicons name="pencil" size={16} color="rgba(255,255,255,0.5)" style={{ marginLeft: 4 }} />
+                            <Text style={valueTextStyle}>{settings.lowThreshold}</Text>
+                            <Text style={valueUnitStyle}> BPM</Text>
+                            <Ionicons name="pencil" size={16} color={isLightTheme ? "rgba(0,0,0,0.4)" : "rgba(255,255,255,0.5)"} style={{ marginLeft: 4 }} />
                           </TouchableOpacity>
                         )}
                       </View>
@@ -597,7 +614,7 @@ export default function NotificationSettingsScreen() {
                 </View>
 
                 <SectionHeader label="Breathing Trends" />
-                <View style={styles.card}>
+                <View style={cardStyle}>
                   <Row
                     title="Enable Respiration Notifications"
                     subtitle="Get notified when your breathing rate trend goes above or below your set thresholds"
@@ -607,19 +624,19 @@ export default function NotificationSettingsScreen() {
                   />
                   {respirationSettings.enabled && (
                     <>
-                      <View style={styles.divider} />
+                      <View style={dividerStyle} />
                       {/* High Threshold */}
                       <View style={styles.row}>
                         <View style={styles.rowTextContainer}>
-                          <Text style={styles.rowTitle}>High Threshold</Text>
-                          <Text style={styles.rowSubtitle}>
+                          <Text style={rowTitleStyle}>High Threshold</Text>
+                          <Text style={rowSubtitleStyle}>
                             Notify when breathing rate exceeds this value (RPM)
                           </Text>
                         </View>
                         {isEditingRespirationHigh ? (
-                          <View style={styles.inputContainer}>
+                          <View style={inputContainerStyle}>
                             <TextInput
-                              style={styles.input}
+                              style={inputStyle}
                               value={respirationHighInput}
                               onChangeText={setRespirationHighInput}
                               keyboardType="numeric"
@@ -644,33 +661,33 @@ export default function NotificationSettingsScreen() {
                                 }
                               }}
                             />
-                            <Text style={styles.inputUnit}>RPM</Text>
+                            <Text style={inputUnitStyle}>RPM</Text>
                           </View>
                         ) : (
                           <TouchableOpacity
                             onPress={() => setIsEditingRespirationHigh(true)}
-                            style={styles.valueButton}
+                            style={valueButtonStyle}
                           >
-                            <Text style={styles.valueText}>{respirationSettings.highThreshold}</Text>
-                            <Text style={styles.valueUnit}> RPM</Text>
-                            <Ionicons name="pencil" size={16} color="rgba(255,255,255,0.5)" style={{ marginLeft: 4 }} />
+                            <Text style={valueTextStyle}>{respirationSettings.highThreshold}</Text>
+                            <Text style={valueUnitStyle}> RPM</Text>
+                            <Ionicons name="pencil" size={16} color={isLightTheme ? "rgba(0,0,0,0.4)" : "rgba(255,255,255,0.5)"} style={{ marginLeft: 4 }} />
                           </TouchableOpacity>
                         )}
                       </View>
-                      <View style={styles.divider} />
+                      <View style={dividerStyle} />
                       
                       {/* Low Threshold */}
                       <View style={styles.row}>
                         <View style={styles.rowTextContainer}>
-                          <Text style={styles.rowTitle}>Low Threshold</Text>
-                          <Text style={styles.rowSubtitle}>
+                          <Text style={rowTitleStyle}>Low Threshold</Text>
+                          <Text style={rowSubtitleStyle}>
                             Notify when breathing rate falls below this value (RPM)
                           </Text>
                         </View>
                         {isEditingRespirationLow ? (
-                          <View style={styles.inputContainer}>
+                          <View style={inputContainerStyle}>
                             <TextInput
-                              style={styles.input}
+                              style={inputStyle}
                               value={respirationLowInput}
                               onChangeText={setRespirationLowInput}
                               keyboardType="numeric"
@@ -695,16 +712,16 @@ export default function NotificationSettingsScreen() {
                                 }
                               }}
                             />
-                            <Text style={styles.inputUnit}>RPM</Text>
+                            <Text style={inputUnitStyle}>RPM</Text>
                           </View>
                         ) : (
                           <TouchableOpacity
                             onPress={() => setIsEditingRespirationLow(true)}
-                            style={styles.valueButton}
+                            style={valueButtonStyle}
                           >
-                            <Text style={styles.valueText}>{respirationSettings.lowThreshold}</Text>
-                            <Text style={styles.valueUnit}> RPM</Text>
-                            <Ionicons name="pencil" size={16} color="rgba(255,255,255,0.5)" style={{ marginLeft: 4 }} />
+                            <Text style={valueTextStyle}>{respirationSettings.lowThreshold}</Text>
+                            <Text style={valueUnitStyle}> RPM</Text>
+                            <Ionicons name="pencil" size={16} color={isLightTheme ? "rgba(0,0,0,0.4)" : "rgba(255,255,255,0.5)"} style={{ marginLeft: 4 }} />
                           </TouchableOpacity>
                         )}
                       </View>
@@ -713,7 +730,7 @@ export default function NotificationSettingsScreen() {
                 </View>
 
                 <SectionHeader label="Stress Level Trends" />
-                <View style={styles.card}>
+                <View style={cardStyle}>
                   <Row
                     title="Enable Stress Notifications"
                     subtitle="Get notified when your stress level trend goes above or below your set thresholds"
@@ -723,19 +740,19 @@ export default function NotificationSettingsScreen() {
                   />
                   {stressSettings.enabled && (
                     <>
-                      <View style={styles.divider} />
+                      <View style={dividerStyle} />
                       {/* High Threshold */}
                       <View style={styles.row}>
                         <View style={styles.rowTextContainer}>
-                          <Text style={styles.rowTitle}>High Threshold</Text>
-                          <Text style={styles.rowSubtitle}>
+                          <Text style={rowTitleStyle}>High Threshold</Text>
+                          <Text style={rowSubtitleStyle}>
                             Notify when stress level exceeds this value
                           </Text>
                         </View>
                         {isEditingStressHigh ? (
-                          <View style={styles.inputContainer}>
+                          <View style={inputContainerStyle}>
                             <TextInput
-                              style={styles.input}
+                              style={inputStyle}
                               value={stressHighInput}
                               onChangeText={setStressHighInput}
                               keyboardType="numeric"
@@ -764,27 +781,27 @@ export default function NotificationSettingsScreen() {
                         ) : (
                           <TouchableOpacity
                             onPress={() => setIsEditingStressHigh(true)}
-                            style={styles.valueButton}
+                            style={valueButtonStyle}
                           >
-                            <Text style={styles.valueText}>{stressSettings.highThreshold}</Text>
-                            <Ionicons name="pencil" size={16} color="rgba(255,255,255,0.5)" style={{ marginLeft: 4 }} />
+                            <Text style={valueTextStyle}>{stressSettings.highThreshold}</Text>
+                            <Ionicons name="pencil" size={16} color={isLightTheme ? "rgba(0,0,0,0.4)" : "rgba(255,255,255,0.5)"} style={{ marginLeft: 4 }} />
                           </TouchableOpacity>
                         )}
                       </View>
-                      <View style={styles.divider} />
+                      <View style={dividerStyle} />
                       
                       {/* Low Threshold */}
                       <View style={styles.row}>
                         <View style={styles.rowTextContainer}>
-                          <Text style={styles.rowTitle}>Low Threshold</Text>
-                          <Text style={styles.rowSubtitle}>
+                          <Text style={rowTitleStyle}>Low Threshold</Text>
+                          <Text style={rowSubtitleStyle}>
                             Notify when stress level falls below this value
                           </Text>
                         </View>
                         {isEditingStressLow ? (
-                          <View style={styles.inputContainer}>
+                          <View style={inputContainerStyle}>
                             <TextInput
-                              style={styles.input}
+                              style={inputStyle}
                               value={stressLowInput}
                               onChangeText={setStressLowInput}
                               keyboardType="numeric"
@@ -813,10 +830,10 @@ export default function NotificationSettingsScreen() {
                         ) : (
                           <TouchableOpacity
                             onPress={() => setIsEditingStressLow(true)}
-                            style={styles.valueButton}
+                            style={valueButtonStyle}
                           >
-                            <Text style={styles.valueText}>{stressSettings.lowThreshold}</Text>
-                            <Ionicons name="pencil" size={16} color="rgba(255,255,255,0.5)" style={{ marginLeft: 4 }} />
+                            <Text style={valueTextStyle}>{stressSettings.lowThreshold}</Text>
+                            <Ionicons name="pencil" size={16} color={isLightTheme ? "rgba(0,0,0,0.4)" : "rgba(255,255,255,0.5)"} style={{ marginLeft: 4 }} />
                           </TouchableOpacity>
                         )}
                       </View>
@@ -825,7 +842,7 @@ export default function NotificationSettingsScreen() {
                 </View>
 
                 <SectionHeader label="Temperature Alerts" />
-                <View style={styles.card}>
+                <View style={cardStyle}>
                   <Row
                     title="Enable Temperature Notifications"
                     subtitle="Get notified when room temperature goes above or below your set thresholds"
@@ -835,19 +852,19 @@ export default function NotificationSettingsScreen() {
                   />
                   {temperatureSettings.enabled && (
                     <>
-                      <View style={styles.divider} />
+                      <View style={dividerStyle} />
                       {/* High Threshold */}
                       <View style={styles.row}>
                         <View style={styles.rowTextContainer}>
-                          <Text style={styles.rowTitle}>High Threshold</Text>
-                          <Text style={styles.rowSubtitle}>
+                          <Text style={rowTitleStyle}>High Threshold</Text>
+                          <Text style={rowSubtitleStyle}>
                             Alert when temperature exceeds this value (°C)
                           </Text>
                         </View>
                         {isEditingTemperatureHigh ? (
-                          <View style={styles.inputContainer}>
+                          <View style={inputContainerStyle}>
                             <TextInput
-                              style={styles.input}
+                              style={inputStyle}
                               value={temperatureHighInput}
                               onChangeText={setTemperatureHighInput}
                               keyboardType="numeric"
@@ -872,33 +889,33 @@ export default function NotificationSettingsScreen() {
                                 }
                               }}
                             />
-                            <Text style={styles.inputUnit}>°C</Text>
+                            <Text style={inputUnitStyle}>°C</Text>
                           </View>
                         ) : (
                           <TouchableOpacity
                             onPress={() => setIsEditingTemperatureHigh(true)}
-                            style={styles.valueButton}
+                            style={valueButtonStyle}
                           >
-                            <Text style={styles.valueText}>{temperatureSettings.highThreshold}</Text>
-                            <Text style={styles.valueUnit}> °C</Text>
-                            <Ionicons name="pencil" size={16} color="rgba(255,255,255,0.5)" style={{ marginLeft: 4 }} />
+                            <Text style={valueTextStyle}>{temperatureSettings.highThreshold}</Text>
+                            <Text style={valueUnitStyle}> °C</Text>
+                            <Ionicons name="pencil" size={16} color={isLightTheme ? "rgba(0,0,0,0.4)" : "rgba(255,255,255,0.5)"} style={{ marginLeft: 4 }} />
                           </TouchableOpacity>
                         )}
                       </View>
-                      <View style={styles.divider} />
+                      <View style={dividerStyle} />
                       
                       {/* Low Threshold */}
                       <View style={styles.row}>
                         <View style={styles.rowTextContainer}>
-                          <Text style={styles.rowTitle}>Low Threshold</Text>
-                          <Text style={styles.rowSubtitle}>
+                          <Text style={rowTitleStyle}>Low Threshold</Text>
+                          <Text style={rowSubtitleStyle}>
                             Alert when temperature falls below this value (°C)
                           </Text>
                         </View>
                         {isEditingTemperatureLow ? (
-                          <View style={styles.inputContainer}>
+                          <View style={inputContainerStyle}>
                             <TextInput
-                              style={styles.input}
+                              style={inputStyle}
                               value={temperatureLowInput}
                               onChangeText={setTemperatureLowInput}
                               keyboardType="numeric"
@@ -923,16 +940,16 @@ export default function NotificationSettingsScreen() {
                                 }
                               }}
                             />
-                            <Text style={styles.inputUnit}>°C</Text>
+                            <Text style={inputUnitStyle}>°C</Text>
                           </View>
                         ) : (
                           <TouchableOpacity
                             onPress={() => setIsEditingTemperatureLow(true)}
-                            style={styles.valueButton}
+                            style={valueButtonStyle}
                           >
-                            <Text style={styles.valueText}>{temperatureSettings.lowThreshold}</Text>
-                            <Text style={styles.valueUnit}> °C</Text>
-                            <Ionicons name="pencil" size={16} color="rgba(255,255,255,0.5)" style={{ marginLeft: 4 }} />
+                            <Text style={valueTextStyle}>{temperatureSettings.lowThreshold}</Text>
+                            <Text style={valueUnitStyle}> °C</Text>
+                            <Ionicons name="pencil" size={16} color={isLightTheme ? "rgba(0,0,0,0.4)" : "rgba(255,255,255,0.5)"} style={{ marginLeft: 4 }} />
                           </TouchableOpacity>
                         )}
                       </View>
@@ -941,7 +958,7 @@ export default function NotificationSettingsScreen() {
                 </View>
 
                 <SectionHeader label="Humidity Alerts" />
-                <View style={styles.card}>
+                <View style={cardStyle}>
                   <Row
                     title="Enable Humidity Notifications"
                     subtitle="Get notified when room humidity goes above or below your set thresholds"
@@ -951,19 +968,19 @@ export default function NotificationSettingsScreen() {
                   />
                   {humiditySettings.enabled && (
                     <>
-                      <View style={styles.divider} />
+                      <View style={dividerStyle} />
                       {/* High Threshold */}
                       <View style={styles.row}>
                         <View style={styles.rowTextContainer}>
-                          <Text style={styles.rowTitle}>High Threshold</Text>
-                          <Text style={styles.rowSubtitle}>
+                          <Text style={rowTitleStyle}>High Threshold</Text>
+                          <Text style={rowSubtitleStyle}>
                             Alert when humidity exceeds this value (%)
                           </Text>
                         </View>
                         {isEditingHumidityHigh ? (
-                          <View style={styles.inputContainer}>
+                          <View style={inputContainerStyle}>
                             <TextInput
-                              style={styles.input}
+                              style={inputStyle}
                               value={humidityHighInput}
                               onChangeText={setHumidityHighInput}
                               keyboardType="numeric"
@@ -988,33 +1005,33 @@ export default function NotificationSettingsScreen() {
                                 }
                               }}
                             />
-                            <Text style={styles.inputUnit}>%</Text>
+                            <Text style={inputUnitStyle}>%</Text>
                           </View>
                         ) : (
                           <TouchableOpacity
                             onPress={() => setIsEditingHumidityHigh(true)}
-                            style={styles.valueButton}
+                            style={valueButtonStyle}
                           >
-                            <Text style={styles.valueText}>{humiditySettings.highThreshold}</Text>
-                            <Text style={styles.valueUnit}> %</Text>
-                            <Ionicons name="pencil" size={16} color="rgba(255,255,255,0.5)" style={{ marginLeft: 4 }} />
+                            <Text style={valueTextStyle}>{humiditySettings.highThreshold}</Text>
+                            <Text style={valueUnitStyle}> %</Text>
+                            <Ionicons name="pencil" size={16} color={isLightTheme ? "rgba(0,0,0,0.4)" : "rgba(255,255,255,0.5)"} style={{ marginLeft: 4 }} />
                           </TouchableOpacity>
                         )}
                       </View>
-                      <View style={styles.divider} />
+                      <View style={dividerStyle} />
                       
                       {/* Low Threshold */}
                       <View style={styles.row}>
                         <View style={styles.rowTextContainer}>
-                          <Text style={styles.rowTitle}>Low Threshold</Text>
-                          <Text style={styles.rowSubtitle}>
+                          <Text style={rowTitleStyle}>Low Threshold</Text>
+                          <Text style={rowSubtitleStyle}>
                             Alert when humidity falls below this value (%)
                           </Text>
                         </View>
                         {isEditingHumidityLow ? (
-                          <View style={styles.inputContainer}>
+                          <View style={inputContainerStyle}>
                             <TextInput
-                              style={styles.input}
+                              style={inputStyle}
                               value={humidityLowInput}
                               onChangeText={setHumidityLowInput}
                               keyboardType="numeric"
@@ -1039,16 +1056,16 @@ export default function NotificationSettingsScreen() {
                                 }
                               }}
                             />
-                            <Text style={styles.inputUnit}>%</Text>
+                            <Text style={inputUnitStyle}>%</Text>
                           </View>
                         ) : (
                           <TouchableOpacity
                             onPress={() => setIsEditingHumidityLow(true)}
-                            style={styles.valueButton}
+                            style={valueButtonStyle}
                           >
-                            <Text style={styles.valueText}>{humiditySettings.lowThreshold}</Text>
-                            <Text style={styles.valueUnit}> %</Text>
-                            <Ionicons name="pencil" size={16} color="rgba(255,255,255,0.5)" style={{ marginLeft: 4 }} />
+                            <Text style={valueTextStyle}>{humiditySettings.lowThreshold}</Text>
+                            <Text style={valueUnitStyle}> %</Text>
+                            <Ionicons name="pencil" size={16} color={isLightTheme ? "rgba(0,0,0,0.4)" : "rgba(255,255,255,0.5)"} style={{ marginLeft: 4 }} />
                           </TouchableOpacity>
                         )}
                       </View>

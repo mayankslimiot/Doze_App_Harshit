@@ -18,12 +18,14 @@ import { useRouter } from 'expo-router';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '@/contexts/AuthContext';
 import { useBoot } from '@/contexts/BootContext';
+import { useTheme } from '@/contexts/ThemeContext';
 
 const { width, height } = Dimensions.get('window');
 const isTablet = width >= 768;
 
 export default function SetupScreen() {
   const router = useRouter();
+  const { isLightTheme } = useTheme();
   const insets = useSafeAreaInsets();
   const { logout } = useAuth();
   const { completeSetup } = useBoot();
@@ -69,20 +71,22 @@ export default function SetupScreen() {
   }, [startZoomAnimation]);
 
   return (
-    <SafeAreaView style={styles.container} edges={Platform.OS === 'ios' ? ['top'] : ['top', 'bottom']}>
-      <StatusBar barStyle="light-content" backgroundColor="#02041A" />
+    <SafeAreaView style={[styles.container, isLightTheme && { backgroundColor: '#F8F9FA' }]} edges={Platform.OS === 'ios' ? ['top'] : ['top', 'bottom']}>
+      <StatusBar barStyle={isLightTheme ? "dark-content" : "light-content"} backgroundColor={isLightTheme ? "#F8F9FA" : "#02041A"} />
 
-      <LinearGradient
-        colors={['#1D244D', '#02041A', '#1A1D3E']}
-        style={styles.gradientBackground}
-      />
+      {isLightTheme ? null : (
+        <LinearGradient
+          colors={['#1D244D', '#02041A', '#1A1D3E']}
+          style={styles.gradientBackground}
+        />
+      )}
 
       <TouchableOpacity
         style={[styles.logoutButton, { top: insets.top + (Platform.OS === 'ios' ? 10 : 10) }]}
         onPress={handleLogout}
         activeOpacity={0.8}
       >
-        <Text style={styles.logoutButtonText}>Logout</Text>
+        <Text style={[styles.logoutButtonText, isLightTheme && { color: '#0061A4' }]}>Logout</Text>
       </TouchableOpacity>
 
       <TouchableOpacity
@@ -90,7 +94,7 @@ export default function SetupScreen() {
         onPress={handleSkip}
         activeOpacity={0.8}
       >
-        <Text style={styles.skipButtonText}>Skip</Text>
+        <Text style={[styles.skipButtonText, isLightTheme && { color: '#0061A4' }]}>Skip</Text>
       </TouchableOpacity>
 
       <ScrollView 
@@ -99,7 +103,7 @@ export default function SetupScreen() {
         bounces={false}
       >
         <View style={styles.contentContainer}>
-          <Text style={styles.title}>Connect your Dozemate</Text>
+          <Text style={[styles.title, isLightTheme && { color: '#111111' }]}>Connect your Dozemate</Text>
 
           <View style={styles.deviceContainer}>
             <Animated.Image
@@ -109,31 +113,59 @@ export default function SetupScreen() {
             />
           </View>
 
-          <BlurView intensity={25} tint="dark" style={styles.glassContainer}>
-            <View style={styles.buttonsContainer}>
-              <TouchableOpacity
-                style={styles.setupButton}
-                onPress={handleSetupDozemate}
-                activeOpacity={0.8}
-              >
-                <Text style={styles.setupButtonText}>Setup Dozemate</Text>
-              </TouchableOpacity>
+          {isLightTheme ? (
+            <View style={[styles.glassContainer, { backgroundColor: '#FFFFFF', borderColor: '#E5E7EB', shadowColor: '#000000', shadowOpacity: 0.05, shadowRadius: 10, elevation: 2 }]}>
+              <View style={styles.buttonsContainer}>
+                <TouchableOpacity
+                  style={[styles.setupButton, { backgroundColor: '#0061A4' }]}
+                  onPress={handleSetupDozemate}
+                  activeOpacity={0.8}
+                >
+                  <Text style={[styles.setupButtonText, { color: '#FFFFFF' }]}>Setup Dozemate</Text>
+                </TouchableOpacity>
 
-              <View style={styles.orDivider}>
-                <View style={styles.orLine} />
-                <Text style={styles.orText}>OR</Text>
-                <View style={styles.orLine} />
+                <View style={styles.orDivider}>
+                  <View style={[styles.orLine, { backgroundColor: '#E5E7EB' }]} />
+                  <Text style={[styles.orText, { color: '#666666' }]}>OR</Text>
+                  <View style={[styles.orLine, { backgroundColor: '#E5E7EB' }]} />
+                </View>
+
+                <TouchableOpacity
+                  style={[styles.buyButton, { borderColor: '#0061A4' }]}
+                  onPress={handleBuyDozemate}
+                  activeOpacity={0.8}
+                >
+                  <Text style={[styles.buyButtonText, { color: '#0061A4' }]}>Buy Dozemate</Text>
+                </TouchableOpacity>
               </View>
-
-              <TouchableOpacity
-                style={styles.buyButton}
-                onPress={handleBuyDozemate}
-                activeOpacity={0.8}
-              >
-                <Text style={styles.buyButtonText}>Buy Dozemate</Text>
-              </TouchableOpacity>
             </View>
-          </BlurView>
+          ) : (
+            <BlurView intensity={25} tint="dark" style={styles.glassContainer}>
+              <View style={styles.buttonsContainer}>
+                <TouchableOpacity
+                  style={styles.setupButton}
+                  onPress={handleSetupDozemate}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.setupButtonText}>Setup Dozemate</Text>
+                </TouchableOpacity>
+
+                <View style={styles.orDivider}>
+                  <View style={styles.orLine} />
+                  <Text style={styles.orText}>OR</Text>
+                  <View style={styles.orLine} />
+                </View>
+
+                <TouchableOpacity
+                  style={styles.buyButton}
+                  onPress={handleBuyDozemate}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.buyButtonText}>Buy Dozemate</Text>
+                </TouchableOpacity>
+              </View>
+            </BlurView>
+          )}
         </View>
       </ScrollView>
     </SafeAreaView>

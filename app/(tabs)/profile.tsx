@@ -1,12 +1,14 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, StatusBar, Alert, TextInput, Image, Modal, Platform, Pressable } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, StatusBar, Alert, TextInput, Image, Modal, Platform, Pressable, useColorScheme } from 'react-native';
 import { BlurView } from 'expo-blur';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '@/contexts/AuthContext';
+import { useTheme } from '@/contexts/ThemeContext';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
 import { apiUrl } from '@/services/api';
 import { HealthGauge } from '@/components/HealthGauge';
@@ -25,11 +27,13 @@ import {
 function UnitDropdown({ 
   value, 
   options, 
-  onSelect 
+  onSelect,
+  isLight
 }: { 
   value: string; 
   options: string[]; 
   onSelect: (value: string) => void;
+  isLight?: boolean;
 }) {
   const [isOpen, setIsOpen] = useState(false);
 
@@ -40,28 +44,29 @@ function UnitDropdown({
         style={styles.unitDropdownButton}
         activeOpacity={0.8}
       >
-        <Text style={styles.unitDropdownText}>{value}</Text>
+        <Text style={[styles.unitDropdownText, isLight && { color: '#666666' }]}>{value}</Text>
         <Ionicons 
           name={isOpen ? 'chevron-up' : 'chevron-down'} 
           size={16} 
-          color="rgba(255,255,255,0.7)" 
+          color={isLight ? '#0061A4' : 'rgba(255,255,255,0.7)'} 
         />
       </TouchableOpacity>
       {isOpen && (
-        <View style={styles.unitDropdownMenu}>
+        <View style={[styles.unitDropdownMenu, isLight && { backgroundColor: '#FFFFFF', borderColor: 'rgba(0,0,0,0.06)', shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.1, shadowRadius: 5, elevation: 4 }]}>
           {options.map((option, index) => (
             <TouchableOpacity
               key={option}
               style={[
                 styles.unitDropdownItem,
-                index === options.length - 1 && styles.unitDropdownItemLast
+                index === options.length - 1 && styles.unitDropdownItemLast,
+                isLight && { borderBottomColor: 'rgba(0,0,0,0.06)' }
               ]}
               onPress={() => {
                 onSelect(option);
                 setIsOpen(false);
               }}
             >
-              <Text style={styles.unitDropdownItemText}>{option}</Text>
+              <Text style={[styles.unitDropdownItemText, isLight && { color: '#111111' }]}>{option}</Text>
             </TouchableOpacity>
           ))}
         </View>
@@ -78,6 +83,7 @@ function MeasurementRow({
   onChangeValue,
   onChangeUnit,
   onInfoPress,
+  isLight
 }: { 
   label: string; 
   value: string; 
@@ -86,6 +92,7 @@ function MeasurementRow({
   onChangeValue: (value: string) => void;
   onChangeUnit: (unit: string) => void;
   onInfoPress?: () => void;
+  isLight?: boolean;
 }) {
   // Get placeholder based on selected unit
   const getPlaceholder = () => {
@@ -100,20 +107,20 @@ function MeasurementRow({
   return (
     <View style={styles.measurementRow}>
       <View style={styles.measurementLabelRow}>
-        <Text style={styles.measurementLabel}>{label}</Text>
+        <Text style={[styles.measurementLabel, isLight && { color: '#666666' }]}>{label}</Text>
         {onInfoPress && (
           <TouchableOpacity onPress={onInfoPress} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
-            <Ionicons name="information-circle-outline" size={16} color="rgba(255,255,255,0.5)" style={{ marginLeft: 4 }} />
+            <Ionicons name="information-circle-outline" size={16} color={isLight ? '#0061A4' : 'rgba(255,255,255,0.5)'} style={{ marginLeft: 4 }} />
           </TouchableOpacity>
         )}
       </View>
       <View style={styles.measurementInputContainer}>
           <TextInput
-            style={styles.measurementInput}
+            style={[styles.measurementInput, isLight && { color: '#111111' }]}
             value={value}
             onChangeText={onChangeValue}
             placeholder={getPlaceholder()}
-            placeholderTextColor="rgba(255,255,255,0.4)"
+            placeholderTextColor={isLight ? 'rgba(0,0,0,0.4)' : 'rgba(255,255,255,0.4)'}
             keyboardType="numeric"
             textAlign="left"
           />
@@ -121,6 +128,7 @@ function MeasurementRow({
           value={unit}
           options={unitOptions}
           onSelect={onChangeUnit}
+          isLight={isLight}
         />
       </View>
     </View>
@@ -137,6 +145,7 @@ function HeightRow({
   onChangeInches,
   onChangeUnit,
   onInfoPress,
+  isLight
 }: { 
   label: string; 
   feet: string; 
@@ -147,6 +156,7 @@ function HeightRow({
   onChangeInches: (value: string) => void;
   onChangeUnit: (unit: string) => void;
   onInfoPress?: () => void;
+  isLight?: boolean;
 }) {
   // Get placeholder based on selected unit
   const getPlaceholder = () => {
@@ -172,20 +182,20 @@ function HeightRow({
     return (
       <View style={styles.measurementRow}>
         <View style={styles.measurementLabelRow}>
-          <Text style={styles.measurementLabel}>{label}</Text>
+          <Text style={[styles.measurementLabel, isLight && { color: '#666666' }]}>{label}</Text>
           {onInfoPress && (
             <TouchableOpacity onPress={onInfoPress} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
-              <Ionicons name="information-circle-outline" size={16} color="rgba(255,255,255,0.5)" style={{ marginLeft: 4 }} />
+              <Ionicons name="information-circle-outline" size={16} color={isLight ? '#0061A4' : 'rgba(255,255,255,0.5)'} style={{ marginLeft: 4 }} />
             </TouchableOpacity>
           )}
         </View>
         <View style={styles.measurementInputContainer}>
           <TextInput
-            style={styles.measurementInput}
+            style={[styles.measurementInput, isLight && { color: '#111111' }]}
             value={feet}
             onChangeText={onChangeFeet}
             placeholder={getPlaceholder()}
-            placeholderTextColor="rgba(255,255,255,0.4)"
+            placeholderTextColor={isLight ? 'rgba(0,0,0,0.4)' : 'rgba(255,255,255,0.4)'}
             keyboardType="numeric"
             textAlign="left"
           />
@@ -193,6 +203,7 @@ function HeightRow({
             value={unit}
             options={unitOptions}
             onSelect={onChangeUnit}
+            isLight={isLight}
           />
         </View>
       </View>
@@ -203,33 +214,33 @@ function HeightRow({
   return (
     <View style={styles.measurementRow}>
       <View style={styles.measurementLabelRow}>
-        <Text style={styles.measurementLabel}>{label}</Text>
+        <Text style={[styles.measurementLabel, isLight && { color: '#666666' }]}>{label}</Text>
         {onInfoPress && (
           <TouchableOpacity onPress={onInfoPress} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
-            <Ionicons name="information-circle-outline" size={16} color="rgba(255,255,255,0.5)" style={{ marginLeft: 4 }} />
+            <Ionicons name="information-circle-outline" size={16} color={isLight ? '#0061A4' : 'rgba(255,255,255,0.5)'} style={{ marginLeft: 4 }} />
           </TouchableOpacity>
         )}
       </View>
       <View style={styles.measurementInputContainer}>
         <View style={styles.heightInputsContainer}>
           <TextInput
-            style={styles.heightInput}
+            style={[styles.heightInput, isLight && { color: '#111111' }]}
             value={feet}
             onChangeText={(val) => {
               onChangeFeet(val);
               if (val && !inches) onChangeInches('0');
             }}
             placeholder={getPlaceholder()}
-            placeholderTextColor="rgba(255,255,255,0.4)"
+            placeholderTextColor={isLight ? 'rgba(0,0,0,0.4)' : 'rgba(255,255,255,0.4)'}
             keyboardType="numeric"
             textAlign="left"
           />
           <TextInput
-            style={styles.heightInput}
+            style={[styles.heightInput, isLight && { color: '#111111' }]}
             value={inches}
             onChangeText={onChangeInches}
             placeholder={getInchesPlaceholder()}
-            placeholderTextColor="rgba(255,255,255,0.4)"
+            placeholderTextColor={isLight ? 'rgba(0,0,0,0.4)' : 'rgba(255,255,255,0.4)'}
             keyboardType="numeric"
             textAlign="left"
           />
@@ -238,6 +249,7 @@ function HeightRow({
           value={unit}
           options={unitOptions}
           onSelect={onChangeUnit}
+          isLight={isLight}
         />
       </View>
     </View>
@@ -249,31 +261,33 @@ function CalculatedIndexRow({
   subtitle,
   value, 
   score, 
-  onInfoPress 
+  onInfoPress,
+  isLight
 }: { 
   label: string; 
   subtitle?: string;
   value: string; 
   score: number; 
   onInfoPress?: () => void;
+  isLight?: boolean;
 }) {
   return (
-    <View style={styles.calculatedIndexCard}>
+    <View style={[styles.calculatedIndexCard, isLight && { backgroundColor: '#FFFFFF', borderColor: 'rgba(0, 0, 0, 0.06)', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.04, shadowRadius: 3, elevation: 1 }]}>
       <View style={styles.calculatedIndexHeader}>
         <View style={styles.calculatedIndexLabelContainer}>
-          <Text style={styles.calculatedIndexLabel}>{label}</Text>
-          {subtitle ? <Text style={styles.calculatedIndexSubtitle}>{subtitle}</Text> : null}
+          <Text style={[styles.calculatedIndexLabel, isLight && { color: '#666666' }]}>{label}</Text>
+          {subtitle ? <Text style={[styles.calculatedIndexSubtitle, isLight && { color: '#888888' }]}>{subtitle}</Text> : null}
         </View>
         <TouchableOpacity onPress={onInfoPress} style={styles.infoIcon}>
-          <Ionicons name="information-circle-outline" size={18} color="rgba(255,255,255,0.7)" />
+          <Ionicons name="information-circle-outline" size={18} color={isLight ? '#0061A4' : 'rgba(255,255,255,0.7)'} />
         </TouchableOpacity>
       </View>
       <View style={styles.calculatedIndexContent}>
         <View style={styles.calculatedIndexGaugeContainer}>
           <HealthGauge score={score} size={80} />
-          <Text style={styles.calculatedIndexScore}>{score.toFixed(1)}</Text>
+          <Text style={[styles.calculatedIndexScore, isLight && { color: '#111111' }]}>{score.toFixed(1)}</Text>
         </View>
-        <Text style={styles.calculatedIndexValue}>{value}</Text>
+        <Text style={[styles.calculatedIndexValue, isLight && { color: '#111111' }]}>{value}</Text>
       </View>
     </View>
   );
@@ -284,6 +298,8 @@ export default function ProfileScreen() {
   const router = useRouter();
   const { auth, fetchProfile, saveLocalProfile, saveProfileToServer } = useAuth();
   const [isPhotoModalVisible, setIsPhotoModalVisible] = useState(false);
+
+  const { isLightTheme } = useTheme();
   
   const initial = useMemo(() => {
     const p: any = auth.user?.profile || {};
@@ -634,10 +650,12 @@ export default function ProfileScreen() {
     
     let hasHeight = false;
     if (heightUnit === 'Ft & In') {
-      hasHeight = (heightFeet && heightFeet.trim() !== '' && !isNaN(parseFloat(heightFeet)) && parseFloat(heightFeet) > 0) &&
-                  (heightInches && heightInches.trim() !== '' && !isNaN(parseFloat(heightInches)));
+      hasHeight = Boolean(
+        heightFeet && heightFeet.trim() !== '' && !isNaN(parseFloat(heightFeet)) && parseFloat(heightFeet) > 0 &&
+        heightInches && heightInches.trim() !== '' && !isNaN(parseFloat(heightInches))
+      );
     } else {
-      hasHeight = heightFeet && heightFeet.trim() !== '' && !isNaN(parseFloat(heightFeet)) && parseFloat(heightFeet) > 0;
+      hasHeight = Boolean(heightFeet && heightFeet.trim() !== '' && !isNaN(parseFloat(heightFeet)) && parseFloat(heightFeet) > 0);
     }
     
     return hasWeight && hasWaist && hasHeight && hasProfileInfo;
@@ -734,19 +752,24 @@ export default function ProfileScreen() {
   };
 
   return (
-    <View style={styles.container}>
-      <StatusBar barStyle="light-content" backgroundColor="#02041A" />
-      <LinearGradient colors={['#1D244D', '#02041A', '#1A1D3E']} style={styles.gradientBackground} />
+    <View style={[styles.container, isLightTheme && { backgroundColor: '#F8F9FA' }]}>
+      <StatusBar 
+        barStyle={isLightTheme ? 'dark-content' : 'light-content'} 
+        backgroundColor={isLightTheme ? '#F8F9FA' : '#02041A'} 
+      />
+      {isLightTheme ? null : (
+        <LinearGradient colors={['#1D244D', '#02041A', '#1A1D3E']} style={styles.gradientBackground} />
+      )}
 
       {/* Header (match History style) */}
       <View style={[styles.header, { paddingTop: insets.top + 6 }]}> 
-        <Text style={styles.headerTitle}>Profile</Text>
+        <Text style={[styles.headerTitle, isLightTheme && { color: '#111111' }]}>Profile</Text>
         <View style={styles.headerActions}>
-            <TouchableOpacity style={styles.connectNow} onPress={() => (require('expo-router').router.push('/(bluetooth)/ScanScreen'))}>
-              <Text style={styles.connectText}>Connect Now</Text>
+            <TouchableOpacity style={[styles.connectNow, isLightTheme && { backgroundColor: 'rgba(0, 97, 164, 0.08)' }]} onPress={() => (require('expo-router').router.push('/(bluetooth)/ScanScreen'))}>
+              <Text style={[styles.connectText, isLightTheme && { color: '#0061A4' }]}>Connect Now</Text>
             </TouchableOpacity>
             <TouchableOpacity onPress={() => (require('expo-router').router.push('/(tabs)/settings'))}>
-              <Ionicons name="settings-outline" size={24} color="#fff" style={{ marginLeft: 14 }} />
+              <Ionicons name="settings-outline" size={24} color={isLightTheme ? '#0061A4' : '#fff'} style={{ marginLeft: 14 }} />
             </TouchableOpacity>
           </View>
       </View>
@@ -754,7 +777,7 @@ export default function ProfileScreen() {
       <ScrollView contentContainerStyle={[styles.scroll, { paddingBottom: 100 }]} showsVerticalScrollIndicator={false}>
 
         {/* Identity compact card */}
-        <BlurView intensity={25} tint="dark" style={[styles.identityCard, { flexDirection: 'column', alignItems: 'stretch' }]}>
+        <BlurView intensity={25} tint={isLightTheme ? 'light' : 'dark'} style={[styles.identityCard, { flexDirection: 'column', alignItems: 'stretch' }, isLightTheme && { backgroundColor: '#FFFFFF', borderColor: 'rgba(0, 0, 0, 0.06)', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.04, shadowRadius: 3, elevation: 1 }]}>
             {/* Top row */}
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                 <TouchableOpacity 
@@ -765,27 +788,27 @@ export default function ProfileScreen() {
                   {profileImageUri ? (
                     <Image source={{ uri: profileImageUri }} style={styles.avatarImage} />
                   ) : (
-                    <View style={styles.avatarInitialsContainer}>
-                      <Text style={styles.avatarInitialsText}>{initials}</Text>
+                    <View style={[styles.avatarInitialsContainer, isLightTheme && { backgroundColor: 'rgba(0, 97, 164, 0.08)', borderColor: 'rgba(0, 97, 164, 0.15)' }]}>
+                      <Text style={[styles.avatarInitialsText, isLightTheme && { color: '#0061A4' }]}>{initials}</Text>
                     </View>
                   )}
                 </TouchableOpacity>
                 <View style={{ flex: 1, marginLeft: 12 }}>
                   {!isEditingDetails ? (
                     <>
-                      <Text style={styles.identityName}>{formattedName}</Text>
-                      {auth.user?.email ? <Text style={styles.identitySub}>{auth.user.email}</Text> : null}
+                      <Text style={[styles.identityName, isLightTheme && { color: '#111111' }]}>{formattedName}</Text>
+                      {auth.user?.email ? <Text style={[styles.identitySub, isLightTheme && { color: '#666666' }]}>{auth.user.email}</Text> : null}
                     </>
                   ) : (
                     <>
                       <TextInput 
-                        style={[styles.inputField, { fontSize: 20, fontWeight: 'bold', marginBottom: 4, marginRight: 10 }]} 
+                        style={[styles.inputField, { fontSize: 20, fontWeight: 'bold', marginBottom: 4, marginRight: 10 }, isLightTheme && { backgroundColor: '#F8F9FA', borderColor: 'rgba(0,0,0,0.06)', color: '#111111' }]} 
                         value={editName} 
                         onChangeText={setEditName} 
                         placeholder="Name"
-                        placeholderTextColor="rgba(255,255,255,0.4)"
+                        placeholderTextColor={isLightTheme ? 'rgba(0,0,0,0.4)' : "rgba(255,255,255,0.4)"}
                       />
-                      {auth.user?.email ? <Text style={[styles.identitySub, { opacity: 0.6 }]}>{auth.user.email}</Text> : null}
+                      {auth.user?.email ? <Text style={[styles.identitySub, { opacity: 0.6 }, isLightTheme && { color: '#666666' }]}>{auth.user.email}</Text> : null}
                     </>
                   )}
                 </View>
@@ -793,7 +816,7 @@ export default function ProfileScreen() {
                 <View style={{ alignItems: 'flex-end', justifyContent: 'center' }}>
                   {!isEditingDetails ? (
                     <TouchableOpacity onPress={() => setIsEditingDetails(true)} style={{ padding: 4 }}>
-                      <Ionicons name="pencil" size={20} color="rgba(255,255,255,0.7)" />
+                      <Ionicons name="pencil" size={20} color={isLightTheme ? '#0061A4' : "rgba(255,255,255,0.7)"} />
                     </TouchableOpacity>
                   ) : (
                     <View style={{ flexDirection: 'row', alignItems: 'center' }}>
@@ -809,29 +832,29 @@ export default function ProfileScreen() {
             </View>
 
             {/* Personal Details Content */}
-            <View style={{ marginTop: 20, borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.1)', paddingTop: 15 }}>
-                  <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 13, marginBottom: 4 }}>Phone Number</Text>
+            <View style={{ marginTop: 20, borderTopWidth: 1, borderTopColor: isLightTheme ? 'rgba(0,0,0,0.06)' : 'rgba(255,255,255,0.1)', paddingTop: 15 }}>
+                  <Text style={{ color: isLightTheme ? '#888888' : 'rgba(255,255,255,0.5)', fontSize: 13, marginBottom: 4 }}>Phone Number</Text>
                   {!isEditingDetails ? (
-                    <Text style={{ color: '#fff', fontSize: 16, marginBottom: 15 }}>{editMobile || '—'}</Text>
+                    <Text style={{ color: isLightTheme ? '#111111' : '#fff', fontSize: 16, marginBottom: 15 }}>{editMobile || '—'}</Text>
                   ) : (
                     <TextInput 
-                      style={[styles.inputField, { marginBottom: 15 }]} 
+                      style={[styles.inputField, { marginBottom: 15 }, isLightTheme && { backgroundColor: '#F8F9FA', borderColor: 'rgba(0,0,0,0.06)', color: '#111111' }]} 
                       value={editMobile} 
                       onChangeText={setEditMobile} 
                       placeholder="Phone Number"
-                      placeholderTextColor="rgba(255,255,255,0.4)"
+                      placeholderTextColor={isLightTheme ? 'rgba(0,0,0,0.4)' : "rgba(255,255,255,0.4)"}
                       keyboardType="phone-pad"
                     />
                   )}
 
                   <View style={{ flexDirection: 'row', gap: 15 }}>
                       <View style={{ flex: 1 }}>
-                        <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 13, marginBottom: 4 }}>Date of Birth</Text>
+                        <Text style={{ color: isLightTheme ? '#888888' : 'rgba(255,255,255,0.5)', fontSize: 13, marginBottom: 4 }}>Date of Birth</Text>
                         {!isEditingDetails ? (
-                          <Text style={{ color: '#fff', fontSize: 16 }}>{formatDisplayDate(editDob) || '—'}</Text>
+                          <Text style={{ color: isLightTheme ? '#111111' : '#fff', fontSize: 16 }}>{formatDisplayDate(editDob) || '—'}</Text>
                         ) : (
-                          <TouchableOpacity onPress={() => setShowDatePicker(true)} style={styles.inputField}>
-                            <Text style={{ color: editDob ? '#fff' : 'rgba(255,255,255,0.4)' }}>
+                          <TouchableOpacity onPress={() => setShowDatePicker(true)} style={[styles.inputField, isLightTheme && { backgroundColor: '#F8F9FA', borderColor: 'rgba(0,0,0,0.06)' }]}>
+                            <Text style={{ color: editDob ? (isLightTheme ? '#111111' : '#fff') : (isLightTheme ? 'rgba(0,0,0,0.4)' : 'rgba(255,255,255,0.4)') }}>
                               {formatDisplayDate(editDob) || 'DD-MM-YYYY'}
                             </Text>
                           </TouchableOpacity>
@@ -839,12 +862,12 @@ export default function ProfileScreen() {
                       </View>
 
                       <View style={{ flex: 1 }}>
-                        <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 13, marginBottom: 4 }}>Sex</Text>
+                        <Text style={{ color: isLightTheme ? '#888888' : 'rgba(255,255,255,0.5)', fontSize: 13, marginBottom: 4 }}>Sex</Text>
                         {!isEditingDetails ? (
-                          <Text style={{ color: '#fff', fontSize: 16, textTransform: 'capitalize' }}>{editGender || '—'}</Text>
+                          <Text style={{ color: isLightTheme ? '#111111' : '#fff', fontSize: 16, textTransform: 'capitalize' }}>{editGender || '—'}</Text>
                         ) : (
-                          <TouchableOpacity onPress={() => setSexModalVisible(true)} style={styles.inputField}>
-                            <Text style={{ color: editGender ? '#fff' : 'rgba(255,255,255,0.4)', textTransform: 'capitalize' }}>
+                          <TouchableOpacity onPress={() => setSexModalVisible(true)} style={[styles.inputField, isLightTheme && { backgroundColor: '#F8F9FA', borderColor: 'rgba(0,0,0,0.06)' }]}>
+                            <Text style={{ color: editGender ? (isLightTheme ? '#111111' : '#fff') : (isLightTheme ? 'rgba(0,0,0,0.4)' : 'rgba(255,255,255,0.4)'), textTransform: 'capitalize' }}>
                               {editGender || 'Select Sex'}
                             </Text>
                           </TouchableOpacity>
@@ -866,23 +889,23 @@ export default function ProfileScreen() {
             activeOpacity={1} 
             onPress={() => setIsPhotoModalVisible(false)}
           >
-            <View style={styles.photoMenuContent}>
+            <View style={[styles.photoMenuContent, isLightTheme && { backgroundColor: '#FFFFFF', borderColor: 'rgba(0,0,0,0.06)' }]}>
               {/* Large Avatar Display */}
-              <View style={styles.largeAvatarContainer}>
+              <View style={[styles.largeAvatarContainer, isLightTheme && { backgroundColor: 'rgba(0, 97, 164, 0.08)', borderColor: 'rgba(0, 97, 164, 0.15)' }]}>
                 {profileImageUri ? (
                   <Image source={{ uri: profileImageUri }} style={styles.largeAvatarImage} />
                 ) : (
-                  <View style={styles.largeAvatarInitials}>
-                    <Text style={styles.largeAvatarText}>{initials}</Text>
+                  <View style={[styles.largeAvatarInitials, isLightTheme && { backgroundColor: 'rgba(0, 97, 164, 0.08)' }]}>
+                    <Text style={[styles.largeAvatarText, isLightTheme && { color: '#0061A4' }]}>{initials}</Text>
                   </View>
                 )}
               </View>
 
-              <Text style={styles.photoMenuTitle}>Profile Photo</Text>
+              <Text style={[styles.photoMenuTitle, isLightTheme && { color: '#111111' }]}>Profile Photo</Text>
               
-              <TouchableOpacity style={styles.photoOption} onPress={pickImage}>
-                <Ionicons name="image-outline" size={20} color="#fff" />
-                <Text style={styles.photoOptionText}>
+              <TouchableOpacity style={[styles.photoOption, isLightTheme && { backgroundColor: '#F0F2F5' }]} onPress={pickImage}>
+                <Ionicons name="image-outline" size={20} color={isLightTheme ? '#0061A4' : "#fff"} />
+                <Text style={[styles.photoOptionText, isLightTheme && { color: '#666666' }]}>
                   {initial.profileImage ? 'Change Photo' : 'Add Profile Photo'}
                 </Text>
               </TouchableOpacity>
@@ -898,15 +921,15 @@ export default function ProfileScreen() {
                 style={styles.photoOptionCancel} 
                 onPress={() => setIsPhotoModalVisible(false)}
               >
-                <Text style={styles.photoOptionCancelText}>Cancel</Text>
+                <Text style={[styles.photoOptionCancelText, isLightTheme && { color: '#888888' }]}>Cancel</Text>
               </TouchableOpacity>
             </View>
           </TouchableOpacity>
         </Modal>
 
         {/* Body Measurement Section */}
-        <BlurView intensity={25} tint="dark" style={styles.bodyMeasurementCard}>
-          <Text style={styles.sectionTitle}>Body Measurement</Text>
+        <BlurView intensity={25} tint={isLightTheme ? 'light' : 'dark'} style={[styles.bodyMeasurementCard, isLightTheme && { backgroundColor: '#FFFFFF', borderColor: 'rgba(0, 0, 0, 0.06)', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.04, shadowRadius: 3, elevation: 1 }]}>
+          <Text style={[styles.sectionTitle, isLightTheme && { color: '#111111' }]}>Body Measurement</Text>
 
           {/* Basic Measurements */}
           <View style={styles.basicMeasurementsSection}>
@@ -921,8 +944,9 @@ export default function ProfileScreen() {
                 'How to Measure Weight',
                 'Use a digital scale on a flat, hard surface.\n\n• Weigh yourself in the morning, before eating or drinking.\n• Stand still in the center of the scale.\n• Wear minimal clothing for an accurate reading.\n• Record the value shown on the display.'
               )}
+              isLight={isLightTheme}
             />
-            <View style={styles.measurementDivider} />
+            <View style={[styles.measurementDivider, isLightTheme && { backgroundColor: 'rgba(0, 0, 0, 0.06)' }]} />
             <HeightRow
               label="Height"
               feet={heightFeet}
@@ -936,8 +960,9 @@ export default function ProfileScreen() {
                 'How to Measure Height',
                 'Stand barefoot against a flat wall.\n\n• Stand straight with heels, back, and head touching the wall.\n• Keep your chin parallel to the floor.\n• Place a flat object (like a book) on top of your head, touching the wall.\n• Mark that point on the wall and measure from the floor to the mark.\n\nFor Feet & Inches: enter whole feet in the first box and remaining inches in the second (e.g. 5 ft 8 in).'
               )}
+              isLight={isLightTheme}
             />
-            <View style={styles.measurementDivider} />
+            <View style={[styles.measurementDivider, isLightTheme && { backgroundColor: 'rgba(0, 0, 0, 0.06)' }]} />
             <MeasurementRow
               label="Waist"
               value={waist}
@@ -949,6 +974,7 @@ export default function ProfileScreen() {
                 'How to Measure Waist',
                 'Use a soft measuring tape around your bare waist.\n\n• Find the narrowest part of your torso, usually just above the belly button.\n• Wrap the tape snugly but not tight — it should not dig into your skin.\n• Breathe out naturally and take the measurement.\n• Keep the tape parallel to the floor all the way around.'
               )}
+              isLight={isLightTheme}
             />
           </View>
 
@@ -960,34 +986,38 @@ export default function ProfileScreen() {
                 value={metrics.waistHeightRatio}
                 score={metrics.waistHeightScore}
                 onInfoPress={() => showInfo('Waist-to-height ratio', HINTS.WHR)}
+                isLight={isLightTheme}
               />
               <CalculatedIndexRow
                 label="BMI"
                 value={metrics.bmi}
                 score={metrics.bmiScore}
                 onInfoPress={() => showInfo('BMI', HINTS.BMI)}
+                isLight={isLightTheme}
               />
               <CalculatedIndexRow
                 label="ABSI"
                 value={metrics.absi}
                 score={metrics.absiScore}
                 onInfoPress={() => showInfo('ABSI', HINTS.ABSI)}
+                isLight={isLightTheme}
               />
               <CalculatedIndexRow
                 label="Overall Body Index"
                 value={allFieldsFilled ? metrics.overallScore.toFixed(1) : '—'}
                 score={metrics.overallScore}
                 onInfoPress={() => showInfo('Overall Body Index', HINTS.OBI)}
+                isLight={isLightTheme}
               />
             </View>
 
             {/* Blur overlay when DOB or Sex is missing */}
             {!hasProfileInfo && (
               <View style={styles.gaugeOverlay}>
-                <BlurView intensity={80} tint="dark" style={styles.gaugeBlur}>
-                  <Ionicons name="person-circle-outline" size={36} color="rgba(199, 185, 255, 0.8)" />
-                  <Text style={styles.gaugeOverlayTitle}>Complete Your Profile</Text>
-                  <Text style={styles.gaugeOverlayMessage}>
+                <BlurView intensity={80} tint={isLightTheme ? 'light' : 'dark'} style={[styles.gaugeBlur, isLightTheme && { backgroundColor: 'rgba(255, 255, 255, 0.85)' }]}>
+                  <Ionicons name="person-circle-outline" size={36} color={isLightTheme ? '#0061A4' : 'rgba(199, 185, 255, 0.8)'} />
+                  <Text style={[styles.gaugeOverlayTitle, isLightTheme && { color: '#111111' }]}>Complete Your Profile</Text>
+                  <Text style={[styles.gaugeOverlayMessage, isLightTheme && { color: '#666666' }]}>
                     {!editDob && !editGender
                       ? 'Please add your Date of Birth and Sex to see your body metrics.'
                       : !editDob
@@ -1013,37 +1043,37 @@ export default function ProfileScreen() {
       >
         <Pressable style={styles.modalBackdrop} onPress={() => setSexModalVisible(false)} />
         <View style={styles.modalCenter}>
-          <View style={styles.modalCard}>
+          <View style={[styles.modalCard, isLightTheme && { backgroundColor: '#FFFFFF', borderColor: 'rgba(0,0,0,0.06)' }]}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Select Sex</Text>
+              <Text style={[styles.modalTitle, isLightTheme && { color: '#111111' }]}>Select Sex</Text>
               <TouchableOpacity onPress={() => setSexModalVisible(false)}>
-                <Ionicons name="close" size={22} color="#fff" />
+                <Ionicons name="close" size={22} color={isLightTheme ? '#0061A4' : "#fff"} />
               </TouchableOpacity>
             </View>
 
             <TouchableOpacity
-              style={styles.modalItem}
+              style={[styles.modalItem, isLightTheme && { borderBottomColor: 'rgba(0,0,0,0.06)' }]}
               onPress={() => { setEditGender(''); setSexModalVisible(false); }}
             >
-              <Text style={styles.modalItemText}>Select</Text>
+              <Text style={[styles.modalItemText, isLightTheme && { color: '#111111' }]}>Select</Text>
             </TouchableOpacity>
             <TouchableOpacity
-              style={styles.modalItem}
+              style={[styles.modalItem, isLightTheme && { borderBottomColor: 'rgba(0,0,0,0.06)' }]}
               onPress={() => { setEditGender('female'); setSexModalVisible(false); }}
             >
-              <Text style={styles.modalItemText}>Female</Text>
+              <Text style={[styles.modalItemText, isLightTheme && { color: '#111111' }]}>Female</Text>
             </TouchableOpacity>
             <TouchableOpacity
-              style={styles.modalItem}
+              style={[styles.modalItem, isLightTheme && { borderBottomColor: 'rgba(0,0,0,0.06)' }]}
               onPress={() => { setEditGender('male'); setSexModalVisible(false); }}
             >
-              <Text style={styles.modalItemText}>Male</Text>
+              <Text style={[styles.modalItemText, isLightTheme && { color: '#111111' }]}>Male</Text>
             </TouchableOpacity>
             <TouchableOpacity
-              style={styles.modalItem}
+              style={[styles.modalItem, isLightTheme && { borderBottomColor: 'rgba(0,0,0,0.06)' }]}
               onPress={() => { setEditGender('other'); setSexModalVisible(false); }}
             >
-              <Text style={styles.modalItemText}>Other / Undisclosed</Text>
+              <Text style={[styles.modalItemText, isLightTheme && { color: '#111111' }]}>Other / Undisclosed</Text>
             </TouchableOpacity>
           </View>
         </View>

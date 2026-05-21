@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Animated, Easing, Image, Platform, StyleSheet, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useAuth } from '@/contexts/AuthContext';
+import { useTheme } from '@/contexts/ThemeContext';
 import Svg, { Circle } from 'react-native-svg';
 
 const CIRCLE_SIZE = 220; // outer ring size
@@ -9,6 +10,7 @@ const LOGO_SIZE = 160;   // logo size inside ring
 
 export default function AnimatedSplash() {
   const { auth } = useAuth();
+  const { isLightTheme } = useTheme();
   const [isDone, setIsDone] = useState(false);
 
   // Animation values
@@ -97,7 +99,7 @@ export default function AnimatedSplash() {
   return (
     <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, { opacity: overlayOpacity, zIndex: 999 }] }>
       <LinearGradient
-        colors={['#1D244D', '#02041A', '#1A1D3E']}
+        colors={isLightTheme ? ['#FFFFFF', '#F5F7FB', '#EAEFF8'] : ['#1D244D', '#02041A', '#1A1D3E']}
         style={StyleSheet.absoluteFill}
       />
 
@@ -109,7 +111,7 @@ export default function AnimatedSplash() {
             width: CIRCLE_SIZE * 1.15,
             height: CIRCLE_SIZE * 1.15,
             borderRadius: (CIRCLE_SIZE * 1.15) / 2,
-            backgroundColor: 'rgba(199, 185, 255, 0.10)',
+            backgroundColor: isLightTheme ? 'rgba(0, 97, 164, 0.08)' : 'rgba(199, 185, 255, 0.10)',
             transform: [{ scale: logoScale }],
           }}
         />
@@ -121,7 +123,7 @@ export default function AnimatedSplash() {
             cy={CIRCLE_SIZE / 2}
             r={radius}
             fill="none"
-            stroke="#C7B9FF"
+            stroke={isLightTheme ? '#0061A4' : '#C7B9FF'}
             strokeOpacity={0.9}
             strokeWidth={2.5}
             strokeDasharray={strokeDasharray as any}
@@ -146,7 +148,7 @@ export default function AnimatedSplash() {
 
       {/* Subtle bottom gradient sheen */}
       <LinearGradient
-        colors={[ 'transparent', 'rgba(199,185,255,0.06)', 'transparent' ]}
+        colors={isLightTheme ? ['transparent', 'rgba(0,97,164,0.03)', 'transparent'] : ['transparent', 'rgba(199,185,255,0.06)', 'transparent']}
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 1 }}
         style={[StyleSheet.absoluteFill, { opacity: Platform.OS === 'ios' ? 0.9 : 0.7 } ]}

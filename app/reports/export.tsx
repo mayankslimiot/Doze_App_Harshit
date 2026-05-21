@@ -6,6 +6,7 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import DateTimePickerModal from 'react-native-modal-datetime-picker';
 import { useDevice } from '@/contexts/DeviceContext';
+import { useTheme } from '@/contexts/ThemeContext';
 
 import type { DateRange, DailySummary } from '@/types/Reports';
 import { ensureRangeLimit, exportSelectedDataCsv, mergeExportData } from '@/services/ReportsService';
@@ -15,6 +16,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 export default function ExportScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const { isLightTheme } = useTheme();
   const { devices, activeDevice } = useDevice();
 
   const [selectedDevice, setSelectedDevice] = useState<typeof activeDevice>(null);
@@ -308,15 +310,17 @@ export default function ExportScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={['bottom']}>
-      <StatusBar barStyle="light-content" backgroundColor="#02041A" />
-      <LinearGradient colors={['#1D244D', '#02041A', '#1A1D3E']} style={styles.gradientBackground} />
+    <SafeAreaView style={[styles.container, isLightTheme && { backgroundColor: '#F8F9FA' }]} edges={['bottom']}>
+      <StatusBar barStyle={isLightTheme ? 'dark-content' : 'light-content'} backgroundColor={isLightTheme ? '#F8F9FA' : '#02041A'} />
+      {isLightTheme ? null : (
+        <LinearGradient colors={['#1D244D', '#02041A', '#1A1D3E']} style={styles.gradientBackground} />
+      )}
 
       {/* Header */}
       <View style={[styles.header, { paddingTop: insets.top + 6 }]}>
-        <Text style={styles.headerTitle}>Export</Text>
-        <TouchableOpacity onPress={() => router.back()} style={styles.closeButton}>
-          <Ionicons name="close" size={24} color="#FFFFFF" />
+        <Text style={[styles.headerTitle, isLightTheme && { color: '#111111' }]}>Export</Text>
+        <TouchableOpacity onPress={() => router.back()} style={[styles.closeButton, isLightTheme && { backgroundColor: 'rgba(0,0,0,0.05)' }]}>
+          <Ionicons name="close" size={24} color={isLightTheme ? '#333333' : '#FFFFFF'} />
         </TouchableOpacity>
       </View>
 
@@ -327,52 +331,53 @@ export default function ExportScreen() {
       >
         {/* SELECT DEVICE Section */}
         <View style={styles.deviceSection}>
-          <Text style={styles.sectionLabel}>SELECT DEVICE</Text>
+          <Text style={[styles.sectionLabel, isLightTheme && { color: '#666666' }]}>SELECT DEVICE</Text>
           <TouchableOpacity 
-            style={styles.deviceSelector}
+            style={[styles.deviceSelector, isLightTheme && { backgroundColor: 'rgba(0, 97, 164, 0.08)', borderColor: 'rgba(0, 97, 164, 0.15)' }]}
             onPress={() => setIsDeviceDropdownOpen(!isDeviceDropdownOpen)}
             activeOpacity={0.8}
           >
-            <Ionicons name="phone-portrait-outline" size={20} color="#4A90E2" style={styles.deviceIcon} />
-            <Text style={styles.deviceText} numberOfLines={1}>
+            <Ionicons name="phone-portrait-outline" size={20} color={isLightTheme ? '#0061A4' : '#4A90E2'} style={styles.deviceIcon} />
+            <Text style={[styles.deviceText, isLightTheme && { color: '#111111' }]} numberOfLines={1}>
               {getDeviceDisplayName(selectedDevice)}
             </Text>
             <Ionicons 
               name={isDeviceDropdownOpen ? "chevron-up" : "chevron-down"} 
               size={20} 
-              color="#FFFFFF" 
+              color={isLightTheme ? '#333333' : '#FFFFFF'} 
             />
           </TouchableOpacity>
           {isDeviceDropdownOpen && (
-            <View style={styles.deviceDropdown}>
+            <View style={[styles.deviceDropdown, isLightTheme && { backgroundColor: '#FFFFFF', borderColor: 'rgba(0, 97, 164, 0.15)' }]}>
               <ScrollView 
-                style={styles.dropdownScrollView}
+                style={{}}
                 nestedScrollEnabled
                 showsVerticalScrollIndicator={false}
               >
                 {devices && devices.length > 0 ? (
-                  devices.map((device) => (
+                  devices.map((device: any) => (
                     <TouchableOpacity
                       key={device._id}
                       style={[
                         styles.dropdownItem,
-                        selectedDevice?._id === device._id && styles.dropdownItemSelected
+                        isLightTheme && { borderBottomColor: 'rgba(0,0,0,0.05)' },
+                        selectedDevice?._id === device._id && (isLightTheme ? { backgroundColor: 'rgba(0, 97, 164, 0.08)' } : styles.dropdownItemSelected)
                       ]}
                       onPress={() => {
                         setSelectedDevice(device);
                         setIsDeviceDropdownOpen(false);
                       }}
                     >
-                      <Ionicons name="phone-portrait-outline" size={18} color="#4A90E2" />
-                      <Text style={styles.dropdownText}>{getDeviceDisplayName(device)}</Text>
+                      <Ionicons name="phone-portrait-outline" size={18} color={isLightTheme ? '#0061A4' : '#4A90E2'} />
+                      <Text style={[styles.dropdownText, isLightTheme && { color: '#111111' }]}>{getDeviceDisplayName(device)}</Text>
                       {selectedDevice?._id === device._id && (
-                        <Ionicons name="checkmark-circle" size={18} color="#4A90E2" />
+                        <Ionicons name="checkmark-circle" size={18} color={isLightTheme ? '#0061A4' : '#4A90E2'} />
                       )}
                     </TouchableOpacity>
                   ))
                 ) : (
                   <View style={styles.dropdownItem}>
-                    <Text style={styles.dropdownEmptyText}>No devices available</Text>
+                    <Text style={[styles.dropdownEmptyText, isLightTheme && { color: '#666666' }]}>No devices available</Text>
                   </View>
                 )}
               </ScrollView>
@@ -381,8 +386,8 @@ export default function ExportScreen() {
         </View>
 
         {/* DATA SELECTION Section */}
-        <Text style={[styles.sectionLabel, { marginTop: 24 }]}>SELECT DATA</Text>
-        <View style={styles.dataSelectionContainer}>
+        <Text style={[styles.sectionLabel, { marginTop: 24 }, isLightTheme && { color: '#666666' }]}>SELECT DATA</Text>
+        <View style={[styles.dataSelectionContainer, isLightTheme && { backgroundColor: '#FFFFFF', borderColor: 'rgba(0,0,0,0.06)' }]}>
           {dataFields.map((field) => {
             const isAllSelected = selectedDataFields.includes('ALL');
             const isFieldSelected = field.key === 'ALL' 
@@ -392,47 +397,52 @@ export default function ExportScreen() {
             return (
               <TouchableOpacity
                 key={field.key}
-                style={styles.dataFieldChip}
+                style={[styles.dataFieldChip, isLightTheme && { backgroundColor: 'rgba(0, 97, 164, 0.08)', borderColor: 'rgba(0, 97, 164, 0.15)' }]}
                 onPress={() => handleDataFieldToggle(field.key)}
                 activeOpacity={0.7}
               >
-                <View style={[styles.checkbox, isFieldSelected && styles.checkboxChecked]}>
+                <View style={[
+                  styles.checkbox, 
+                  isLightTheme && { borderColor: 'rgba(0,0,0,0.3)' },
+                  isFieldSelected && styles.checkboxChecked,
+                  isFieldSelected && isLightTheme && { backgroundColor: '#0061A4', borderColor: '#0061A4' }
+                ]}>
                   {isFieldSelected && <Ionicons name="checkmark" size={12} color="#FFFFFF" />}
                 </View>
-                <Text style={styles.dataFieldLabel}>{field.label}</Text>
+                <Text style={[styles.dataFieldLabel, isLightTheme && { color: '#111111' }]}>{field.label}</Text>
               </TouchableOpacity>
             );
           })}
         </View>
 
         {/* DATE RANGE Section */}
-        <Text style={[styles.sectionLabel, { marginTop: 24 }]}>DATE RANGE</Text>
+        <Text style={[styles.sectionLabel, { marginTop: 24 }, isLightTheme && { color: '#666666' }]}>DATE RANGE</Text>
         <View style={styles.dateRangeContainer}>
           {/* From Date & Time */}
           <View style={styles.dateTimeRow}>
             <TouchableOpacity
-              style={[styles.dateTimeInput, styles.dateInput]}
+              style={[styles.dateTimeInput, styles.dateInput, isLightTheme && { backgroundColor: '#FFFFFF', borderColor: 'rgba(0,0,0,0.06)' }]}
               onPress={() => setIsFromDatePickerVisible(true)}
               activeOpacity={0.8}
             >
-              <Text style={styles.dateLabel}>From</Text>
+              <Text style={[styles.dateLabel, isLightTheme && { color: '#666666' }]}>From</Text>
               <View style={styles.dateValueContainer}>
-                <Text style={[styles.dateValue, !fromDate && styles.dateValuePlaceholder]}>
+                <Text style={[styles.dateValue, isLightTheme && { color: '#111111' }, !fromDate && styles.dateValuePlaceholder, !fromDate && isLightTheme && { color: 'rgba(0,0,0,0.3)' }]}>
                   {formatDate(fromDate)}
                 </Text>
-                <Ionicons name="calendar-outline" size={20} color="#4A90E2" />
+                <Ionicons name="calendar-outline" size={20} color={isLightTheme ? '#0061A4' : '#4A90E2'} />
               </View>
             </TouchableOpacity>
             <TouchableOpacity
-              style={[styles.dateTimeInput, styles.timeInput]}
+              style={[styles.dateTimeInput, styles.timeInput, isLightTheme && { backgroundColor: '#FFFFFF', borderColor: 'rgba(0,0,0,0.06)' }]}
               onPress={() => setIsFromTimePickerVisible(true)}
               activeOpacity={0.8}
             >
               <View style={styles.dateValueContainer}>
-                <Text style={[styles.dateValue, !fromDate && styles.dateValuePlaceholder]}>
+                <Text style={[styles.dateValue, isLightTheme && { color: '#111111' }, !fromDate && styles.dateValuePlaceholder, !fromDate && isLightTheme && { color: 'rgba(0,0,0,0.3)' }]}>
                   {formatTime(fromDate)}
                 </Text>
-                <Ionicons name="time-outline" size={20} color="#4A90E2" />
+                <Ionicons name="time-outline" size={20} color={isLightTheme ? '#0061A4' : '#4A90E2'} />
               </View>
             </TouchableOpacity>
           </View>
@@ -440,28 +450,28 @@ export default function ExportScreen() {
           {/* To Date & Time */}
           <View style={styles.dateTimeRow}>
             <TouchableOpacity
-              style={[styles.dateTimeInput, styles.dateInput]}
+              style={[styles.dateTimeInput, styles.dateInput, isLightTheme && { backgroundColor: '#FFFFFF', borderColor: 'rgba(0,0,0,0.06)' }]}
               onPress={() => setIsToDatePickerVisible(true)}
               activeOpacity={0.8}
             >
-              <Text style={styles.dateLabel}>To</Text>
+              <Text style={[styles.dateLabel, isLightTheme && { color: '#666666' }]}>To</Text>
               <View style={styles.dateValueContainer}>
-                <Text style={[styles.dateValue, !toDate && styles.dateValuePlaceholder]}>
+                <Text style={[styles.dateValue, isLightTheme && { color: '#111111' }, !toDate && styles.dateValuePlaceholder, !toDate && isLightTheme && { color: 'rgba(0,0,0,0.3)' }]}>
                   {formatDate(toDate)}
                 </Text>
-                <Ionicons name="calendar-outline" size={20} color="#4A90E2" />
+                <Ionicons name="calendar-outline" size={20} color={isLightTheme ? '#0061A4' : '#4A90E2'} />
               </View>
             </TouchableOpacity>
             <TouchableOpacity
-              style={[styles.dateTimeInput, styles.timeInput]}
+              style={[styles.dateTimeInput, styles.timeInput, isLightTheme && { backgroundColor: '#FFFFFF', borderColor: 'rgba(0,0,0,0.06)' }]}
               onPress={() => setIsToTimePickerVisible(true)}
               activeOpacity={0.8}
             >
               <View style={styles.dateValueContainer}>
-                <Text style={[styles.dateValue, !toDate && styles.dateValuePlaceholder]}>
+                <Text style={[styles.dateValue, isLightTheme && { color: '#111111' }, !toDate && styles.dateValuePlaceholder, !toDate && isLightTheme && { color: 'rgba(0,0,0,0.3)' }]}>
                   {formatTime(toDate)}
                 </Text>
-                <Ionicons name="time-outline" size={20} color="#4A90E2" />
+                <Ionicons name="time-outline" size={20} color={isLightTheme ? '#0061A4' : '#4A90E2'} />
               </View>
             </TouchableOpacity>
           </View>
@@ -469,16 +479,16 @@ export default function ExportScreen() {
 
         {/* Status Message */}
         {!!status && (
-          <View style={styles.statusContainer}>
-            <Text style={styles.statusText}>{status}</Text>
+          <View style={[styles.statusContainer, isLightTheme && { backgroundColor: 'rgba(0,0,0,0.03)' }]}>
+            <Text style={[styles.statusText, isLightTheme && { color: '#666666' }]}>{status}</Text>
           </View>
         )}
       </ScrollView>
 
       {/* Export Data Button */}
-      <View style={[styles.footer, { paddingBottom: insets.bottom + 16 }]}>
+      <View style={[styles.footer, isLightTheme && { backgroundColor: 'rgba(248, 249, 250, 0.95)' }, { paddingBottom: insets.bottom + 16 }]}>
         <TouchableOpacity
-          style={[styles.exportButton, isExporting && styles.exportButtonDisabled]}
+          style={[styles.exportButton, isLightTheme && { backgroundColor: '#0061A4' }, isExporting && styles.exportButtonDisabled]}
           onPress={handleExport}
           disabled={isExporting}
           activeOpacity={0.8}

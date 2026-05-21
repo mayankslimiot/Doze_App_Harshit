@@ -15,9 +15,10 @@ interface CustomAlertProps {
   message: string;
   buttons?: AlertButton[];
   onClose?: () => void;
+  isLight?: boolean;
 }
 
-const CustomAlert: React.FC<CustomAlertProps> = ({ visible, title, message, buttons, onClose }) => {
+const CustomAlert: React.FC<CustomAlertProps> = ({ visible, title, message, buttons, onClose, isLight }) => {
   // Default single OK button if no buttons provided
   const alertButtons = buttons || [
     {
@@ -38,15 +39,15 @@ const CustomAlert: React.FC<CustomAlertProps> = ({ visible, title, message, butt
       statusBarTranslucent={true}
     >
       {/* Full screen blur overlay */}
-      <BlurView intensity={1000} tint="dark" style={styles.fullScreenBlur}>
+      <BlurView intensity={1000} tint={isLight ? 'light' : 'dark'} style={styles.fullScreenBlur}>
         {/* Additional dark overlay for better contrast */}
         <TouchableWithoutFeedback onPress={onClose}>
           <View style={styles.darkOverlay}>
             {/* Modal container - prevent dismiss when clicking inside */}
             <TouchableWithoutFeedback onPress={() => {}}>
-              <View style={styles.modalContainer}>
-                <Text style={styles.modalTitle}>{title}</Text>
-                <Text style={styles.modalMessage}>{message}</Text>
+              <View style={[styles.modalContainer, isLight && { backgroundColor: '#FFFFFF', borderColor: 'rgba(0,0,0,0.06)' }]}>
+                <Text style={[styles.modalTitle, isLight && { color: '#111111' }]}>{title}</Text>
+                <Text style={[styles.modalMessage, isLight && { color: '#666666' }]}>{message}</Text>
                 
                 {/* Buttons container */}
                 <View style={alertButtons.length > 1 ? styles.buttonsRow : styles.buttonsSingle}>
@@ -59,13 +60,17 @@ const CustomAlert: React.FC<CustomAlertProps> = ({ visible, title, message, butt
                           styles.modalButton,
                           alertButtons.length > 1 && styles.modalButtonHalf,
                           isPrimary ? styles.modalButtonPrimary : styles.modalButtonSecondary,
+                          isPrimary && isLight && { backgroundColor: '#0061A4' },
+                          !isPrimary && isLight && { backgroundColor: '#F0F2F5', borderColor: 'rgba(0,0,0,0.06)' },
                           index > 0 && alertButtons.length > 1 && { marginLeft: 10 }
                         ]}
                         onPress={button.onPress}
                       >
                         <Text style={[
                           styles.modalButtonText,
-                          isPrimary ? styles.modalButtonTextPrimary : styles.modalButtonTextSecondary
+                          isPrimary ? styles.modalButtonTextPrimary : styles.modalButtonTextSecondary,
+                          isPrimary && isLight && { color: '#FFFFFF' },
+                          !isPrimary && isLight && { color: '#666666' }
                         ]}>
                           {button.text}
                         </Text>

@@ -15,6 +15,7 @@ import { useRouter, useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useDevice } from '@/contexts/DeviceContext';
 import { useAuth } from '@/contexts/AuthContext';
+import { useTheme } from '@/contexts/ThemeContext';
 import {
   getSleepSession,
   getSleepSessions,
@@ -36,6 +37,7 @@ export default function SleepInsightsScreen() {
   const insets = useSafeAreaInsets();
   const { activeDevice } = useDevice();
   const { auth } = useAuth();
+  const { isLightTheme } = useTheme();
   const [selectedPeriod, setSelectedPeriod] = React.useState<'Day' | 'Week' | 'Month'>('Day');
   const [selectedDate, setSelectedDate] = React.useState(new Date()); // Start with today's date
   
@@ -438,20 +440,20 @@ export default function SleepInsightsScreen() {
   }, [sleepSession, sleepMotionTimeline, availableWidth, availableHeight, formatAxisTime, plotStartX]);
 
   return (
-    <View style={styles.container}>
-      <StatusBar barStyle="light-content" backgroundColor="#02041A" />
+    <View style={[styles.container, isLightTheme && { backgroundColor: '#F8F9FA' }]}>
+      <StatusBar barStyle={isLightTheme ? "dark-content" : "light-content"} backgroundColor={isLightTheme ? "#F8F9FA" : "#02041A"} />
       <LinearGradient 
-        colors={['#1D244D', '#02041A', '#1A1D3E']} 
+        colors={isLightTheme ? ['#F8F9FA', '#F8F9FA'] : ['#1D244D', '#02041A', '#1A1D3E']} 
         style={StyleSheet.absoluteFill}
         pointerEvents="none"
       />
 
       {/* Header */}
       <View style={[styles.header, { paddingTop: insets.top + 10 }]}>
-        <TouchableOpacity onPress={() => router.back()} style={styles.backButton} activeOpacity={0.8}>
-          <Ionicons name="arrow-back" size={24} color="#FFFFFF" />
+        <TouchableOpacity onPress={() => router.back()} style={[styles.backButton, isLightTheme && { backgroundColor: 'rgba(0,97,164,0.06)' }]} activeOpacity={0.8}>
+          <Ionicons name="arrow-back" size={24} color={isLightTheme ? "#0061A4" : "#FFFFFF"} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle} numberOfLines={1}>{activeDevice?.customName || activeDevice?.deviceId || 'More Insights'}</Text>
+        <Text style={[styles.headerTitle, isLightTheme && { color: '#111111' }]} numberOfLines={1}>{activeDevice?.customName || activeDevice?.deviceId || 'More Insights'}</Text>
         <View style={{ width: 40 }} />
       </View>
 
@@ -460,15 +462,15 @@ export default function SleepInsightsScreen() {
         showsVerticalScrollIndicator={false}
       >
         {/* Period Selector Tabs */}
-        <View style={styles.periodContainer}>
+        <View style={[styles.periodContainer, isLightTheme && { backgroundColor: 'rgba(0,0,0,0.04)' }]}>
           {(['Day', 'Week', 'Month'] as const).map((period) => (
             <TouchableOpacity
               key={period}
-              style={[styles.periodTab, selectedPeriod === period && styles.periodTabActive]}
+              style={[styles.periodTab, selectedPeriod === period && [styles.periodTabActive, isLightTheme && { backgroundColor: '#0061A4' }]]}
               onPress={() => setSelectedPeriod(period)}
               activeOpacity={0.8}
             >
-              <Text style={[styles.periodTabText, selectedPeriod === period && styles.periodTabTextActive]}>
+              <Text style={[styles.periodTabText, isLightTheme && { color: '#666666' }, selectedPeriod === period && [styles.periodTabTextActive, isLightTheme && { color: '#FFFFFF' }]]}>
                 {period}
               </Text>
             </TouchableOpacity>
@@ -477,12 +479,12 @@ export default function SleepInsightsScreen() {
 
         {/* Date Navigation */}
         <View style={styles.dateNavigation}>
-          <TouchableOpacity onPress={goToPrevious} style={styles.dateNavButton} activeOpacity={0.8}>
-            <Ionicons name="chevron-back" size={20} color="#C7D6FF" />
+          <TouchableOpacity onPress={goToPrevious} style={[styles.dateNavButton, isLightTheme && { backgroundColor: 'rgba(0,0,0,0.04)' }]} activeOpacity={0.8}>
+            <Ionicons name="chevron-back" size={20} color={isLightTheme ? "#0061A4" : "#C7D6FF"} />
           </TouchableOpacity>
-          <Text style={styles.dateText}>{formattedDate}</Text>
-          <TouchableOpacity onPress={goToNext} style={styles.dateNavButton} activeOpacity={0.8}>
-            <Ionicons name="chevron-forward" size={20} color="#C7D6FF" />
+          <Text style={[styles.dateText, isLightTheme && { color: '#111111' }]}>{formattedDate}</Text>
+          <TouchableOpacity onPress={goToNext} style={[styles.dateNavButton, isLightTheme && { backgroundColor: 'rgba(0,0,0,0.04)' }]} activeOpacity={0.8}>
+            <Ionicons name="chevron-forward" size={20} color={isLightTheme ? "#0061A4" : "#C7D6FF"} />
           </TouchableOpacity>
         </View>
 
@@ -490,15 +492,15 @@ export default function SleepInsightsScreen() {
         {isLoading && (
           <View style={styles.loadingContainer}>
             <ActivityIndicator size="large" color="#7EA6FF" />
-            <Text style={styles.loadingText}>Loading sleep data...</Text>
+            <Text style={[styles.loadingText, isLightTheme && { color: '#666666' }]}>Loading sleep data...</Text>
           </View>
         )}
 
         {/* Error State - Show message but keep UI visible */}
         {error && !isLoading && (
-          <View style={styles.errorContainer}>
-            <Ionicons name="information-circle-outline" size={24} color="#7EA6FF" />
-            <Text style={styles.errorText}>{error}</Text>
+          <View style={[styles.errorContainer, isLightTheme && { backgroundColor: 'rgba(0,97,164,0.06)', borderColor: 'rgba(0,97,164,0.12)' }]}>
+            <Ionicons name="information-circle-outline" size={24} color={isLightTheme ? "#0061A4" : "#7EA6FF"} />
+            <Text style={[styles.errorText, isLightTheme && { color: '#0061A4' }]}>{error}</Text>
           </View>
         )}
 
@@ -507,58 +509,58 @@ export default function SleepInsightsScreen() {
           <View style={styles.metricsGrid}>
             {/* Row 1 - Sleep Time, Duration, Wakeup Time */}
             <View style={styles.metricsRow}>
-              <View style={styles.metricCard}>
-                <Text style={styles.metricLabel}>Sleep Time</Text>
-                <Text style={styles.metricValue}>{displayData.sleepTime}</Text>
+              <View style={[styles.metricCard, isLightTheme && { backgroundColor: '#FFFFFF', borderColor: 'rgba(0,0,0,0.06)', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.04, shadowRadius: 3, elevation: 1 }]}>
+                <Text style={[styles.metricLabel, isLightTheme && { color: '#666666' }]}>Sleep Time</Text>
+                <Text style={[styles.metricValue, isLightTheme && { color: '#111111' }]}>{displayData.sleepTime}</Text>
               </View>
-              <View style={styles.metricCard}>
+              <View style={[styles.metricCard, isLightTheme && { backgroundColor: '#FFFFFF', borderColor: 'rgba(0,0,0,0.06)', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.04, shadowRadius: 3, elevation: 1 }]}>
                 <View style={styles.metricLabelRow}>
-                  <Text style={styles.metricLabel}>Duration</Text>
+                  <Text style={[styles.metricLabel, isLightTheme && { color: '#666666' }]}>Duration</Text>
                   <TouchableOpacity activeOpacity={0.6}>
-                    <Ionicons name="help-circle-outline" size={16} color="#7EA6FF" />
+                    <Ionicons name="help-circle-outline" size={16} color={isLightTheme ? "#0061A4" : "#7EA6FF"} />
                   </TouchableOpacity>
                 </View>
-                <Text style={styles.metricValue}>{displayData.duration}</Text>
+                <Text style={[styles.metricValue, isLightTheme && { color: '#111111' }]}>{displayData.duration}</Text>
               </View>
-              <View style={styles.metricCard}>
-                <Text style={styles.metricLabel}>Wakeup Time</Text>
-                <Text style={styles.metricValue}>{displayData.wakeupTime}</Text>
+              <View style={[styles.metricCard, isLightTheme && { backgroundColor: '#FFFFFF', borderColor: 'rgba(0,0,0,0.06)', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.04, shadowRadius: 3, elevation: 1 }]}>
+                <Text style={[styles.metricLabel, isLightTheme && { color: '#666666' }]}>Wakeup Time</Text>
+                <Text style={[styles.metricValue, isLightTheme && { color: '#111111' }]}>{displayData.wakeupTime}</Text>
               </View>
             </View>
 
             {/* Row 2 - Sleep Efficiency, Awakenings, Time in Bed */}
             <View style={styles.metricsRow}>
-              <View style={styles.metricCard}>
-                <Text style={styles.metricLabel}>Sleep Efficiency</Text>
-                <Text style={styles.metricValue}>{displayData.sleepEfficiency}</Text>
+              <View style={[styles.metricCard, isLightTheme && { backgroundColor: '#FFFFFF', borderColor: 'rgba(0,0,0,0.06)', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.04, shadowRadius: 3, elevation: 1 }]}>
+                <Text style={[styles.metricLabel, isLightTheme && { color: '#666666' }]}>Sleep Efficiency</Text>
+                <Text style={[styles.metricValue, isLightTheme && { color: '#111111' }]}>{displayData.sleepEfficiency}</Text>
               </View>
-              <View style={styles.metricCard}>
-                <Text style={styles.metricLabel}>Awakenings</Text>
-                <Text style={styles.metricValue}>{displayData.awakenings}</Text>
+              <View style={[styles.metricCard, isLightTheme && { backgroundColor: '#FFFFFF', borderColor: 'rgba(0,0,0,0.06)', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.04, shadowRadius: 3, elevation: 1 }]}>
+                <Text style={[styles.metricLabel, isLightTheme && { color: '#666666' }]}>Awakenings</Text>
+                <Text style={[styles.metricValue, isLightTheme && { color: '#111111' }]}>{displayData.awakenings}</Text>
               </View>
-              <View style={styles.metricCard}>
-                <Text style={styles.metricLabel}>Time in Bed</Text>
-                <Text style={styles.metricValue}>{displayData.timeInBed}</Text>
+              <View style={[styles.metricCard, isLightTheme && { backgroundColor: '#FFFFFF', borderColor: 'rgba(0,0,0,0.06)', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.04, shadowRadius: 3, elevation: 1 }]}>
+                <Text style={[styles.metricLabel, isLightTheme && { color: '#666666' }]}>Time in Bed</Text>
+                <Text style={[styles.metricValue, isLightTheme && { color: '#111111' }]}>{displayData.timeInBed}</Text>
               </View>
             </View>
 
             {/* Row 3 - Resting HR, Min HR, Awake Duration */}
             <View style={[styles.metricsRow, { marginBottom: 0 }]}>
-              <View style={styles.metricCard}>
-                <Text style={styles.metricLabel}>Resting HR</Text>
-                <Text style={styles.metricValue}>
+              <View style={[styles.metricCard, isLightTheme && { backgroundColor: '#FFFFFF', borderColor: 'rgba(0,0,0,0.06)', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.04, shadowRadius: 3, elevation: 1 }]}>
+                <Text style={[styles.metricLabel, isLightTheme && { color: '#666666' }]}>Resting HR</Text>
+                <Text style={[styles.metricValue, isLightTheme && { color: '#111111' }]}>
                   {displayData.restingHeartRate ? `${displayData.restingHeartRate} bpm` : 'N/A'}
                 </Text>
               </View>
-              <View style={styles.metricCard}>
-                <Text style={styles.metricLabel}>Min HR</Text>
-                <Text style={styles.metricValue}>
+              <View style={[styles.metricCard, isLightTheme && { backgroundColor: '#FFFFFF', borderColor: 'rgba(0,0,0,0.06)', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.04, shadowRadius: 3, elevation: 1 }]}>
+                <Text style={[styles.metricLabel, isLightTheme && { color: '#666666' }]}>Min HR</Text>
+                <Text style={[styles.metricValue, isLightTheme && { color: '#111111' }]}>
                   {displayData.minHeartRate ? `${displayData.minHeartRate} bpm` : 'N/A'}
                 </Text>
               </View>
-              <View style={styles.metricCard}>
-                <Text style={styles.metricLabel}>Awake Duration</Text>
-                <Text style={styles.metricValue}>{displayData.awakeDuration}</Text>
+              <View style={[styles.metricCard, isLightTheme && { backgroundColor: '#FFFFFF', borderColor: 'rgba(0,0,0,0.06)', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.04, shadowRadius: 3, elevation: 1 }]}>
+                <Text style={[styles.metricLabel, isLightTheme && { color: '#666666' }]}>Awake Duration</Text>
+                <Text style={[styles.metricValue, isLightTheme && { color: '#111111' }]}>{displayData.awakeDuration}</Text>
               </View>
             </View>
           </View>
@@ -569,12 +571,12 @@ export default function SleepInsightsScreen() {
           <>
             <View style={styles.legendContainer}>
               <View style={styles.legendItem}>
-                <View style={[styles.legendDot, { backgroundColor: '#7EA6FF' }]} />
-                <Text style={styles.legendText}>Movement during sleep</Text>
+                <View style={[styles.legendDot, { backgroundColor: isLightTheme ? '#0061A4' : '#7EA6FF' }]} />
+                <Text style={[styles.legendText, isLightTheme && { color: '#666666' }]}>Movement during sleep</Text>
               </View>
             </View>
 
-            <View style={styles.chartContainer}>
+            <View style={[styles.chartContainer, isLightTheme && { backgroundColor: '#FFFFFF', borderColor: 'rgba(0,0,0,0.06)', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.04, shadowRadius: 3, elevation: 1 }]}>
               {sleepSession ? (
                 <>
                   <RNSvg.Svg width={chartWidth} height={chartHeight}>
@@ -586,7 +588,7 @@ export default function SleepInsightsScreen() {
                           y={tick.y}
                           width={availableWidth}
                           height={1}
-                          fill="rgba(255,255,255,0.08)"
+                          fill={isLightTheme ? "rgba(0,0,0,0.05)" : "rgba(255,255,255,0.08)"}
                         />
                       );
                     })}
@@ -596,7 +598,7 @@ export default function SleepInsightsScreen() {
                         key={`y-label-${index}`}
                         x={plotStartX - 8}
                         y={tick.y + 4}
-                        fill="rgba(255,255,255,0.65)"
+                        fill={isLightTheme ? "#666666" : "rgba(255,255,255,0.65)"}
                         fontSize={10}
                         fontWeight="600"
                         textAnchor="end"
@@ -610,21 +612,21 @@ export default function SleepInsightsScreen() {
                       y={chartPadding}
                       width={1}
                       height={availableHeight}
-                      fill="rgba(255,255,255,0.2)"
+                      fill={isLightTheme ? "rgba(0,0,0,0.12)" : "rgba(255,255,255,0.2)"}
                     />
                     <Rect
                       x={plotStartX + availableWidth}
                       y={chartPadding}
                       width={1}
                       height={availableHeight}
-                      fill="rgba(255,255,255,0.2)"
+                      fill={isLightTheme ? "rgba(0,0,0,0.12)" : "rgba(255,255,255,0.2)"}
                     />
                     <Rect
                       x={plotStartX}
                       y={chartPadding + availableHeight}
                       width={availableWidth}
                       height={1}
-                      fill="rgba(255,255,255,0.2)"
+                      fill={isLightTheme ? "rgba(0,0,0,0.12)" : "rgba(255,255,255,0.2)"}
                     />
 
                     {motionChartData.bars.map((bar, index) => (
@@ -634,7 +636,7 @@ export default function SleepInsightsScreen() {
                         y={bar.y}
                         width={bar.width}
                         height={bar.height}
-                        fill="#7EA6FF"
+                        fill={isLightTheme ? "#0061A4" : "#7EA6FF"}
                         rx={2}
                         ry={2}
                       />
@@ -647,12 +649,12 @@ export default function SleepInsightsScreen() {
                           y={chartPadding + availableHeight}
                           width={1}
                           height={5}
-                          fill="rgba(255,255,255,0.45)"
+                          fill={isLightTheme ? "rgba(0,0,0,0.2)" : "rgba(255,255,255,0.45)"}
                         />
                         <SvgText
                           x={tick.x}
                           y={chartPadding + availableHeight + 16}
-                          fill="rgba(199,214,255,0.75)"
+                          fill={isLightTheme ? "#666666" : "rgba(199,214,255,0.75)"}
                           fontSize={10}
                           fontWeight="600"
                           textAnchor="middle"
@@ -666,8 +668,8 @@ export default function SleepInsightsScreen() {
                 </>
               ) : (
                 <View style={styles.emptyChartContainer}>
-                  <Ionicons name="moon-outline" size={48} color="rgba(255,255,255,0.2)" />
-                  <Text style={styles.emptyChartText}>No sleep data available</Text>
+                  <Ionicons name="moon-outline" size={48} color={isLightTheme ? "rgba(0,0,0,0.2)" : "rgba(255,255,255,0.2)"} />
+                  <Text style={[styles.emptyChartText, isLightTheme && { color: '#666666' }]}>No sleep data available</Text>
                 </View>
               )}
             </View>
@@ -679,14 +681,14 @@ export default function SleepInsightsScreen() {
           <View style={styles.sessionsList}>
             {(selectedPeriod === 'Week' ? weeklySessions : monthlySessions).length === 0 ? (
               <View style={styles.emptyState}>
-                <Ionicons name="moon-outline" size={48} color="rgba(255,255,255,0.3)" />
-                <Text style={styles.emptyStateText}>No sleep data available</Text>
+                <Ionicons name="moon-outline" size={48} color={isLightTheme ? "rgba(0,0,0,0.2)" : "rgba(255,255,255,0.3)"} />
+                <Text style={[styles.emptyStateText, isLightTheme && { color: '#666666' }]}>No sleep data available</Text>
               </View>
             ) : (
               (selectedPeriod === 'Week' ? weeklySessions : monthlySessions).map((session, index) => (
-                <View key={session._id || index} style={styles.sessionCard}>
+                <View key={session._id || index} style={[styles.sessionCard, isLightTheme && { backgroundColor: '#FFFFFF', borderColor: 'rgba(0,0,0,0.06)', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.04, shadowRadius: 3, elevation: 1 }]}>
                   <View style={styles.sessionHeader}>
-                    <Text style={styles.sessionDate}>{session.sessionDate}</Text>
+                    <Text style={[styles.sessionDate, isLightTheme && { color: '#111111' }]}>{session.sessionDate}</Text>
                     {session.sleepScore !== null && (
                       <View style={[styles.scoreBadge, { backgroundColor: getSleepQualityColor(session.sleepScore) + '20' }]}>
                         <Text style={[styles.scoreText, { color: getSleepQualityColor(session.sleepScore) }]}>
@@ -697,16 +699,16 @@ export default function SleepInsightsScreen() {
                   </View>
                   <View style={styles.sessionMetrics}>
                     <View style={styles.sessionMetric}>
-                      <Text style={styles.sessionMetricLabel}>Duration</Text>
-                      <Text style={styles.sessionMetricValue}>{formatSleepDuration(session.totalSleepTime)}</Text>
+                      <Text style={[styles.sessionMetricLabel, isLightTheme && { color: '#666666' }]}>Duration</Text>
+                      <Text style={[styles.sessionMetricValue, isLightTheme && { color: '#111111' }]}>{formatSleepDuration(session.totalSleepTime)}</Text>
                     </View>
                     <View style={styles.sessionMetric}>
-                      <Text style={styles.sessionMetricLabel}>Efficiency</Text>
-                      <Text style={styles.sessionMetricValue}>{session.sleepEfficiency.toFixed(1)}%</Text>
+                      <Text style={[styles.sessionMetricLabel, isLightTheme && { color: '#666666' }]}>Efficiency</Text>
+                      <Text style={[styles.sessionMetricValue, isLightTheme && { color: '#111111' }]}>{session.sleepEfficiency.toFixed(1)}%</Text>
                     </View>
                     <View style={styles.sessionMetric}>
-                      <Text style={styles.sessionMetricLabel}>Awakenings</Text>
-                      <Text style={styles.sessionMetricValue}>{session.awakenings}</Text>
+                      <Text style={[styles.sessionMetricLabel, isLightTheme && { color: '#666666' }]}>Awakenings</Text>
+                      <Text style={[styles.sessionMetricValue, isLightTheme && { color: '#111111' }]}>{session.awakenings}</Text>
                     </View>
                   </View>
                 </View>

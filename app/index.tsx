@@ -5,13 +5,14 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import * as WebBrowser from 'expo-web-browser';
 import React, { useEffect, useRef, useState } from "react";
-import { Animated, Dimensions, Image, StyleSheet, Text, TouchableOpacity, View, ScrollView, Platform, ActivityIndicator } from "react-native";
+import { Animated, Dimensions, Image, StyleSheet, Text, TouchableOpacity, View, ScrollView, Platform, ActivityIndicator, StatusBar } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiUrl } from '@/services/api';
 import { GOOGLE_WEB_CLIENT_ID, GOOGLE_IOS_CLIENT_ID } from '@/services/googleAuth';
 import * as AppleAuthentication from 'expo-apple-authentication';
 import { Ionicons } from '@expo/vector-icons';
+import { useTheme } from '@/contexts/ThemeContext';
 
 const { width, height } = Dimensions.get('window');
 const isTablet = width >= 768;
@@ -28,6 +29,38 @@ export default function Index() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { login } = useAuth();
+  const { isLightTheme } = useTheme();
+  const ActionsContainer = isLightTheme ? View : BlurView;
+
+  const titleStyle = [styles.title, isLightTheme && { color: '#111111' }];
+  const taglineStyle = [styles.tagline, isLightTheme && { color: '#666666' }];
+  const actionsContainerStyle = [
+    styles.actionsContainer, 
+    isLightTheme && { 
+      backgroundColor: '#FFFFFF', 
+      borderColor: 'rgba(0,0,0,0.06)',
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.05,
+      shadowRadius: 10,
+      elevation: 2 
+    }
+  ];
+  const primaryButtonStyle = [styles.primaryButton, isLightTheme && { backgroundColor: '#0061A4' }];
+  const primaryButtonTextStyle = [styles.primaryButtonText, isLightTheme && { color: '#FFFFFF' }];
+  const dividerStyle = [styles.divider, isLightTheme && { backgroundColor: 'rgba(0, 0, 0, 0.1)' }];
+  const dividerTextStyle = [styles.dividerText, isLightTheme && { color: '#666666' }];
+  
+  const socialButtonStyle = [
+    styles.socialButton, 
+    isLightTheme && { 
+      backgroundColor: '#FFFFFF', 
+      borderColor: 'rgba(0, 0, 0, 0.15)' 
+    }
+  ];
+  const socialButtonTextStyle = [styles.socialButtonText, isLightTheme && { color: '#111111' }];
+  const signInTextStyle = [styles.signInText, isLightTheme && { color: '#666666' }];
+
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
   const [isAppleLoading, setIsAppleLoading] = useState(false);
 
@@ -80,14 +113,12 @@ export default function Index() {
         await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
       }
 
-      // Sign out any previously signed-in account to force account picker
+      // Revoke access and sign out of any previously signed-in account to force the account picker and consent screen
       try {
-        if (GoogleSignin.hasPreviousSignIn()) {
-          await GoogleSignin.signOut();
-        }
-      } catch (signOutError) {
-        // Ignore sign out errors (might not be signed in)
-        console.log('No previous sign-in to clear');
+        await GoogleSignin.revokeAccess();
+        await GoogleSignin.signOut();
+      } catch (err) {
+        console.log('No previous sign-in to revoke or clear');
       }
 
       // Now sign in - this will show the account picker
@@ -203,11 +234,14 @@ export default function Index() {
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={Platform.OS === 'ios' ? ['top'] : ['top', 'bottom']}>
-      <LinearGradient
-        colors={['#1D244D', '#02041A', '#1A1D3E']}
-        style={styles.gradientBackground}
-      />
+    <SafeAreaView style={[styles.container, isLightTheme && { backgroundColor: '#F8F9FA' }]} edges={Platform.OS === 'ios' ? ['top'] : ['top', 'bottom']}>
+      <StatusBar barStyle={isLightTheme ? 'dark-content' : 'light-content'} backgroundColor={isLightTheme ? '#F8F9FA' : '#02041A'} />
+      {isLightTheme ? null : (
+        <LinearGradient
+          colors={['#1D244D', '#02041A', '#1A1D3E']}
+          style={styles.gradientBackground}
+        />
+      )}
 
       <ScrollView
         contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + 20 }]}
@@ -228,33 +262,33 @@ export default function Index() {
 
           {/* Text Section */}
           <View style={styles.textContainer}>
-            <Text style={styles.title}>Dozemate</Text>
-            <Text style={styles.tagline}>"bio-sense for smart beds"</Text>
+            <Text style={titleStyle}>Dozemate</Text>
+            <Text style={taglineStyle}>"bio-sense for smart beds"</Text>
           </View>
 
-          {/* Glass UI Actions Section */}
-          <BlurView intensity={25} tint="dark" style={styles.actionsContainer}>
-            <TouchableOpacity style={styles.primaryButton} onPress={handleSignUp}>
-              <Text style={styles.primaryButtonText}>Create Account</Text>
+          {/* Actions Section */}
+          <ActionsContainer intensity={25} tint="dark" style={actionsContainerStyle}>
+            <TouchableOpacity style={primaryButtonStyle} onPress={handleSignUp}>
+              <Text style={primaryButtonTextStyle}>Create Account</Text>
             </TouchableOpacity>
 
             {/* Divider */}
             <View style={styles.dividerContainer}>
-              <View style={styles.divider} />
-              <Text style={styles.dividerText}>or</Text>
-              <View style={styles.divider} />
+              <View style={dividerStyle} />
+              <Text style={dividerTextStyle}>or</Text>
+              <View style={dividerStyle} />
             </View>
 
             {/* Social Login Buttons - Platform Specific */}
             <View style={styles.socialLoginContainer}>
               {Platform.OS === 'android' && (
                 <TouchableOpacity
-                  style={styles.socialButton}
+                  style={socialButtonStyle}
                   onPress={handleGoogleLogin}
                   disabled={isGoogleLoading}
                 >
                   {isGoogleLoading ? (
-                    <ActivityIndicator size="small" color="#FFFFFF" />
+                    <ActivityIndicator size="small" color={isLightTheme ? '#000000' : '#FFFFFF'} />
                   ) : (
                     <>
                       <Image
@@ -262,23 +296,23 @@ export default function Index() {
                         style={styles.googleIcon}
                         resizeMode="contain"
                       />
-                      <Text style={styles.socialButtonText}>Continue with Google</Text>
+                      <Text style={socialButtonTextStyle}>Continue with Google</Text>
                     </>
                   )}
                 </TouchableOpacity>
               )}
               {Platform.OS === 'ios' && (
                 <TouchableOpacity
-                  style={styles.socialButton}
+                  style={socialButtonStyle}
                   onPress={handleAppleLogin}
                   disabled={isAppleLoading}
                 >
                   {isAppleLoading ? (
-                    <ActivityIndicator size="small" color="#FFFFFF" />
+                    <ActivityIndicator size="small" color={isLightTheme ? '#000000' : '#FFFFFF'} />
                   ) : (
                     <>
-                      <Ionicons name="logo-apple" size={22} color="#FFFFFF" />
-                      <Text style={styles.socialButtonText}>Continue with Apple</Text>
+                      <Ionicons name="logo-apple" size={22} color={isLightTheme ? '#000000' : '#FFFFFF'} />
+                      <Text style={socialButtonTextStyle}>Continue with Apple</Text>
                     </>
                   )}
                 </TouchableOpacity>
@@ -286,18 +320,10 @@ export default function Index() {
             </View>
 
             <TouchableOpacity onPress={handleSignIn}>
-              <Text style={styles.signInText}>Already have an account? <Text style={{ fontWeight: 'bold' }}>Log In</Text></Text>
+              <Text style={signInTextStyle}>Already have an account? <Text style={[{ fontWeight: 'bold' }, isLightTheme && { color: '#0061A4' }]}>Log In</Text></Text>
             </TouchableOpacity>
 
-          </BlurView>
-
-          {/* <TouchableOpacity style={styles.testBluetoothContainer} onPress={() => router.push('/(bluetooth)/ScanScreen')}>
-              <Text style={styles.tagline}>Test Bluetooth</Text>
-          </TouchableOpacity> */}
-
-          {/* <TouchableOpacity style={styles.testBluetoothContainer} onPress={() => router.push('/(wifi)/provision')}>
-              <Text style={styles.tagline}>Test Provisioning</Text>
-          </TouchableOpacity> */}
+          </ActionsContainer>
 
         </Animated.View>
       </ScrollView>

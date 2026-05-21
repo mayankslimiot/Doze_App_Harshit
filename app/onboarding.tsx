@@ -3,9 +3,11 @@ import { View, Text, StyleSheet, Dimensions, TouchableOpacity, StatusBar, FlatLi
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+// @ts-ignore
 import Svg, { Defs, ClipPath, Path, Image as SvgImage, G } from 'react-native-svg';
 import { useAuth } from '@/contexts/AuthContext';
 import { useBoot } from '@/contexts/BootContext';
+import { useTheme } from '@/contexts/ThemeContext';
 
 const { width } = Dimensions.get('window');
 const DOT_SIZE = 8;
@@ -55,10 +57,19 @@ export default function OnboardingScreen() {
   const { auth } = useAuth();
   const { completeOnboarding } = useBoot();
   const insets = useSafeAreaInsets();
+  const { isLightTheme } = useTheme();
   const [page, setPage] = React.useState(0);
   const ref = React.useRef<FlatList<Slide>>(null);
   const progressAnim = React.useRef(new Animated.Value(0)).current;
   const floatAnim = React.useRef(new Animated.Value(0)).current;
+
+  const titleStyle = [styles.title, isLightTheme && { color: '#111111' }];
+  const subtitleStyle = [styles.subtitle, isLightTheme && { color: '#666666' }];
+  const skipTextStyle = [styles.skipText, isLightTheme && { color: '#0061A4' }];
+  const dotShellStyle = [styles.dotShell, isLightTheme && { backgroundColor: 'rgba(0, 97, 164, 0.15)' }];
+  const dotFillStyle = [styles.dotFill, isLightTheme && { backgroundColor: '#0061A4' }];
+  const ctaBtnStyle = [styles.ctaBtn, isLightTheme && { backgroundColor: '#0061A4' }];
+  const ctaTextStyle = [styles.ctaText, isLightTheme && { color: '#FFFFFF' }];
 
   // Simple floating animation for the artwork container
   React.useEffect(() => {
@@ -105,10 +116,10 @@ export default function OnboardingScreen() {
     return (
       <View style={{ width }}>
         <Animated.View style={[styles.illustrationWrap, { transform: [{ translateY: floatAnim.interpolate({ inputRange: [0,1], outputRange: [0, -8] }) }] }]}>
-          <ShapedArt source={item.imageRequire} variant={index % 3} />
+          <ShapedArt source={item.imageRequire} variant={index % 3} isLight={isLightTheme} />
         </Animated.View>
-        <Text style={styles.title}>{item.title}</Text>
-        <Text style={styles.subtitle}>{item.subtitle}</Text>
+        <Text style={titleStyle}>{item.title}</Text>
+        <Text style={subtitleStyle}>{item.subtitle}</Text>
       </View>
     );
   };
@@ -132,13 +143,15 @@ export default function OnboardingScreen() {
   const activeDotWidth = progressAnim.interpolate({ inputRange: [0, 1], outputRange: [0, DOT_SIZE] });
 
   return (
-    <View style={styles.container}>
-      <StatusBar barStyle="light-content" />
-      <LinearGradient colors={["#1D244D", "#02041A", "#1A1D3E"]} style={StyleSheet.absoluteFill} />
+    <View style={[styles.container, isLightTheme && { backgroundColor: '#F8F9FA' }]}>
+      <StatusBar barStyle={isLightTheme ? 'dark-content' : 'light-content'} backgroundColor={isLightTheme ? '#F8F9FA' : '#02041A'} />
+      {isLightTheme ? null : (
+        <LinearGradient colors={["#1D244D", "#02041A", "#1A1D3E"]} style={StyleSheet.absoluteFill} />
+      )}
 
       <View style={styles.skipWrap}>
         <TouchableOpacity onPress={onSkip} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
-          <Text style={styles.skipText}>Skip</Text>
+          <Text style={skipTextStyle}>Skip</Text>
         </TouchableOpacity>
       </View>
 
@@ -163,11 +176,11 @@ export default function OnboardingScreen() {
           const isPast = i < page;
           const isCurrent = i === page;
           return (
-            <View key={i} style={styles.dotShell}>
+            <View key={i} style={dotShellStyle}>
               {isPast ? (
-                <View style={[styles.dotFill, { width: DOT_SIZE }]} />
+                <View style={[dotFillStyle, { width: DOT_SIZE }]} />
               ) : isCurrent ? (
-                <Animated.View style={[styles.dotFill, { width: activeDotWidth }]} />
+                <Animated.View style={[dotFillStyle, { width: activeDotWidth }]} />
               ) : null}
             </View>
           );
@@ -175,8 +188,8 @@ export default function OnboardingScreen() {
       </View>
 
       {/* CTA */}
-      <TouchableOpacity style={styles.ctaBtn} onPress={onNext} activeOpacity={0.9}>
-        <Text style={styles.ctaText}>{isLast ? 'Get started' : 'Next'}</Text>
+      <TouchableOpacity style={ctaBtnStyle} onPress={onNext} activeOpacity={0.9}>
+        <Text style={ctaTextStyle}>{isLast ? 'Get started' : 'Next'}</Text>
       </TouchableOpacity>
       <View style={{ height: Math.max(18, insets.bottom + 10) }} />
     </View>
@@ -197,8 +210,8 @@ const styles = StyleSheet.create({
   skipText: { color: 'rgba(255,255,255,0.85)', fontWeight: '700' },
 });
 
-type ShapedArtProps = { source: any; variant?: number };
-function ShapedArt({ source, variant = 0 }: ShapedArtProps) {
+type ShapedArtProps = { source: any; variant?: number; isLight?: boolean };
+function ShapedArt({ source, variant = 0, isLight = false }: ShapedArtProps) {
   const artW = Math.min(width * 0.86, 360);
   const artH = 260;
 
@@ -219,7 +232,7 @@ function ShapedArt({ source, variant = 0 }: ShapedArtProps) {
   return (
     <View>
       {/* Ambient ring behind */}
-      <View style={{ position: 'absolute', alignSelf: 'center', width: artW * 0.9, height: artH * 0.9, borderRadius: Math.min(artW, artH), backgroundColor: 'rgba(199,185,255,0.10)' }} />
+      <View style={{ position: 'absolute', alignSelf: 'center', width: artW * 0.9, height: artH * 0.9, borderRadius: Math.min(artW, artH), backgroundColor: isLight ? 'rgba(0, 97, 164, 0.05)' : 'rgba(199,185,255,0.10)' }} />
       <Svg width={artW} height={artH}>
         <Defs>
           <ClipPath id="clip">
@@ -228,7 +241,7 @@ function ShapedArt({ source, variant = 0 }: ShapedArtProps) {
         </Defs>
         {/* Border outline */}
         <G>
-          <Path d={d} transform={`scale(${scaleX} ${scaleY})`} fill="none" stroke="#C7B9FF" strokeOpacity={0.22} strokeWidth={2} />
+          <Path d={d} transform={`scale(${scaleX} ${scaleY})`} fill="none" stroke={isLight ? '#0061A4' : '#C7B9FF'} strokeOpacity={isLight ? 0.12 : 0.22} strokeWidth={2} />
         </G>
         {/* Image clipped to shape */}
         <SvgImage
@@ -240,7 +253,7 @@ function ShapedArt({ source, variant = 0 }: ShapedArtProps) {
         />
         {/* Inner soft border */}
         <G>
-          <Path d={d} transform={`scale(${scaleX} ${scaleY})`} fill="none" stroke="#C7B9FF" strokeOpacity={0.35} strokeWidth={0.8} />
+          <Path d={d} transform={`scale(${scaleX} ${scaleY})`} fill="none" stroke={isLight ? '#0061A4' : '#C7B9FF'} strokeOpacity={isLight ? 0.20 : 0.35} strokeWidth={0.8} />
         </G>
       </Svg>
     </View>

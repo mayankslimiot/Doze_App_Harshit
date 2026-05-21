@@ -13,6 +13,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useTheme } from '@/contexts/ThemeContext';
 
 const REFERENCES = [
   { title: 'American Heart Association – Heart Rate Guidelines', url: 'https://www.heart.org' },
@@ -23,6 +24,13 @@ const REFERENCES = [
 export default function HealthDisclaimerScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const { isLightTheme } = useTheme();
+
+  const cardStyle = [styles.card, isLightTheme && { backgroundColor: '#FFFFFF', borderColor: 'rgba(0,0,0,0.06)' }];
+  const disclaimerTextStyle = [styles.disclaimerText, isLightTheme && { color: '#333333' }];
+  const linkRowBorderStyle = isLightTheme ? { borderBottomColor: 'rgba(0,0,0,0.05)' } : styles.linkRowBorder;
+  const linkTitleStyle = [styles.linkTitle, isLightTheme && { color: '#0061A4' }];
+  const linkUrlStyle = [styles.linkUrl, isLightTheme && { color: '#666666' }];
 
   const openLink = async (url: string) => {
     try {
@@ -38,16 +46,18 @@ export default function HealthDisclaimerScreen() {
   };
 
   return (
-    <View style={styles.container}>
-      <StatusBar barStyle="light-content" backgroundColor="#02041A" />
-      <LinearGradient colors={['#1D244D', '#02041A', '#1A1D3E']} style={styles.gradientBackground} />
+    <View style={[styles.container, isLightTheme && { backgroundColor: '#F8F9FA' }]}>
+      <StatusBar barStyle={isLightTheme ? 'dark-content' : 'light-content'} backgroundColor={isLightTheme ? '#F8F9FA' : '#02041A'} />
+      {isLightTheme ? null : (
+        <LinearGradient colors={['#1D244D', '#02041A', '#1A1D3E']} style={styles.gradientBackground} />
+      )}
 
       {/* Header */}
       <View style={[styles.header, { paddingTop: insets.top + 6 }]}>
         <TouchableOpacity onPress={() => router.back()} style={styles.headerIconContainer}>
-          <Ionicons name="arrow-back" size={24} color="#FFF" />
+          <Ionicons name="arrow-back" size={24} color={isLightTheme ? '#333333' : '#FFF'} />
         </TouchableOpacity>
-        <Text style={styles.headerText}>Health Disclaimer & References</Text>
+        <Text style={[styles.headerText, isLightTheme && { color: '#111111' }]}>Health Disclaimer & References</Text>
         <View style={styles.headerIconContainer} />
       </View>
 
@@ -55,30 +65,30 @@ export default function HealthDisclaimerScreen() {
         contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + 24 }]}
         showsVerticalScrollIndicator={false}
       >
-        <View style={styles.card}>
-          <Text style={styles.disclaimerText}>
+        <View style={cardStyle}>
+          <Text style={disclaimerTextStyle}>
             DozeMate is a wellness product designed to help users observe general heart rate and respiration trends during rest and sleep.
           </Text>
-          <Text style={[styles.disclaimerText, { marginBottom: 0 }]}>
+          <Text style={[disclaimerTextStyle, { marginBottom: 0 }]}>
             This app is not a medical device and does not diagnose, treat, cure, or prevent any disease. The information provided by DozeMate is for general wellness and lifestyle purposes only and is not intended for medical use. Always consult a qualified healthcare professional for medical advice.
           </Text>
         </View>
 
-        <Text style={styles.sectionTitle}>References</Text>
-        <View style={styles.card}>
+        <Text style={[styles.sectionTitle, isLightTheme && { color: '#666666' }]}>References</Text>
+        <View style={cardStyle}>
           {REFERENCES.map((ref, index) => (
             <TouchableOpacity
               key={index}
-              style={[styles.linkRow, index < REFERENCES.length - 1 && styles.linkRowBorder]}
+              style={[styles.linkRow, index < REFERENCES.length - 1 && linkRowBorderStyle]}
               onPress={() => openLink(ref.url)}
               activeOpacity={0.8}
             >
-              <Ionicons name="open-outline" size={18} color="#4A90E2" style={styles.linkIcon} />
+              <Ionicons name="open-outline" size={18} color={isLightTheme ? '#0061A4' : '#4A90E2'} style={styles.linkIcon} />
               <View style={styles.linkContent}>
-                <Text style={styles.linkTitle}>{ref.title}</Text>
-                <Text style={styles.linkUrl}>{ref.url}</Text>
+                <Text style={linkTitleStyle}>{ref.title}</Text>
+                <Text style={linkUrlStyle}>{ref.url}</Text>
               </View>
-              <Ionicons name="chevron-forward" size={18} color="rgba(255,255,255,0.4)" />
+              <Ionicons name="chevron-forward" size={18} color={isLightTheme ? 'rgba(0,0,0,0.4)' : 'rgba(255,255,255,0.4)'} />
             </TouchableOpacity>
           ))}
         </View>

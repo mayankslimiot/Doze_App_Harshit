@@ -7,9 +7,9 @@ async function getAuthToken(): Promise<string | null> {
 }
 
 // Create headers with auth token
-export async function getAuthHeaders(): Promise<HeadersInit> {
+export async function getAuthHeaders(): Promise<Record<string, string>> {
   const token = await getAuthToken();
-  const headers: HeadersInit = {
+  const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     'Accept': 'application/json',
   };
@@ -1633,6 +1633,846 @@ export async function pruneBleMappings(currentDeviceIds: string[]): Promise<void
     }
   } catch (e) {
     console.error('[pruneBleMappings] Error pruning BLE map:', e);
+  }
+}
+
+
+/** Get temperature graph data (last 24 hours) */
+export async function getTemperatureGraph(
+  deviceId: string,
+  zoomLevel: number = 0,
+  raw: boolean = false
+): Promise<{
+  success: boolean;
+  data?: {
+    points: Array<{ x: number; y: number | null }>;
+    xDomain: [number, number];
+    yDomain: [number, number];
+    zoomLevel: { index: number; label: string; rangeSec: number };
+  };
+  message?: string;
+}> {
+  try {
+    const normalizedId = deviceId.trim().toUpperCase();
+    const headers = await getAuthHeaders();
+    const rawParam = raw ? '&raw=true' : '';
+    const response = await fetch(
+      apiUrl(`/api/data/health/temperature/graph/${normalizedId}?zoomLevel=${zoomLevel}${rawParam}`),
+      { method: 'GET', headers }
+    );
+    const data = await response.json();
+    if (!response.ok) {
+      return { success: false, message: data.message || 'Failed to fetch temperature graph data' };
+    }
+    return { success: true, data: data.data };
+  } catch (error: any) {
+    return { success: false, message: error.message || 'Network error' };
+  }
+}
+
+/** Get temperature raw data for a specific date range */
+export async function getTemperatureGraphForDateRange(
+  deviceId: string,
+  startMs: number,
+  endMs: number,
+  raw: boolean = true
+): Promise<{
+  success: boolean;
+  data?: {
+    points: Array<{ x: number; y: number | null }>;
+    xDomain: [number, number];
+    yDomain: [number, number];
+    zoomLevel?: { index: number; label: string; rangeSec: number };
+  };
+  message?: string;
+}> {
+  try {
+    const normalizedId = deviceId.trim().toUpperCase();
+    const headers = await getAuthHeaders();
+    const rawParam = raw ? '&raw=true' : '';
+    const response = await fetch(
+      apiUrl(`/api/data/health/temperature/graph/${normalizedId}?zoomLevel=0${rawParam}&start=${startMs}&end=${endMs}`),
+      { method: 'GET', headers }
+    );
+    const data = await response.json();
+    if (!response.ok) {
+      return { success: false, message: data.message || 'Failed to fetch temperature data' };
+    }
+    return { success: true, data: data.data };
+  } catch (error: any) {
+    return { success: false, message: error.message || 'Network error' };
+  }
+}
+
+/** Get monthly aggregated temperature data */
+export async function getMonthlyTemperatureData(
+  deviceId: string,
+  monthStart?: Date
+): Promise<{
+  success: boolean;
+  data?: Array<{
+    day: number;
+    dayIndex: number;
+    date: string;
+    avg: number | null;
+    min: number | null;
+    max: number | null;
+    isPartial: boolean;
+    count: number;
+  }>;
+  message?: string;
+}> {
+  try {
+    const normalizedId = deviceId.trim().toUpperCase();
+    const headers = await getAuthHeaders();
+    const params = new URLSearchParams();
+    if (monthStart) params.append('monthStart', monthStart.toISOString());
+    
+    const response = await fetch(apiUrl(`/api/data/health/monthly/${normalizedId}?metric=temperature${params.toString() ? `&${params.toString()}` : ''}`), {
+      method: 'GET',
+      headers,
+    });
+    const data = await response.json();
+    if (!response.ok) return { success: false, message: data.message || 'Failed to fetch monthly temperature data' };
+    return { success: true, data: data.data || [] };
+  } catch (error: any) {
+    return { success: false, message: error.message || 'Network error' };
+  }
+}
+
+/** Get weekly aggregated temperature data */
+export async function getWeeklyTemperatureData(
+  deviceId: string,
+  weekStart?: Date
+): Promise<{
+  success: boolean;
+  data?: Array<{
+    day: string;
+    dayIndex: number;
+    date: string;
+    avg: number | null;
+    min: number | null;
+    max: number | null;
+    isPartial: boolean;
+    count: number;
+  }>;
+  message?: string;
+}> {
+  try {
+    const normalizedId = deviceId.trim().toUpperCase();
+    const headers = await getAuthHeaders();
+    const params = new URLSearchParams();
+    if (weekStart) params.append('weekStart', weekStart.toISOString());
+    
+    const response = await fetch(apiUrl(`/api/data/health/weekly/${normalizedId}?metric=temperature${params.toString() ? `&${params.toString()}` : ''}`), {
+      method: 'GET',
+      headers,
+    });
+    const data = await response.json();
+    if (!response.ok) return { success: false, message: data.message || 'Failed to fetch weekly temperature data' };
+    return { success: true, data: data.data || [] };
+  } catch (error: any) {
+    return { success: false, message: error.message || 'Network error' };
+  }
+}
+
+
+/** Get humidity graph data (last 24 hours) */
+export async function getHumidityGraph(
+  deviceId: string,
+  zoomLevel: number = 0,
+  raw: boolean = false
+): Promise<{
+  success: boolean;
+  data?: {
+    points: Array<{ x: number; y: number | null }>;
+    xDomain: [number, number];
+    yDomain: [number, number];
+    zoomLevel: { index: number; label: string; rangeSec: number };
+  };
+  message?: string;
+}> {
+  try {
+    const normalizedId = deviceId.trim().toUpperCase();
+    const headers = await getAuthHeaders();
+    const rawParam = raw ? '&raw=true' : '';
+    const response = await fetch(
+      apiUrl(`/api/data/health/humidity/graph/${normalizedId}?zoomLevel=${zoomLevel}${rawParam}`),
+      { method: 'GET', headers }
+    );
+    const data = await response.json();
+    if (!response.ok) {
+      return { success: false, message: data.message || 'Failed to fetch humidity graph data' };
+    }
+    return { success: true, data: data.data };
+  } catch (error: any) {
+    return { success: false, message: error.message || 'Network error' };
+  }
+}
+
+/** Get humidity raw data for a specific date range */
+export async function getHumidityGraphForDateRange(
+  deviceId: string,
+  startMs: number,
+  endMs: number,
+  raw: boolean = true
+): Promise<{
+  success: boolean;
+  data?: {
+    points: Array<{ x: number; y: number | null }>;
+    xDomain: [number, number];
+    yDomain: [number, number];
+    zoomLevel?: { index: number; label: string; rangeSec: number };
+  };
+  message?: string;
+}> {
+  try {
+    const normalizedId = deviceId.trim().toUpperCase();
+    const headers = await getAuthHeaders();
+    const rawParam = raw ? '&raw=true' : '';
+    const response = await fetch(
+      apiUrl(`/api/data/health/humidity/graph/${normalizedId}?zoomLevel=0${rawParam}&start=${startMs}&end=${endMs}`),
+      { method: 'GET', headers }
+    );
+    const data = await response.json();
+    if (!response.ok) {
+      return { success: false, message: data.message || 'Failed to fetch humidity data' };
+    }
+    return { success: true, data: data.data };
+  } catch (error: any) {
+    return { success: false, message: error.message || 'Network error' };
+  }
+}
+
+/** Get monthly aggregated humidity data */
+export async function getMonthlyHumidityData(
+  deviceId: string,
+  monthStart?: Date
+): Promise<{
+  success: boolean;
+  data?: Array<{
+    day: number;
+    dayIndex: number;
+    date: string;
+    avg: number | null;
+    min: number | null;
+    max: number | null;
+    isPartial: boolean;
+    count: number;
+  }>;
+  message?: string;
+}> {
+  try {
+    const normalizedId = deviceId.trim().toUpperCase();
+    const headers = await getAuthHeaders();
+    const params = new URLSearchParams();
+    if (monthStart) params.append('monthStart', monthStart.toISOString());
+    
+    const response = await fetch(apiUrl(`/api/data/health/monthly/${normalizedId}?metric=humidity${params.toString() ? `&${params.toString()}` : ''}`), {
+      method: 'GET',
+      headers,
+    });
+    const data = await response.json();
+    if (!response.ok) return { success: false, message: data.message || 'Failed to fetch monthly humidity data' };
+    return { success: true, data: data.data || [] };
+  } catch (error: any) {
+    return { success: false, message: error.message || 'Network error' };
+  }
+}
+
+/** Get weekly aggregated humidity data */
+export async function getWeeklyHumidityData(
+  deviceId: string,
+  weekStart?: Date
+): Promise<{
+  success: boolean;
+  data?: Array<{
+    day: string;
+    dayIndex: number;
+    date: string;
+    avg: number | null;
+    min: number | null;
+    max: number | null;
+    isPartial: boolean;
+    count: number;
+  }>;
+  message?: string;
+}> {
+  try {
+    const normalizedId = deviceId.trim().toUpperCase();
+    const headers = await getAuthHeaders();
+    const params = new URLSearchParams();
+    if (weekStart) params.append('weekStart', weekStart.toISOString());
+    
+    const response = await fetch(apiUrl(`/api/data/health/weekly/${normalizedId}?metric=humidity${params.toString() ? `&${params.toString()}` : ''}`), {
+      method: 'GET',
+      headers,
+    });
+    const data = await response.json();
+    if (!response.ok) return { success: false, message: data.message || 'Failed to fetch weekly humidity data' };
+    return { success: true, data: data.data || [] };
+  } catch (error: any) {
+    return { success: false, message: error.message || 'Network error' };
+  }
+}
+
+
+/** Get iaq graph data (last 24 hours) */
+export async function getIaqGraph(
+  deviceId: string,
+  zoomLevel: number = 0,
+  raw: boolean = false
+): Promise<{
+  success: boolean;
+  data?: {
+    points: Array<{ x: number; y: number | null }>;
+    xDomain: [number, number];
+    yDomain: [number, number];
+    zoomLevel: { index: number; label: string; rangeSec: number };
+  };
+  message?: string;
+}> {
+  try {
+    const normalizedId = deviceId.trim().toUpperCase();
+    const headers = await getAuthHeaders();
+    const rawParam = raw ? '&raw=true' : '';
+    const response = await fetch(
+      apiUrl(`/api/data/health/iaq/graph/${normalizedId}?zoomLevel=${zoomLevel}${rawParam}`),
+      { method: 'GET', headers }
+    );
+    const data = await response.json();
+    if (!response.ok) {
+      return { success: false, message: data.message || 'Failed to fetch iaq graph data' };
+    }
+    return { success: true, data: data.data };
+  } catch (error: any) {
+    return { success: false, message: error.message || 'Network error' };
+  }
+}
+
+/** Get iaq raw data for a specific date range */
+export async function getIaqGraphForDateRange(
+  deviceId: string,
+  startMs: number,
+  endMs: number,
+  raw: boolean = true
+): Promise<{
+  success: boolean;
+  data?: {
+    points: Array<{ x: number; y: number | null }>;
+    xDomain: [number, number];
+    yDomain: [number, number];
+    zoomLevel?: { index: number; label: string; rangeSec: number };
+  };
+  message?: string;
+}> {
+  try {
+    const normalizedId = deviceId.trim().toUpperCase();
+    const headers = await getAuthHeaders();
+    const rawParam = raw ? '&raw=true' : '';
+    const response = await fetch(
+      apiUrl(`/api/data/health/iaq/graph/${normalizedId}?zoomLevel=0${rawParam}&start=${startMs}&end=${endMs}`),
+      { method: 'GET', headers }
+    );
+    const data = await response.json();
+    if (!response.ok) {
+      return { success: false, message: data.message || 'Failed to fetch iaq data' };
+    }
+    return { success: true, data: data.data };
+  } catch (error: any) {
+    return { success: false, message: error.message || 'Network error' };
+  }
+}
+
+/** Get monthly aggregated iaq data */
+export async function getMonthlyIaqData(
+  deviceId: string,
+  monthStart?: Date
+): Promise<{
+  success: boolean;
+  data?: Array<{
+    day: number;
+    dayIndex: number;
+    date: string;
+    avg: number | null;
+    min: number | null;
+    max: number | null;
+    isPartial: boolean;
+    count: number;
+  }>;
+  message?: string;
+}> {
+  try {
+    const normalizedId = deviceId.trim().toUpperCase();
+    const headers = await getAuthHeaders();
+    const params = new URLSearchParams();
+    if (monthStart) params.append('monthStart', monthStart.toISOString());
+    
+    const response = await fetch(apiUrl(`/api/data/health/monthly/${normalizedId}?metric=iaq${params.toString() ? `&${params.toString()}` : ''}`), {
+      method: 'GET',
+      headers,
+    });
+    const data = await response.json();
+    if (!response.ok) return { success: false, message: data.message || 'Failed to fetch monthly iaq data' };
+    return { success: true, data: data.data || [] };
+  } catch (error: any) {
+    return { success: false, message: error.message || 'Network error' };
+  }
+}
+
+/** Get weekly aggregated iaq data */
+export async function getWeeklyIaqData(
+  deviceId: string,
+  weekStart?: Date
+): Promise<{
+  success: boolean;
+  data?: Array<{
+    day: string;
+    dayIndex: number;
+    date: string;
+    avg: number | null;
+    min: number | null;
+    max: number | null;
+    isPartial: boolean;
+    count: number;
+  }>;
+  message?: string;
+}> {
+  try {
+    const normalizedId = deviceId.trim().toUpperCase();
+    const headers = await getAuthHeaders();
+    const params = new URLSearchParams();
+    if (weekStart) params.append('weekStart', weekStart.toISOString());
+    
+    const response = await fetch(apiUrl(`/api/data/health/weekly/${normalizedId}?metric=iaq${params.toString() ? `&${params.toString()}` : ''}`), {
+      method: 'GET',
+      headers,
+    });
+    const data = await response.json();
+    if (!response.ok) return { success: false, message: data.message || 'Failed to fetch weekly iaq data' };
+    return { success: true, data: data.data || [] };
+  } catch (error: any) {
+    return { success: false, message: error.message || 'Network error' };
+  }
+}
+
+
+/** Get eco2 graph data (last 24 hours) */
+export async function getEco2Graph(
+  deviceId: string,
+  zoomLevel: number = 0,
+  raw: boolean = false
+): Promise<{
+  success: boolean;
+  data?: {
+    points: Array<{ x: number; y: number | null }>;
+    xDomain: [number, number];
+    yDomain: [number, number];
+    zoomLevel: { index: number; label: string; rangeSec: number };
+  };
+  message?: string;
+}> {
+  try {
+    const normalizedId = deviceId.trim().toUpperCase();
+    const headers = await getAuthHeaders();
+    const rawParam = raw ? '&raw=true' : '';
+    const response = await fetch(
+      apiUrl(`/api/data/health/eco2/graph/${normalizedId}?zoomLevel=${zoomLevel}${rawParam}`),
+      { method: 'GET', headers }
+    );
+    const data = await response.json();
+    if (!response.ok) {
+      return { success: false, message: data.message || 'Failed to fetch eco2 graph data' };
+    }
+    return { success: true, data: data.data };
+  } catch (error: any) {
+    return { success: false, message: error.message || 'Network error' };
+  }
+}
+
+/** Get eco2 raw data for a specific date range */
+export async function getEco2GraphForDateRange(
+  deviceId: string,
+  startMs: number,
+  endMs: number,
+  raw: boolean = true
+): Promise<{
+  success: boolean;
+  data?: {
+    points: Array<{ x: number; y: number | null }>;
+    xDomain: [number, number];
+    yDomain: [number, number];
+    zoomLevel?: { index: number; label: string; rangeSec: number };
+  };
+  message?: string;
+}> {
+  try {
+    const normalizedId = deviceId.trim().toUpperCase();
+    const headers = await getAuthHeaders();
+    const rawParam = raw ? '&raw=true' : '';
+    const response = await fetch(
+      apiUrl(`/api/data/health/eco2/graph/${normalizedId}?zoomLevel=0${rawParam}&start=${startMs}&end=${endMs}`),
+      { method: 'GET', headers }
+    );
+    const data = await response.json();
+    if (!response.ok) {
+      return { success: false, message: data.message || 'Failed to fetch eco2 data' };
+    }
+    return { success: true, data: data.data };
+  } catch (error: any) {
+    return { success: false, message: error.message || 'Network error' };
+  }
+}
+
+/** Get monthly aggregated eco2 data */
+export async function getMonthlyEco2Data(
+  deviceId: string,
+  monthStart?: Date
+): Promise<{
+  success: boolean;
+  data?: Array<{
+    day: number;
+    dayIndex: number;
+    date: string;
+    avg: number | null;
+    min: number | null;
+    max: number | null;
+    isPartial: boolean;
+    count: number;
+  }>;
+  message?: string;
+}> {
+  try {
+    const normalizedId = deviceId.trim().toUpperCase();
+    const headers = await getAuthHeaders();
+    const params = new URLSearchParams();
+    if (monthStart) params.append('monthStart', monthStart.toISOString());
+    
+    const response = await fetch(apiUrl(`/api/data/health/monthly/${normalizedId}?metric=eco2${params.toString() ? `&${params.toString()}` : ''}`), {
+      method: 'GET',
+      headers,
+    });
+    const data = await response.json();
+    if (!response.ok) return { success: false, message: data.message || 'Failed to fetch monthly eco2 data' };
+    return { success: true, data: data.data || [] };
+  } catch (error: any) {
+    return { success: false, message: error.message || 'Network error' };
+  }
+}
+
+/** Get weekly aggregated eco2 data */
+export async function getWeeklyEco2Data(
+  deviceId: string,
+  weekStart?: Date
+): Promise<{
+  success: boolean;
+  data?: Array<{
+    day: string;
+    dayIndex: number;
+    date: string;
+    avg: number | null;
+    min: number | null;
+    max: number | null;
+    isPartial: boolean;
+    count: number;
+  }>;
+  message?: string;
+}> {
+  try {
+    const normalizedId = deviceId.trim().toUpperCase();
+    const headers = await getAuthHeaders();
+    const params = new URLSearchParams();
+    if (weekStart) params.append('weekStart', weekStart.toISOString());
+    
+    const response = await fetch(apiUrl(`/api/data/health/weekly/${normalizedId}?metric=eco2${params.toString() ? `&${params.toString()}` : ''}`), {
+      method: 'GET',
+      headers,
+    });
+    const data = await response.json();
+    if (!response.ok) return { success: false, message: data.message || 'Failed to fetch weekly eco2 data' };
+    return { success: true, data: data.data || [] };
+  } catch (error: any) {
+    return { success: false, message: error.message || 'Network error' };
+  }
+}
+
+
+/** Get tvoc graph data (last 24 hours) */
+export async function getTvocGraph(
+  deviceId: string,
+  zoomLevel: number = 0,
+  raw: boolean = false
+): Promise<{
+  success: boolean;
+  data?: {
+    points: Array<{ x: number; y: number | null }>;
+    xDomain: [number, number];
+    yDomain: [number, number];
+    zoomLevel: { index: number; label: string; rangeSec: number };
+  };
+  message?: string;
+}> {
+  try {
+    const normalizedId = deviceId.trim().toUpperCase();
+    const headers = await getAuthHeaders();
+    const rawParam = raw ? '&raw=true' : '';
+    const response = await fetch(
+      apiUrl(`/api/data/health/tvoc/graph/${normalizedId}?zoomLevel=${zoomLevel}${rawParam}`),
+      { method: 'GET', headers }
+    );
+    const data = await response.json();
+    if (!response.ok) {
+      return { success: false, message: data.message || 'Failed to fetch tvoc graph data' };
+    }
+    return { success: true, data: data.data };
+  } catch (error: any) {
+    return { success: false, message: error.message || 'Network error' };
+  }
+}
+
+/** Get tvoc raw data for a specific date range */
+export async function getTvocGraphForDateRange(
+  deviceId: string,
+  startMs: number,
+  endMs: number,
+  raw: boolean = true
+): Promise<{
+  success: boolean;
+  data?: {
+    points: Array<{ x: number; y: number | null }>;
+    xDomain: [number, number];
+    yDomain: [number, number];
+    zoomLevel?: { index: number; label: string; rangeSec: number };
+  };
+  message?: string;
+}> {
+  try {
+    const normalizedId = deviceId.trim().toUpperCase();
+    const headers = await getAuthHeaders();
+    const rawParam = raw ? '&raw=true' : '';
+    const response = await fetch(
+      apiUrl(`/api/data/health/tvoc/graph/${normalizedId}?zoomLevel=0${rawParam}&start=${startMs}&end=${endMs}`),
+      { method: 'GET', headers }
+    );
+    const data = await response.json();
+    if (!response.ok) {
+      return { success: false, message: data.message || 'Failed to fetch tvoc data' };
+    }
+    return { success: true, data: data.data };
+  } catch (error: any) {
+    return { success: false, message: error.message || 'Network error' };
+  }
+}
+
+/** Get monthly aggregated tvoc data */
+export async function getMonthlyTvocData(
+  deviceId: string,
+  monthStart?: Date
+): Promise<{
+  success: boolean;
+  data?: Array<{
+    day: number;
+    dayIndex: number;
+    date: string;
+    avg: number | null;
+    min: number | null;
+    max: number | null;
+    isPartial: boolean;
+    count: number;
+  }>;
+  message?: string;
+}> {
+  try {
+    const normalizedId = deviceId.trim().toUpperCase();
+    const headers = await getAuthHeaders();
+    const params = new URLSearchParams();
+    if (monthStart) params.append('monthStart', monthStart.toISOString());
+    
+    const response = await fetch(apiUrl(`/api/data/health/monthly/${normalizedId}?metric=tvoc${params.toString() ? `&${params.toString()}` : ''}`), {
+      method: 'GET',
+      headers,
+    });
+    const data = await response.json();
+    if (!response.ok) return { success: false, message: data.message || 'Failed to fetch monthly tvoc data' };
+    return { success: true, data: data.data || [] };
+  } catch (error: any) {
+    return { success: false, message: error.message || 'Network error' };
+  }
+}
+
+/** Get weekly aggregated tvoc data */
+export async function getWeeklyTvocData(
+  deviceId: string,
+  weekStart?: Date
+): Promise<{
+  success: boolean;
+  data?: Array<{
+    day: string;
+    dayIndex: number;
+    date: string;
+    avg: number | null;
+    min: number | null;
+    max: number | null;
+    isPartial: boolean;
+    count: number;
+  }>;
+  message?: string;
+}> {
+  try {
+    const normalizedId = deviceId.trim().toUpperCase();
+    const headers = await getAuthHeaders();
+    const params = new URLSearchParams();
+    if (weekStart) params.append('weekStart', weekStart.toISOString());
+    
+    const response = await fetch(apiUrl(`/api/data/health/weekly/${normalizedId}?metric=tvoc${params.toString() ? `&${params.toString()}` : ''}`), {
+      method: 'GET',
+      headers,
+    });
+    const data = await response.json();
+    if (!response.ok) return { success: false, message: data.message || 'Failed to fetch weekly tvoc data' };
+    return { success: true, data: data.data || [] };
+  } catch (error: any) {
+    return { success: false, message: error.message || 'Network error' };
+  }
+}
+
+
+/** Get etoh graph data (last 24 hours) */
+export async function getEtohGraph(
+  deviceId: string,
+  zoomLevel: number = 0,
+  raw: boolean = false
+): Promise<{
+  success: boolean;
+  data?: {
+    points: Array<{ x: number; y: number | null }>;
+    xDomain: [number, number];
+    yDomain: [number, number];
+    zoomLevel: { index: number; label: string; rangeSec: number };
+  };
+  message?: string;
+}> {
+  try {
+    const normalizedId = deviceId.trim().toUpperCase();
+    const headers = await getAuthHeaders();
+    const rawParam = raw ? '&raw=true' : '';
+    const response = await fetch(
+      apiUrl(`/api/data/health/etoh/graph/${normalizedId}?zoomLevel=${zoomLevel}${rawParam}`),
+      { method: 'GET', headers }
+    );
+    const data = await response.json();
+    if (!response.ok) {
+      return { success: false, message: data.message || 'Failed to fetch etoh graph data' };
+    }
+    return { success: true, data: data.data };
+  } catch (error: any) {
+    return { success: false, message: error.message || 'Network error' };
+  }
+}
+
+/** Get etoh raw data for a specific date range */
+export async function getEtohGraphForDateRange(
+  deviceId: string,
+  startMs: number,
+  endMs: number,
+  raw: boolean = true
+): Promise<{
+  success: boolean;
+  data?: {
+    points: Array<{ x: number; y: number | null }>;
+    xDomain: [number, number];
+    yDomain: [number, number];
+    zoomLevel?: { index: number; label: string; rangeSec: number };
+  };
+  message?: string;
+}> {
+  try {
+    const normalizedId = deviceId.trim().toUpperCase();
+    const headers = await getAuthHeaders();
+    const rawParam = raw ? '&raw=true' : '';
+    const response = await fetch(
+      apiUrl(`/api/data/health/etoh/graph/${normalizedId}?zoomLevel=0${rawParam}&start=${startMs}&end=${endMs}`),
+      { method: 'GET', headers }
+    );
+    const data = await response.json();
+    if (!response.ok) {
+      return { success: false, message: data.message || 'Failed to fetch etoh data' };
+    }
+    return { success: true, data: data.data };
+  } catch (error: any) {
+    return { success: false, message: error.message || 'Network error' };
+  }
+}
+
+/** Get monthly aggregated etoh data */
+export async function getMonthlyEtohData(
+  deviceId: string,
+  monthStart?: Date
+): Promise<{
+  success: boolean;
+  data?: Array<{
+    day: number;
+    dayIndex: number;
+    date: string;
+    avg: number | null;
+    min: number | null;
+    max: number | null;
+    isPartial: boolean;
+    count: number;
+  }>;
+  message?: string;
+}> {
+  try {
+    const normalizedId = deviceId.trim().toUpperCase();
+    const headers = await getAuthHeaders();
+    const params = new URLSearchParams();
+    if (monthStart) params.append('monthStart', monthStart.toISOString());
+    
+    const response = await fetch(apiUrl(`/api/data/health/monthly/${normalizedId}?metric=etoh${params.toString() ? `&${params.toString()}` : ''}`), {
+      method: 'GET',
+      headers,
+    });
+    const data = await response.json();
+    if (!response.ok) return { success: false, message: data.message || 'Failed to fetch monthly etoh data' };
+    return { success: true, data: data.data || [] };
+  } catch (error: any) {
+    return { success: false, message: error.message || 'Network error' };
+  }
+}
+
+/** Get weekly aggregated etoh data */
+export async function getWeeklyEtohData(
+  deviceId: string,
+  weekStart?: Date
+): Promise<{
+  success: boolean;
+  data?: Array<{
+    day: string;
+    dayIndex: number;
+    date: string;
+    avg: number | null;
+    min: number | null;
+    max: number | null;
+    isPartial: boolean;
+    count: number;
+  }>;
+  message?: string;
+}> {
+  try {
+    const normalizedId = deviceId.trim().toUpperCase();
+    const headers = await getAuthHeaders();
+    const params = new URLSearchParams();
+    if (weekStart) params.append('weekStart', weekStart.toISOString());
+    
+    const response = await fetch(apiUrl(`/api/data/health/weekly/${normalizedId}?metric=etoh${params.toString() ? `&${params.toString()}` : ''}`), {
+      method: 'GET',
+      headers,
+    });
+    const data = await response.json();
+    if (!response.ok) return { success: false, message: data.message || 'Failed to fetch weekly etoh data' };
+    return { success: true, data: data.data || [] };
+  } catch (error: any) {
+    return { success: false, message: error.message || 'Network error' };
   }
 }
 

@@ -18,6 +18,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Constants from 'expo-constants';
 import { useAuth } from '@/contexts/AuthContext';
 import { useDevice } from '@/contexts/DeviceContext';
+import { useTheme } from '@/contexts/ThemeContext';
 import { trackEvent } from '@/services/analytics';
 
 export default function ContactSupportScreen() {
@@ -25,6 +26,8 @@ export default function ContactSupportScreen() {
   const insets = useSafeAreaInsets();
   const { auth } = useAuth();
   const { activeDevice } = useDevice();
+  const { isLightTheme } = useTheme();
+  const CardContainer = isLightTheme ? View : BlurView;
 
   // Track screen open
   React.useEffect(() => {
@@ -33,17 +36,17 @@ export default function ContactSupportScreen() {
 
   // Get app version info
   const appVersionInfo = useMemo(() => {
-    const version = Constants.expoConfig?.version || Constants.manifest2?.extra?.expoClient?.version || '1.0.0';
+    const version = Constants.expoConfig?.version || (Constants.manifest2 as any)?.extra?.expoClient?.version || '1.0.0';
     let buildNumber = '';
     
     if (Platform.OS === 'ios') {
       buildNumber = Constants.expoConfig?.ios?.buildNumber || 
-                    Constants.manifest2?.ios?.buildNumber || 
+                    (Constants.manifest2 as any)?.ios?.buildNumber || 
                     Constants.nativeBuildVersion || 
                     '';
     } else if (Platform.OS === 'android') {
       buildNumber = Constants.expoConfig?.android?.versionCode?.toString() || 
-                    Constants.manifest2?.android?.versionCode?.toString() || 
+                    (Constants.manifest2 as any)?.android?.versionCode?.toString() || 
                     Constants.nativeBuildVersion || 
                     '';
     }
@@ -149,16 +152,18 @@ OS Version: ${deviceInfo.osVersion}`;
   };
 
   return (
-    <View style={styles.container}>
-      <StatusBar barStyle="light-content" backgroundColor="#02041A" />
-      <LinearGradient colors={['#1D244D', '#02041A', '#1A1D3E']} style={styles.gradientBackground} />
+    <View style={[styles.container, isLightTheme && { backgroundColor: '#F8F9FA' }]}>
+      <StatusBar barStyle={isLightTheme ? 'dark-content' : 'light-content'} backgroundColor={isLightTheme ? '#F8F9FA' : '#02041A'} />
+      {isLightTheme ? null : (
+        <LinearGradient colors={['#1D244D', '#02041A', '#1A1D3E']} style={styles.gradientBackground} />
+      )}
 
       {/* Header */}
       <View style={[styles.header, { paddingTop: insets.top + 6 }]}>
         <TouchableOpacity onPress={() => router.back()} style={styles.headerIconContainer}>
-          <Ionicons name="arrow-back" size={24} color="#FFF" />
+          <Ionicons name="arrow-back" size={24} color={isLightTheme ? '#333333' : '#FFF'} />
         </TouchableOpacity>
-        <Text style={styles.headerText}>Contact Support</Text>
+        <Text style={[styles.headerText, isLightTheme && { color: '#111111' }]}>Contact Support</Text>
         <View style={styles.headerIconContainer} />
       </View>
 
@@ -168,55 +173,55 @@ OS Version: ${deviceInfo.osVersion}`;
         showsVerticalScrollIndicator={false}
       >
         {/* Support Email Card */}
-        <BlurView intensity={25} tint="dark" style={styles.card}>
+        <CardContainer intensity={25} tint="dark" style={[styles.card, isLightTheme && { backgroundColor: '#FFFFFF', borderColor: 'rgba(0,0,0,0.06)' }]}>
           <View style={styles.cardHeader}>
-            <Ionicons name="mail-outline" size={24} color="#4A90E2" />
-            <Text style={styles.cardTitle}>Email Support</Text>
+            <Ionicons name="mail-outline" size={24} color={isLightTheme ? '#0061A4' : '#4A90E2'} />
+            <Text style={[styles.cardTitle, isLightTheme && { color: '#111111' }]}>Email Support</Text>
           </View>
           
           <View style={styles.emailInfo}>
-            <Text style={styles.emailLabel}>Email:</Text>
-            <Text style={styles.emailValue}>info@slimiot.com</Text>
+            <Text style={[styles.emailLabel, isLightTheme && { color: '#666666' }]}>Email:</Text>
+            <Text style={[styles.emailValue, isLightTheme && { color: '#111111' }]}>info@slimiot.com</Text>
           </View>
 
           <TouchableOpacity
-            style={styles.emailButton}
+            style={[styles.emailButton, isLightTheme && { backgroundColor: '#0061A4' }]}
             onPress={handleEmailSupport}
             activeOpacity={0.8}
           >
             <Ionicons name="mail" size={20} color="#FFF" />
             <Text style={styles.emailButtonText}>Send Email</Text>
           </TouchableOpacity>
-        </BlurView>
+        </CardContainer>
 
         {/* Official Links Section */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Official Links</Text>
+          <Text style={[styles.sectionTitle, isLightTheme && { color: '#666666' }]}>Official Links</Text>
           
           <TouchableOpacity
-            style={styles.linkButton}
+            style={[styles.linkButton, isLightTheme && { backgroundColor: '#FFFFFF', borderColor: 'rgba(0,0,0,0.06)' }]}
             onPress={handleWebsiteLink}
             activeOpacity={0.8}
           >
-            <Ionicons name="globe-outline" size={24} color="#4A90E2" />
+            <Ionicons name="globe-outline" size={24} color={isLightTheme ? '#0061A4' : '#4A90E2'} />
             <View style={styles.linkButtonContent}>
-              <Text style={styles.linkButtonLabel}>Visit Website</Text>
-              <Text style={styles.linkButtonUrl}>www.slimiot.com</Text>
+              <Text style={[styles.linkButtonLabel, isLightTheme && { color: '#111111' }]}>Visit Website</Text>
+              <Text style={[styles.linkButtonUrl, isLightTheme && { color: '#666666' }]}>www.slimiot.com</Text>
             </View>
-            <Ionicons name="chevron-forward" size={20} color="rgba(255,255,255,0.5)" />
+            <Ionicons name="chevron-forward" size={20} color={isLightTheme ? 'rgba(0,0,0,0.4)' : 'rgba(255,255,255,0.5)'} />
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={styles.linkButton}
+            style={[styles.linkButton, isLightTheme && { backgroundColor: '#FFFFFF', borderColor: 'rgba(0,0,0,0.06)' }]}
             onPress={handleLinkedInLink}
             activeOpacity={0.8}
           >
-            <Ionicons name="logo-linkedin" size={24} color="#4A90E2" />
+            <Ionicons name="logo-linkedin" size={24} color={isLightTheme ? '#0061A4' : '#4A90E2'} />
             <View style={styles.linkButtonContent}>
-              <Text style={styles.linkButtonLabel}>LinkedIn</Text>
-              <Text style={styles.linkButtonUrl}>SlimIOT Technologies</Text>
+              <Text style={[styles.linkButtonLabel, isLightTheme && { color: '#111111' }]}>LinkedIn</Text>
+              <Text style={[styles.linkButtonUrl, isLightTheme && { color: '#666666' }]}>SlimIOT Technologies</Text>
             </View>
-            <Ionicons name="chevron-forward" size={20} color="rgba(255,255,255,0.5)" />
+            <Ionicons name="chevron-forward" size={20} color={isLightTheme ? 'rgba(0,0,0,0.4)' : 'rgba(255,255,255,0.5)'} />
           </TouchableOpacity>
         </View>
       </ScrollView>

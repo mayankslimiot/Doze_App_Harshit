@@ -15,6 +15,7 @@ import {
   Platform,
   Pressable,
   ScrollView,
+  StatusBar,
   StyleSheet,
   Text,
   TextInput,
@@ -23,6 +24,7 @@ import {
 } from 'react-native';
 import { apiUrl } from '@/services/api';
 import CustomAlert from '@/components/CustomAlert';
+import { useTheme } from '@/contexts/ThemeContext';
 
 const { width } = Dimensions.get('window');
 
@@ -45,23 +47,50 @@ type FormErrors = {
 
 
 // Custom Input Component for consistent styling
-const CustomInput = ({ icon, placeholder, value, onChangeText, secureTextEntry = false, keyboardType = 'default', containerStyle }: CustomInputProps) => (
-  <BlurView intensity={30} tint="dark" style={[styles.inputContainer, containerStyle]}>
-    <Ionicons name={icon} size={22} color="rgba(255, 255, 255, 0.7)" style={styles.inputIcon} />
-    <TextInput
-      style={styles.input}
-      placeholder={placeholder}
-      placeholderTextColor="rgba(255, 255, 255, 0.5)"
-      value={value}
-      onChangeText={onChangeText}
-      secureTextEntry={secureTextEntry}
-      keyboardType={keyboardType}
-    />
-  </BlurView>
-);
+const CustomInput = ({ icon, placeholder, value, onChangeText, secureTextEntry = false, keyboardType = 'default', containerStyle }: CustomInputProps) => {
+  const { isLightTheme } = useTheme();
+  const InputContainerComponent = isLightTheme ? View : BlurView;
+
+  return (
+    <InputContainerComponent
+      intensity={30}
+      tint="dark"
+      style={[
+        styles.inputContainer,
+        isLightTheme && {
+          backgroundColor: '#FFFFFF',
+          borderColor: 'rgba(0,0,0,0.08)',
+          shadowColor: '#000',
+          shadowOffset: { width: 0, height: 2 },
+          shadowOpacity: 0.03,
+          shadowRadius: 4,
+          elevation: 1,
+        },
+        containerStyle
+      ]}
+    >
+      <Ionicons
+        name={icon}
+        size={22}
+        color={isLightTheme ? '#666666' : 'rgba(255, 255, 255, 0.7)'}
+        style={styles.inputIcon}
+      />
+      <TextInput
+        style={[styles.input, isLightTheme && { color: '#111111' }]}
+        placeholder={placeholder}
+        placeholderTextColor={isLightTheme ? 'rgba(0,0,0,0.4)' : 'rgba(255, 255, 255, 0.5)'}
+        value={value}
+        onChangeText={onChangeText}
+        secureTextEntry={secureTextEntry}
+        keyboardType={keyboardType}
+      />
+    </InputContainerComponent>
+  );
+};
 
 export default function SignUpDetailsScreen() {
   const router = useRouter();
+  const { isLightTheme } = useTheme();
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
   const [dob, setDob] = useState('');
@@ -145,9 +174,12 @@ export default function SignUpDetailsScreen() {
 
   return (
     <KeyboardAvoidingView
-      style={styles.container}
+      style={[styles.container, isLightTheme && { backgroundColor: '#F8F9FA' }]}
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
-      <LinearGradient colors={['#1D244D', '#02041A', '#1A1D3E']} style={styles.gradientBackground} />
+      <StatusBar barStyle={isLightTheme ? 'dark-content' : 'light-content'} backgroundColor={isLightTheme ? '#F8F9FA' : '#02041A'} />
+      {isLightTheme ? null : (
+        <LinearGradient colors={['#1D244D', '#02041A', '#1A1D3E']} style={styles.gradientBackground} />
+      )}
 
       <CustomAlert
         visible={showSuccessAlert}
@@ -165,10 +197,10 @@ export default function SignUpDetailsScreen() {
 
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
-          <Ionicons name="arrow-back" size={28} color="#FFFFFF" />
+          <Ionicons name="arrow-back" size={28} color={isLightTheme ? '#333333' : '#FFFFFF'} />
         </TouchableOpacity>
-        <Text style={styles.title}>Create Your Account</Text>
-        <Text style={styles.subtitle}>Enter your details to register</Text>
+        <Text style={[styles.title, isLightTheme && { color: '#111111' }]}>Create Your Account</Text>
+        <Text style={[styles.subtitle, isLightTheme && { color: '#666666' }]}>Enter your details to register</Text>
       </View>
 
       <ScrollView 
@@ -189,21 +221,48 @@ export default function SignUpDetailsScreen() {
 
         <View style={styles.rowContainer}>
           <TouchableOpacity 
-            style={[styles.inputContainer, { flex: 1, marginTop: 0, marginRight: 10 }]} 
+            style={[
+              styles.inputContainer, 
+              isLightTheme && {
+                backgroundColor: '#FFFFFF',
+                borderColor: 'rgba(0,0,0,0.08)',
+                shadowColor: '#000',
+                shadowOffset: { width: 0, height: 2 },
+                shadowOpacity: 0.03,
+                shadowRadius: 4,
+                elevation: 1,
+              },
+              { flex: 1, marginTop: 0, marginRight: 10 }
+            ]} 
             onPress={() => setShowDatePicker(true)}
           >
-            <Ionicons name="calendar-outline" size={22} color="rgba(255, 255, 255, 0.7)" style={styles.inputIcon} />
-            <Text style={[styles.input, { paddingVertical: 16, color: (dob ? '#fff' : 'rgba(255, 255, 255, 0.5)') }]}>
+            <Ionicons name="calendar-outline" size={22} color={isLightTheme ? '#666666' : 'rgba(255, 255, 255, 0.7)'} style={styles.inputIcon} />
+            <Text style={[styles.input, { paddingVertical: 16, color: (dob ? (isLightTheme ? '#111111' : '#fff') : (isLightTheme ? 'rgba(0,0,0,0.4)' : 'rgba(255, 255, 255, 0.5)')) }]}>
               {dob ? dob : 'DD-MM-YYYY'}
             </Text>
           </TouchableOpacity>
 
-          <TouchableOpacity style={[styles.inputContainer, { flex: 1, marginTop: 0 }]} onPress={() => setSexModalVisible(true)}>
-            <Ionicons name="person-outline" size={22} color="rgba(255, 255, 255, 0.7)" style={styles.inputIcon} />
-            <Text style={[styles.input, { paddingVertical: 16, color: (sex ? '#fff' : 'rgba(255, 255, 255, 0.5)') }]}>
+          <TouchableOpacity 
+            style={[
+              styles.inputContainer, 
+              isLightTheme && {
+                backgroundColor: '#FFFFFF',
+                borderColor: 'rgba(0,0,0,0.08)',
+                shadowColor: '#000',
+                shadowOffset: { width: 0, height: 2 },
+                shadowOpacity: 0.03,
+                shadowRadius: 4,
+                elevation: 1,
+              },
+              { flex: 1, marginTop: 0 }
+            ]} 
+            onPress={() => setSexModalVisible(true)}
+          >
+            <Ionicons name="person-outline" size={22} color={isLightTheme ? '#666666' : 'rgba(255, 255, 255, 0.7)'} style={styles.inputIcon} />
+            <Text style={[styles.input, { paddingVertical: 16, color: (sex ? (isLightTheme ? '#111111' : '#fff') : (isLightTheme ? 'rgba(0,0,0,0.4)' : 'rgba(255, 255, 255, 0.5)')) }]}>
               {sex ? (sex.charAt(0).toUpperCase() + sex.slice(1)) : 'Sex'}
             </Text>
-            <Ionicons name="chevron-down" size={18} color="#fff" />
+            <Ionicons name="chevron-down" size={18} color={isLightTheme ? '#666666' : '#fff'} />
           </TouchableOpacity>
         </View>
 
@@ -218,24 +277,24 @@ export default function SignUpDetailsScreen() {
             style={styles.checkbox} 
             value={agreedToTerms} 
             onValueChange={setAgreedToTerms} 
-            color={agreedToTerms ? '#4A90E2' : undefined} 
+            color={agreedToTerms ? (isLightTheme ? '#0061A4' : '#4A90E2') : undefined} 
           />
           <View style={styles.checkboxLabelContainer}>
-            <Text style={styles.checkboxLabel}>I agree to the </Text>
+            <Text style={[styles.checkboxLabel, isLightTheme && { color: '#666666' }]}>I agree to the </Text>
             <TouchableOpacity onPress={() => router.push('/terms-of-service')}>
-              <Text style={styles.termsLink}>Terms and Conditions</Text>
+              <Text style={[styles.termsLink, isLightTheme && { color: '#0061A4' }]}>Terms and Conditions</Text>
             </TouchableOpacity>
           </View>
         </View>
 
-        <TouchableOpacity style={styles.registerButton} onPress={handleRegister} disabled={loading}>
-          {loading ? <ActivityIndicator color="#1D244D" /> : <Text style={styles.registerButtonText}>Register</Text>}
+        <TouchableOpacity style={[styles.registerButton, isLightTheme && { backgroundColor: '#0061A4' }]} onPress={handleRegister} disabled={loading}>
+          {loading ? <ActivityIndicator color={isLightTheme ? '#FFFFFF' : '#1D244D'} /> : <Text style={[styles.registerButtonText, isLightTheme && { color: '#FFFFFF' }]}>Register</Text>}
         </TouchableOpacity>
 
         <View style={styles.footer}>
-          <Text style={styles.footerText}>Already have an account? </Text>
+          <Text style={[styles.footerText, isLightTheme && { color: '#666666' }]}>Already have an account? </Text>
           <TouchableOpacity onPress={() => router.push('/(authentication)/signin')}>
-            <Text style={[styles.footerText, styles.footerLink]}>Log In</Text>
+            <Text style={[styles.footerText, styles.footerLink, isLightTheme && { color: '#0061A4' }]}>Log In</Text>
           </TouchableOpacity>
         </View>
       </ScrollView>
@@ -250,37 +309,37 @@ export default function SignUpDetailsScreen() {
       >
         <Pressable style={styles.modalBackdrop} onPress={() => setSexModalVisible(false)} />
         <View style={styles.modalCenter}>
-          <View style={styles.modalCard}>
+          <View style={[styles.modalCard, isLightTheme && { backgroundColor: '#FFFFFF', borderColor: 'rgba(0,0,0,0.06)' }]}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Select Sex</Text>
+              <Text style={[styles.modalTitle, isLightTheme && { color: '#111111' }]}>Select Sex</Text>
               <TouchableOpacity onPress={() => setSexModalVisible(false)}>
-                <Ionicons name="close" size={22} color="#fff" />
+                <Ionicons name="close" size={22} color={isLightTheme ? '#333333' : '#fff'} />
               </TouchableOpacity>
             </View>
 
             <TouchableOpacity
-              style={styles.modalItem}
+              style={[styles.modalItem, isLightTheme && { borderBottomColor: 'rgba(0,0,0,0.05)' }]}
               onPress={() => { setSex(''); setSexModalVisible(false); }}
             >
-              <Text style={styles.modalItemText}>Select</Text>
+              <Text style={[styles.modalItemText, isLightTheme && { color: '#111111' }]}>Select</Text>
             </TouchableOpacity>
             <TouchableOpacity
-              style={styles.modalItem}
+              style={[styles.modalItem, isLightTheme && { borderBottomColor: 'rgba(0,0,0,0.05)' }]}
               onPress={() => { setSex('female'); setSexModalVisible(false); }}
             >
-              <Text style={styles.modalItemText}>Female</Text>
+              <Text style={[styles.modalItemText, isLightTheme && { color: '#111111' }]}>Female</Text>
             </TouchableOpacity>
             <TouchableOpacity
-              style={styles.modalItem}
+              style={[styles.modalItem, isLightTheme && { borderBottomColor: 'rgba(0,0,0,0.05)' }]}
               onPress={() => { setSex('male'); setSexModalVisible(false); }}
             >
-              <Text style={styles.modalItemText}>Male</Text>
+              <Text style={[styles.modalItemText, isLightTheme && { color: '#111111' }]}>Male</Text>
             </TouchableOpacity>
             <TouchableOpacity
-              style={styles.modalItem}
+              style={[styles.modalItem, isLightTheme && { borderBottomColor: 'rgba(0,0,0,0.05)' }]}
               onPress={() => { setSex('other'); setSexModalVisible(false); }}
             >
-              <Text style={styles.modalItemText}>Other / Undisclosed</Text>
+              <Text style={[styles.modalItemText, isLightTheme && { color: '#111111' }]}>Other / Undisclosed</Text>
             </TouchableOpacity>
           </View>
         </View>

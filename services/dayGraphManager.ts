@@ -295,7 +295,7 @@ export function subscribe(
       lastAggregationTime = now;
       const state = getState(deviceId);
       const currentZoom = state.currentZoomIndex; // Use stored zoom index
-      updateDayGraphData(deviceId, currentZoom).catch((error) => {
+      updateDayGraphData(deviceId, currentZoom).catch((error: any) => {
         console.error('[DayGraphManager] Error updating graph data:', error);
       });
     }

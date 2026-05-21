@@ -1,11 +1,12 @@
 import React, { useEffect, useRef } from 'react';
-import { View, Text, ActivityIndicator, StyleSheet, TouchableOpacity } from 'react-native';
+import { View, Text, ActivityIndicator, StyleSheet, TouchableOpacity, StatusBar } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useAuth } from '@/contexts/AuthContext';
 import { useDevice } from '@/contexts/DeviceContext';
 import { useBoot } from '@/contexts/BootContext';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
+import { useTheme } from '@/contexts/ThemeContext';
 
 /**
  * PostLoginResolver - Resolves post-login navigation
@@ -25,6 +26,7 @@ import { Ionicons } from '@expo/vector-icons';
 export default function PostLoginResolver() {
   const router = useRouter();
   const { auth, isPostLoginResolved, setPostLoginResolved } = useAuth();
+  const { isLightTheme } = useTheme();
   const { devices, isLoading: devicesLoading, isOnline, refreshDevices } = useDevice();
   const { onboardingSeen, setupSeen, completeSetup } = useBoot();
   const hasNavigated = useRef(false);
@@ -121,19 +123,26 @@ export default function PostLoginResolver() {
   // Show "No Network" screen when offline AND no cached devices
   if (!isOnline && devices === null && !devicesLoading) {
     return (
-      <View style={styles.container}>
-        <LinearGradient colors={['#1D244D', '#02041A', '#1A1D3E']} style={styles.gradient} />
+      <View style={[styles.container, isLightTheme && { backgroundColor: '#F8F9FA' }]}>
+        <StatusBar barStyle={isLightTheme ? 'dark-content' : 'light-content'} backgroundColor={isLightTheme ? '#F8F9FA' : '#02041A'} />
+        {isLightTheme ? null : (
+          <LinearGradient colors={['#1D244D', '#02041A', '#1A1D3E']} style={styles.gradient} />
+        )}
         <View style={styles.content}>
-          <View style={styles.iconCircle}>
-            <Ionicons name="cloud-offline-outline" size={48} color="#C7B9FF" />
+          <View style={[styles.iconCircle, isLightTheme && { backgroundColor: 'rgba(0, 97, 164, 0.08)' }]}>
+            <Ionicons name="cloud-offline-outline" size={48} color={isLightTheme ? '#0061A4' : '#C7B9FF'} />
           </View>
-          <Text style={styles.title}>No internet connection</Text>
-          <Text style={styles.subtitle}>
+          <Text style={[styles.title, isLightTheme && { color: '#111111' }]}>No internet connection</Text>
+          <Text style={[styles.subtitle, isLightTheme && { color: '#666666' }]}>
             Please check your WiFi or mobile data and try again.
           </Text>
-          <TouchableOpacity style={styles.retryButton} onPress={handleRetry} activeOpacity={0.7}>
-            <Ionicons name="refresh-outline" size={20} color="#1D244D" />
-            <Text style={styles.retryButtonText}>Retry</Text>
+          <TouchableOpacity 
+            style={[styles.retryButton, isLightTheme && { backgroundColor: '#0061A4' }]} 
+            onPress={handleRetry} 
+            activeOpacity={0.7}
+          >
+            <Ionicons name="refresh-outline" size={20} color={isLightTheme ? '#FFFFFF' : '#1D244D'} />
+            <Text style={[styles.retryButtonText, isLightTheme && { color: '#FFFFFF' }]}>Retry</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -142,12 +151,15 @@ export default function PostLoginResolver() {
 
   // Default: Show loader while resolving
   return (
-    <View style={styles.container}>
-      <LinearGradient colors={['#1D244D', '#02041A', '#1A1D3E']} style={styles.gradient} />
+    <View style={[styles.container, isLightTheme && { backgroundColor: '#F8F9FA' }]}>
+      <StatusBar barStyle={isLightTheme ? 'dark-content' : 'light-content'} backgroundColor={isLightTheme ? '#F8F9FA' : '#02041A'} />
+      {isLightTheme ? null : (
+        <LinearGradient colors={['#1D244D', '#02041A', '#1A1D3E']} style={styles.gradient} />
+      )}
       <View style={styles.content}>
-        <ActivityIndicator size="large" color="#C7B9FF" />
-        <Text style={styles.title}>Preparing your workspace...</Text>
-        <Text style={styles.subtitle}>
+        <ActivityIndicator size="large" color={isLightTheme ? '#0061A4' : '#C7B9FF'} />
+        <Text style={[styles.title, isLightTheme && { color: '#111111' }]}>Preparing your workspace...</Text>
+        <Text style={[styles.subtitle, isLightTheme && { color: '#666666' }]}>
           {devicesLoading || devices === null 
             ? 'Loading your devices...' 
             : devices.length === 0 

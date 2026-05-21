@@ -14,6 +14,7 @@ import {
   requestForegroundPermissionsAsync
 } from 'expo-location';
 import { useRouter } from "expo-router";
+import { useTheme } from "@/contexts/ThemeContext";
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -26,6 +27,7 @@ import {
   ScrollView,
   SectionList,
   StyleSheet,
+  StatusBar,
   Text,
   TouchableOpacity,
   UIManager,
@@ -43,6 +45,7 @@ const BLE_TO_BACKEND_DEVICE_ID_KEY = '@slimiot_ble_to_backend_device_id';
 
 export default function ScanScreen() {
   const router = useRouter();
+  const { isLightTheme } = useTheme();
   const { scannedDevices, isScanning, startScan, stopScan, requestPermissions, connectToDevice, connectionStatus } = useBluetooth();
   const { setSelectedDevice, setWifiProvisioningSuccess } = useProvisioning();
   const { devices: contextDevices } = useDevice();
@@ -699,7 +702,63 @@ export default function ScanScreen() {
     const displayName = isConnectedSection ? item.displayName : (registeredDeviceMap.get((item.backendDeviceId ?? bleIdToBackendDeviceId[item.id])?.trim().toUpperCase() ?? (item.id || '').trim().toUpperCase()) ?? item.name ?? 'Unknown Device');
     const isConnecting = isConnectedSection ? (item.bleDevice && connectingDeviceId === item.bleDevice.id) : connectingDeviceId === item.id;
     
-    return (
+    return isLightTheme ? (
+      <View 
+        style={[
+          styles.deviceItemContainer, 
+          { 
+            backgroundColor: '#FFFFFF', 
+            borderColor: '#E5E7EB', 
+            shadowColor: '#000000', 
+            shadowOpacity: 0.03, 
+            shadowRadius: 8, 
+            elevation: 1 
+          }
+        ]}
+      >
+        <View style={styles.deviceInfo}>
+          <View style={styles.deviceIconContainer}>
+            <Ionicons name="hardware-chip-outline" size={24} color="#666666" />
+            <View style={[styles.statusDot, isAvailable ? styles.statusDotOnline : styles.statusDotOffline, { borderColor: '#FFFFFF' }]} />
+          </View>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.scrollContent}
+          >
+            <Text style={[styles.deviceName, { color: '#111111' }]} numberOfLines={1}>{displayName}</Text>
+          </ScrollView>
+        </View>
+        <View style={styles.deviceActions}>
+          {isConnecting ? (
+            <View style={styles.connectingContainer}>
+              <ActivityIndicator size="small" color="#0061A4" />
+              <Text style={[styles.connectingText, { color: '#0061A4' }]}>
+                {retryCount > 0 ? `Retry ${retryCount}/6` : 'Connecting...'}
+              </Text>
+            </View>
+          ) : (
+            <TouchableOpacity 
+              onPress={() => bleDevice && handleConnect(bleDevice, isAvailable)} 
+              style={[
+                styles.connectButton,
+                { backgroundColor: '#0061A4' },
+                !isAvailable && { backgroundColor: '#E5E7EB' }
+              ]}
+              disabled={connectingDeviceId !== null || !isAvailable}
+            >
+              <Text style={[
+                styles.connectButtonText,
+                { color: '#FFFFFF' },
+                !isAvailable && { color: '#9CA3AF' }
+              ]}>
+                Connect
+              </Text>
+            </TouchableOpacity>
+          )}
+        </View>
+      </View>
+    ) : (
       <BlurView intensity={25} tint="dark" style={styles.deviceItemContainer}>
         <View style={styles.deviceInfo}>
           <View style={styles.deviceIconContainer}>
@@ -752,29 +811,33 @@ export default function ScanScreen() {
   // Show loading state while checking Bluetooth and location (on first load or when user taps refresh)
   if (isCheckingBluetooth) {
     return (
-      <SafeAreaView style={styles.container}>
-        <LinearGradient colors={['#1D244D', '#02041A', '#1A1D3E']} style={styles.gradientBackground} />
+      <SafeAreaView style={[styles.container, isLightTheme && { backgroundColor: '#F8F9FA' }]}>
+        <StatusBar barStyle={isLightTheme ? "dark-content" : "light-content"} backgroundColor={isLightTheme ? "#F8F9FA" : "#02041A"} />
+        {isLightTheme ? null : (
+          <LinearGradient colors={['#1D244D', '#02041A', '#1A1D3E']} style={styles.gradientBackground} />
+        )}
         <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color="#4A90E2" />
-          <Text style={styles.loadingText}>Checking Bluetooth and location...</Text>
+          <ActivityIndicator size="large" color={isLightTheme ? '#0061A4' : '#4A90E2'} />
+          <Text style={[styles.loadingText, isLightTheme && { color: '#666666' }]}>Checking Bluetooth and location...</Text>
         </View>
       </SafeAreaView>
     );
   }
 
   return (
-    <SafeAreaView style={styles.container}>
-      <LinearGradient colors={['#1D244D', '#02041A', '#1A1D3E']} style={styles.gradientBackground} />
+    <SafeAreaView style={[styles.container, isLightTheme && { backgroundColor: '#F8F9FA' }]}>
+      <StatusBar barStyle={isLightTheme ? "dark-content" : "light-content"} backgroundColor={isLightTheme ? "#F8F9FA" : "#02041A"} />
+      {isLightTheme ? null : (
+        <LinearGradient colors={['#1D244D', '#02041A', '#1A1D3E']} style={styles.gradientBackground} />
+      )}
       
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.back()} style={styles.headerIconContainer}>
-          <Ionicons name="arrow-back" size={24} color="#FFF" />
+          <Ionicons name="arrow-back" size={24} color={isLightTheme ? '#111111' : '#FFF'} />
         </TouchableOpacity>
-        <Text style={styles.headerText}>Scan for Devices</Text>
+        <Text style={[styles.headerText, isLightTheme && { color: '#111111' }]}>Scan for Devices</Text>
         <View style={styles.headerIconContainer} />
       </View>
-
-
 
       <SectionList
         sections={sections}
@@ -789,7 +852,7 @@ export default function ScanScreen() {
 
           return (
             <View style={[styles.availableHeader, isAvailableDevices && connectedDevicesWithStatus.length > 0 && { marginTop: 20 }]}>
-              <Text style={styles.listHeader}>{title}</Text>
+              <Text style={[styles.listHeader, isLightTheme && { color: '#666666' }]}>{title}</Text>
               {isAvailableDevices && (
                 <View style={styles.scanControls}>
                   {isScanning && (
@@ -809,7 +872,7 @@ export default function ScanScreen() {
                       <Ionicons 
                         name="refresh" 
                         size={22} 
-                        color="#4A90E2"
+                        color={isLightTheme ? '#0061A4' : '#4A90E2'}
                       />
                     </Animated.View>
                   </TouchableOpacity>
@@ -820,7 +883,7 @@ export default function ScanScreen() {
         }}
         ListEmptyComponent={
           <View style={styles.scanningContainer}>
-            <Text style={styles.scanningText}>
+            <Text style={[styles.scanningText, isLightTheme && { color: '#666666' }]}>
               {isScanning ? 'Scanning for Dozemate devices...' : 'No devices found. Tap refresh to scan again.'}
             </Text>
           </View>

@@ -10,12 +10,14 @@ import {
   Platform,
   UIManager,
   Alert,
+  StatusBar,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { BlurView } from 'expo-blur';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useTheme } from '@/contexts/ThemeContext';
 
 // Enable LayoutAnimation for Android
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
@@ -31,6 +33,7 @@ type PreviousDevice = {
 
 export default function ManageDevicesScreen() {
   const router = useRouter();
+  const { isLightTheme } = useTheme();
   const [previousDevices, setPreviousDevices] = useState<PreviousDevice[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -122,64 +125,84 @@ export default function ManageDevicesScreen() {
     );
   };
 
+  const ItemContainer = isLightTheme ? View : BlurView;
+
   const renderDeviceItem = ({ item }: { item: PreviousDevice }) => {
     return (
-      <BlurView intensity={25} tint="dark" style={styles.deviceItemContainer}>
+      <ItemContainer
+        intensity={25}
+        tint="dark"
+        style={[
+          styles.deviceItemContainer,
+          isLightTheme && {
+            backgroundColor: '#FFFFFF',
+            borderColor: '#E5E7EB',
+            shadowColor: '#000',
+            shadowOffset: { width: 0, height: 2 },
+            shadowOpacity: 0.03,
+            shadowRadius: 8,
+            elevation: 1,
+          }
+        ]}
+      >
         <View style={styles.deviceInfo}>
           <View style={styles.deviceIconContainer}>
-            <Ionicons name="hardware-chip-outline" size={24} color="rgba(255, 255, 255, 0.8)" />
+            <Ionicons name="hardware-chip-outline" size={24} color={isLightTheme ? "#0061A4" : "rgba(255, 255, 255, 0.8)"} />
           </View>
           <View style={styles.deviceTextContainer}>
-            <Text style={styles.deviceName} numberOfLines={1}>
+            <Text style={[styles.deviceName, isLightTheme && { color: '#111111' }]} numberOfLines={1}>
               {item.name || 'Unknown Device'}
             </Text>
-            <Text style={styles.deviceId} numberOfLines={1}>
+            <Text style={[styles.deviceId, isLightTheme && { color: '#666666' }]} numberOfLines={1}>
               {item.id}
             </Text>
           </View>
         </View>
         <TouchableOpacity
           onPress={() => handleRemoveDevice(item.id, item.name)}
-          style={styles.removeButton}
+          style={[styles.removeButton, isLightTheme && { backgroundColor: 'rgba(255, 59, 48, 0.08)' }]}
         >
-          <Ionicons name="trash-outline" size={20} color="#FF6B6B" />
+          <Ionicons name="trash-outline" size={20} color={isLightTheme ? "#FF3B30" : "#FF6B6B"} />
         </TouchableOpacity>
-      </BlurView>
+      </ItemContainer>
     );
   };
 
   const renderEmptyState = () => {
     return (
       <View style={styles.emptyContainer}>
-        <Ionicons name="bluetooth-outline" size={64} color="rgba(255, 255, 255, 0.3)" />
-        <Text style={styles.emptyTitle}>No Saved Devices</Text>
-        <Text style={styles.emptySubtitle}>
+        <Ionicons name="bluetooth-outline" size={64} color={isLightTheme ? "rgba(0, 0, 0, 0.2)" : "rgba(255, 255, 255, 0.3)"} />
+        <Text style={[styles.emptyTitle, isLightTheme && { color: '#111111' }]}>No Saved Devices</Text>
+        <Text style={[styles.emptySubtitle, isLightTheme && { color: '#666666' }]}>
           Devices you connect to will appear here
         </Text>
         <TouchableOpacity
-          style={styles.scanButton}
+          style={[styles.scanButton, isLightTheme && { backgroundColor: '#0061A4' }]}
           onPress={() => router.push('/(bluetooth)/ScanScreen')}
         >
-          <Ionicons name="search" size={20} color="#1D244D" />
-          <Text style={styles.scanButtonText}>Scan for Devices</Text>
+          <Ionicons name="search" size={20} color={isLightTheme ? '#FFF' : '#1D244D'} />
+          <Text style={[styles.scanButtonText, isLightTheme && { color: '#FFF' }]}>Scan for Devices</Text>
         </TouchableOpacity>
       </View>
     );
   };
 
   return (
-    <SafeAreaView style={styles.container}>
-      <LinearGradient colors={['#1D244D', '#02041A', '#1A1D3E']} style={styles.gradientBackground} />
+    <SafeAreaView style={[styles.container, isLightTheme && { backgroundColor: '#F8F9FA' }]}>
+      <StatusBar barStyle={isLightTheme ? "dark-content" : "light-content"} backgroundColor={isLightTheme ? "#F8F9FA" : "#02041A"} />
+      {isLightTheme ? null : (
+        <LinearGradient colors={['#1D244D', '#02041A', '#1A1D3E']} style={styles.gradientBackground} />
+      )}
 
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.back()} style={styles.headerIconContainer}>
-          <Ionicons name="arrow-back" size={24} color="#FFF" />
+          <Ionicons name="arrow-back" size={24} color={isLightTheme ? '#111111' : '#FFF'} />
         </TouchableOpacity>
-        <Text style={styles.headerText}>Manage Devices</Text>
+        <Text style={[styles.headerText, isLightTheme && { color: '#111111' }]}>Manage Devices</Text>
         {previousDevices.length > 0 && (
           <TouchableOpacity onPress={handleRemoveAll} style={styles.headerIconContainer}>
-            <Ionicons name="trash-outline" size={24} color="#FF6B6B" />
+            <Ionicons name="trash-outline" size={24} color={isLightTheme ? '#FF3B30' : '#FF6B6B'} />
           </TouchableOpacity>
         )}
         {previousDevices.length === 0 && <View style={styles.headerIconContainer} />}
@@ -188,15 +211,21 @@ export default function ManageDevicesScreen() {
       {/* Content */}
       {isLoading ? (
         <View style={styles.loadingContainer}>
-          <Text style={styles.loadingText}>Loading devices...</Text>
+          <Text style={[styles.loadingText, isLightTheme && { color: '#666666' }]}>Loading devices...</Text>
         </View>
       ) : previousDevices.length === 0 ? (
         renderEmptyState()
       ) : (
         <View style={styles.content}>
-          <View style={styles.infoCard}>
-            <Ionicons name="information-circle-outline" size={20} color="rgba(255, 255, 255, 0.7)" />
-            <Text style={styles.infoText}>
+          <View style={[
+            styles.infoCard,
+            isLightTheme && {
+              backgroundColor: 'rgba(0, 97, 164, 0.06)',
+              borderColor: 'rgba(0, 97, 164, 0.15)',
+            }
+          ]}>
+            <Ionicons name="information-circle-outline" size={20} color={isLightTheme ? '#0061A4' : 'rgba(255, 255, 255, 0.7)'} />
+            <Text style={[styles.infoText, isLightTheme && { color: '#333333' }]}>
               {previousDevices.length} saved device{previousDevices.length !== 1 ? 's' : ''}
             </Text>
           </View>

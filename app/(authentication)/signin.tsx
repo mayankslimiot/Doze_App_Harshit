@@ -18,17 +18,21 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
-  View
+  View,
+  StatusBar,
 } from 'react-native';
 import { GoogleSignin } from '@react-native-google-signin/google-signin';
 import * as AppleAuthentication from 'expo-apple-authentication';
 import CustomAlert from '../../components/CustomAlert';
+import { useTheme } from '@/contexts/ThemeContext';
 
 const { width } = Dimensions.get('window');
 
 export default function SignInScreen() {
   const router = useRouter();
   const { login } = useAuth();
+  const { isLightTheme } = useTheme();
+  const FormContainer = isLightTheme ? View : BlurView;
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [rememberMe, setRememberMe] = useState(true);
@@ -148,14 +152,12 @@ export default function SignInScreen() {
         await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
       }
 
-      // Sign out any previously signed-in account to force account picker
+      // Revoke access and sign out of any previously signed-in account to force the account picker and consent screen
       try {
-        if (GoogleSignin.hasPreviousSignIn()) {
-          await GoogleSignin.signOut();
-        }
-      } catch (signOutError) {
-        // Ignore sign out errors (might not be signed in)
-        console.log('No previous sign-in to clear');
+        await GoogleSignin.revokeAccess();
+        await GoogleSignin.signOut();
+      } catch (err) {
+        console.log('No previous sign-in to revoke or clear');
       }
 
       // Now sign in - this will show the account picker
@@ -277,12 +279,15 @@ export default function SignInScreen() {
   return (
     <KeyboardAvoidingView
       behavior={Platform.OS === "ios" ? "padding" : "height"}
-      style={styles.container}
+      style={[styles.container, isLightTheme && { backgroundColor: '#F8F9FA' }]}
     >
-      <LinearGradient
-        colors={['#1D244D', '#02041A', '#1A1D3E']}
-        style={styles.gradientBackground}
-      />
+      <StatusBar barStyle={isLightTheme ? 'dark-content' : 'light-content'} backgroundColor={isLightTheme ? '#F8F9FA' : '#02041A'} />
+      {isLightTheme ? null : (
+        <LinearGradient
+          colors={['#1D244D', '#02041A', '#1A1D3E']}
+          style={styles.gradientBackground}
+        />
+      )}
 
       <CustomAlert
         visible={isModalVisible}
@@ -293,7 +298,7 @@ export default function SignInScreen() {
 
       <ScrollView contentContainerStyle={styles.scrollContainer}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
-          <Ionicons name="arrow-back" size={28} color="#FFFFFF" />
+          <Ionicons name="arrow-back" size={28} color={isLightTheme ? '#333333' : '#FFFFFF'} />
         </TouchableOpacity>
 
         <Image
@@ -302,17 +307,46 @@ export default function SignInScreen() {
           resizeMode="contain"
         />
 
-        <Text style={styles.title}>Welcome Back!</Text>
-        <Text style={styles.subtitle}>Log in to continue your journey.</Text>
+        <Text style={[styles.title, isLightTheme && { color: '#111111' }]}>Welcome Back!</Text>
+        <Text style={[styles.subtitle, isLightTheme && { color: '#666666' }]}>Log in to continue your journey.</Text>
 
-        <BlurView intensity={25} tint="dark" style={styles.formContainer}>
+        <FormContainer
+          intensity={25}
+          tint="dark"
+          style={[
+            styles.formContainer,
+            isLightTheme && {
+              backgroundColor: '#FFFFFF',
+              borderColor: 'rgba(0,0,0,0.06)',
+              shadowColor: '#000',
+              shadowOffset: { width: 0, height: 4 },
+              shadowOpacity: 0.05,
+              shadowRadius: 10,
+              elevation: 2,
+            }
+          ]}
+        >
           {/* Email Input */}
-          <View style={styles.inputContainer}>
-            <MaterialCommunityIcons name="email-outline" size={22} color="rgba(255,255,255,0.7)" style={styles.icon} />
+          <View
+            style={[
+              styles.inputContainer,
+              isLightTheme && {
+                backgroundColor: '#FFFFFF',
+                borderWidth: 1,
+                borderColor: 'rgba(0, 0, 0, 0.08)',
+                shadowColor: '#000',
+                shadowOffset: { width: 0, height: 2 },
+                shadowOpacity: 0.03,
+                shadowRadius: 4,
+                elevation: 1,
+              }
+            ]}
+          >
+            <MaterialCommunityIcons name="email-outline" size={22} color={isLightTheme ? '#666666' : 'rgba(255,255,255,0.7)'} style={styles.icon} />
             <TextInput
-              style={styles.input}
+              style={[styles.input, isLightTheme && { color: '#111111' }]}
               placeholder="Email or Username"
-              placeholderTextColor="rgba(255,255,255,0.5)"
+              placeholderTextColor={isLightTheme ? 'rgba(0,0,0,0.4)' : 'rgba(255,255,255,0.5)'}
               value={email}
               onChangeText={setEmail}
               keyboardType="email-address"
@@ -321,52 +355,80 @@ export default function SignInScreen() {
           </View>
 
           {/* Password Input */}
-          <View style={styles.inputContainer}>
-            <MaterialCommunityIcons name="lock-outline" size={22} color="rgba(255,255,255,0.7)" style={styles.icon} />
+          <View
+            style={[
+              styles.inputContainer,
+              isLightTheme && {
+                backgroundColor: '#FFFFFF',
+                borderWidth: 1,
+                borderColor: 'rgba(0, 0, 0, 0.08)',
+                shadowColor: '#000',
+                shadowOffset: { width: 0, height: 2 },
+                shadowOpacity: 0.03,
+                shadowRadius: 4,
+                elevation: 1,
+              }
+            ]}
+          >
+            <MaterialCommunityIcons name="lock-outline" size={22} color={isLightTheme ? '#666666' : 'rgba(255,255,255,0.7)'} style={styles.icon} />
             <TextInput
-              style={styles.input}
+              style={[styles.input, isLightTheme && { color: '#111111' }]}
               placeholder="Password"
-              placeholderTextColor="rgba(255,255,255,0.5)"
+              placeholderTextColor={isLightTheme ? 'rgba(0,0,0,0.4)' : 'rgba(255,255,255,0.5)'}
               value={password}
               onChangeText={setPassword}
               secureTextEntry={!isPasswordVisible}
             />
             <TouchableOpacity onPress={() => setIsPasswordVisible(!isPasswordVisible)}>
-              <Ionicons name={isPasswordVisible ? "eye-off-outline" : "eye-outline"} size={24} color="rgba(255,255,255,0.7)" />
+              <Ionicons name={isPasswordVisible ? "eye-off-outline" : "eye-outline"} size={24} color={isLightTheme ? '#666666' : "rgba(255,255,255,0.7)"} />
             </TouchableOpacity>
           </View>
 
           <View style={styles.optionsContainer}>
             <TouchableOpacity style={styles.checkboxContainer} onPress={() => setRememberMe(!rememberMe)}>
-              <MaterialCommunityIcons name={rememberMe ? 'checkbox-marked' : 'checkbox-blank-outline'} size={24} color="#FFFFFF" />
-              <Text style={styles.checkboxLabel}>Remember Me</Text>
+              <MaterialCommunityIcons
+                name={rememberMe ? 'checkbox-marked' : 'checkbox-blank-outline'}
+                size={24}
+                color={isLightTheme ? (rememberMe ? '#0061A4' : '#666666') : '#FFFFFF'}
+              />
+              <Text style={[styles.checkboxLabel, isLightTheme && { color: '#666666' }]}>Remember Me</Text>
             </TouchableOpacity>
           </View>
 
-          <TouchableOpacity style={styles.signInButton} onPress={handleSignIn} disabled={isEmailLoading || isGoogleLoading}>
+          <TouchableOpacity
+            style={[styles.signInButton, isLightTheme && { backgroundColor: '#0061A4' }]}
+            onPress={handleSignIn}
+            disabled={isEmailLoading || isGoogleLoading}
+          >
             {isEmailLoading ? (
-              <ActivityIndicator size="small" color="#1D244D" />
+              <ActivityIndicator size="small" color={isLightTheme ? '#FFFFFF' : '#1D244D'} />
             ) : (
-              <Text style={styles.signInButtonText}>Log In</Text>
+              <Text style={[styles.signInButtonText, isLightTheme && { color: '#FFFFFF' }]}>Log In</Text>
             )}
           </TouchableOpacity>
 
           {/* Divider */}
           <View style={styles.dividerContainer}>
-            <View style={styles.divider} />
-            <Text style={styles.dividerText}>or</Text>
-            <View style={styles.divider} />
+            <View style={[styles.divider, isLightTheme && { backgroundColor: 'rgba(0, 0, 0, 0.1)' }]} />
+            <Text style={[styles.dividerText, isLightTheme && { color: '#666666' }]}>or</Text>
+            <View style={[styles.divider, isLightTheme && { backgroundColor: 'rgba(0, 0, 0, 0.1)' }]} />
           </View>
 
           {/* Social Login Button - Platform Specific */}
           {Platform.OS === 'android' && (
             <TouchableOpacity
-              style={styles.socialButton}
+              style={[
+                styles.socialButton,
+                isLightTheme && {
+                  backgroundColor: '#FFFFFF',
+                  borderColor: 'rgba(0, 0, 0, 0.15)',
+                }
+              ]}
               onPress={handleGoogleSignIn}
               disabled={isEmailLoading || isGoogleLoading}
             >
               {isGoogleLoading ? (
-                <ActivityIndicator size="small" color="#FFFFFF" />
+                <ActivityIndicator size="small" color={isLightTheme ? '#000000' : '#FFFFFF'} />
               ) : (
                 <>
                   <Image
@@ -374,33 +436,39 @@ export default function SignInScreen() {
                     style={styles.googleIcon}
                     resizeMode="contain"
                   />
-                  <Text style={styles.socialButtonText}>Continue with Google</Text>
+                  <Text style={[styles.socialButtonText, isLightTheme && { color: '#111111' }]}>Continue with Google</Text>
                 </>
               )}
             </TouchableOpacity>
           )}
           {Platform.OS === 'ios' && (
             <TouchableOpacity
-              style={styles.socialButton}
+              style={[
+                styles.socialButton,
+                isLightTheme && {
+                  backgroundColor: '#FFFFFF',
+                  borderColor: 'rgba(0, 0, 0, 0.15)',
+                }
+              ]}
               onPress={handleAppleSignIn}
               disabled={isEmailLoading || isAppleLoading}
             >
               {isAppleLoading ? (
-                <ActivityIndicator size="small" color="#FFFFFF" />
+                <ActivityIndicator size="small" color={isLightTheme ? '#000000' : '#FFFFFF'} />
               ) : (
                 <>
-                  <Ionicons name="logo-apple" size={22} color="#FFFFFF" />
-                  <Text style={styles.socialButtonText}>Continue with Apple</Text>
+                  <Ionicons name="logo-apple" size={22} color={isLightTheme ? '#000000' : '#FFFFFF'} />
+                  <Text style={[styles.socialButtonText, isLightTheme && { color: '#111111' }]}>Continue with Apple</Text>
                 </>
               )}
             </TouchableOpacity>
           )}
-        </BlurView>
+        </FormContainer>
 
         <View style={styles.forgotPasswordContainer}>
-          <Text style={styles.forgotPasswordLabel}>Don't remember the password? </Text>
+          <Text style={[styles.forgotPasswordLabel, isLightTheme && { color: '#666666' }]}>Don't remember the password? </Text>
           <TouchableOpacity onPress={() => router.push('/(authentication)/forgotpassword')}>
-            <Text style={styles.forgotPasswordText}>Forgot Password</Text>
+            <Text style={[styles.forgotPasswordText, isLightTheme && { color: '#0061A4' }]}>Forgot Password</Text>
           </TouchableOpacity>
         </View>
       </ScrollView>

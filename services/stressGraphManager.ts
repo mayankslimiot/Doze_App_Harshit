@@ -388,7 +388,7 @@ export function subscribe(
     // Buffer updated - trigger graph data update if we have points
     if (points.length > 0) {
       lastUpdateTime = now;
-      updateStressGraphData(deviceId).catch((error) => {
+      updateStressGraphData(deviceId).catch((error: any) => {
         console.error('[StressGraphManager] Error updating graph data:', error);
       });
     }

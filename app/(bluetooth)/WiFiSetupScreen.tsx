@@ -9,6 +9,7 @@ import { BlurView } from "expo-blur";
 import { LinearGradient } from "expo-linear-gradient";
 import * as Location from "expo-location";
 import { useRouter, usePathname } from "expo-router";
+import { useTheme } from "@/contexts/ThemeContext";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -18,6 +19,7 @@ import {
   SafeAreaView,
   ScrollView,
   StyleSheet,
+  StatusBar,
   Text,
   TextInput,
   TouchableOpacity,
@@ -42,6 +44,7 @@ export default function WiFiSetupScreen() {
   const { connectedDevice, connectionStatus } = useBluetooth();
   const { devices: contextDevices } = useDevice();
   const router = useRouter();
+  const { isLightTheme } = useTheme();
   const pathname = usePathname();
 
   const [bleIdToBackendDeviceId, setBleIdToBackendDeviceId] = useState<Record<string, string>>({});
@@ -513,11 +516,14 @@ export default function WiFiSetupScreen() {
 
   return (
     <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
-      <SafeAreaView style={styles.container}>
-        <LinearGradient
-          colors={["#1D244D", "#02041A", "#1A1D3E"]}
-          style={styles.gradientBackground}
-        />
+      <SafeAreaView style={[styles.container, isLightTheme && { backgroundColor: '#F8F9FA' }]}>
+        <StatusBar barStyle={isLightTheme ? "dark-content" : "light-content"} backgroundColor={isLightTheme ? "#F8F9FA" : "#02041A"} />
+        {isLightTheme ? null : (
+          <LinearGradient
+            colors={["#1D244D", "#02041A", "#1A1D3E"]}
+            style={styles.gradientBackground}
+          />
+        )}
 
         {/* Header */}
         <View style={styles.header}>
@@ -525,9 +531,9 @@ export default function WiFiSetupScreen() {
             onPress={() => router.back()}
             style={styles.headerIconContainer}
           >
-            <Ionicons name="arrow-back" size={24} color="#FFF" />
+            <Ionicons name="arrow-back" size={24} color={isLightTheme ? "#111111" : "#FFF"} />
           </TouchableOpacity>
-          <Text style={styles.headerText}>Wi-Fi Setup</Text>
+          <Text style={[styles.headerText, isLightTheme && { color: "#111111" }]}>Wi-Fi Setup</Text>
           <View style={styles.headerIconContainer} />
         </View>
 
@@ -535,34 +541,66 @@ export default function WiFiSetupScreen() {
         <View style={styles.content}>
           {/* Device Info Card */}
           {selectedDevice && (
-            <BlurView intensity={25} tint="dark" style={styles.deviceCard}>
-              <View style={styles.deviceCardHeader}>
-                <View style={styles.deviceIconWithStatus}>
-                  <Ionicons name="hardware-chip" size={32} color="#4A90E2" />
-                  <View style={[
-                    styles.connectionStatusDot,
-                    connectionStatus === 'connected' && styles.statusConnected,
-                    connectionStatus === 'connecting' && styles.statusConnecting,
-                    connectionStatus === 'disconnected' && styles.statusDisconnected,
-                  ]} />
-                </View>
-                <View style={styles.deviceCardInfo}>
-                  <Text style={styles.deviceCardTitle}>Connected Device</Text>
-                  <Text style={styles.deviceCardName}>
-                    {deviceDisplayName}
-                  </Text>
-                  <Text style={styles.connectionStatus}>
-                    Status: {connectionStatusText}
-                  </Text>
+            isLightTheme ? (
+              <View style={[styles.deviceCard, { backgroundColor: "#FFFFFF", borderColor: "#E5E7EB", shadowColor: "#000000", shadowOpacity: 0.03, shadowRadius: 8, elevation: 1 }]}>
+                <View style={styles.deviceCardHeader}>
+                  <View style={styles.deviceIconWithStatus}>
+                    <Ionicons name="hardware-chip" size={32} color="#0061A4" />
+                    <View style={[
+                      styles.connectionStatusDot,
+                      connectionStatus === 'connected' && styles.statusConnected,
+                      connectionStatus === 'connecting' && styles.statusConnecting,
+                      connectionStatus === 'disconnected' && styles.statusDisconnected,
+                      { borderColor: "#FFFFFF" }
+                    ]} />
+                  </View>
+                  <View style={styles.deviceCardInfo}>
+                    <Text style={[styles.deviceCardTitle, { color: "#666666" }]}>Connected Device</Text>
+                    <Text style={[styles.deviceCardName, { color: "#111111" }]}>
+                      {deviceDisplayName}
+                    </Text>
+                    <Text style={[styles.connectionStatus, { color: "#666666" }]}>
+                      Status: {connectionStatusText}
+                    </Text>
+                  </View>
                 </View>
               </View>
-            </BlurView>
+            ) : (
+              <BlurView intensity={25} tint="dark" style={styles.deviceCard}>
+                <View style={styles.deviceCardHeader}>
+                  <View style={styles.deviceIconWithStatus}>
+                    <Ionicons name="hardware-chip" size={32} color="#4A90E2" />
+                    <View style={[
+                      styles.connectionStatusDot,
+                      connectionStatus === 'connected' && styles.statusConnected,
+                      connectionStatus === 'connecting' && styles.statusConnecting,
+                      connectionStatus === 'disconnected' && styles.statusDisconnected,
+                    ]} />
+                  </View>
+                  <View style={styles.deviceCardInfo}>
+                    <Text style={styles.deviceCardTitle}>Connected Device</Text>
+                    <Text style={styles.deviceCardName}>
+                      {deviceDisplayName}
+                    </Text>
+                    <Text style={styles.connectionStatus}>
+                      Status: {connectionStatusText}
+                    </Text>
+                  </View>
+                </View>
+              </BlurView>
+            )
           )}
 
           {/* Instructions */}
-          <View style={styles.instructionsContainer}>
-            <Ionicons name="information-circle-outline" size={24} color="rgba(255, 255, 255, 0.7)" />
-            <Text style={styles.instructionsText}>
+          <View style={[
+            styles.instructionsContainer,
+            isLightTheme && {
+              backgroundColor: "rgba(0, 97, 164, 0.06)",
+              borderColor: "rgba(0, 97, 164, 0.15)",
+            }
+          ]}>
+            <Ionicons name="information-circle-outline" size={24} color={isLightTheme ? "#0061A4" : "rgba(255, 255, 255, 0.7)"} />
+            <Text style={[styles.instructionsText, isLightTheme && { color: "#333333" }]}>
               Enter your Wi-Fi network credentials to connect your device to the internet.
             </Text>
           </View>
@@ -570,81 +608,141 @@ export default function WiFiSetupScreen() {
           {/* SSID Input */}
           <View style={styles.inputContainer}>
             <View style={styles.labelWithButton}>
-              <Text style={styles.inputLabel}>Wi-Fi Network (SSID)</Text>
+              <Text style={[styles.inputLabel, isLightTheme && { color: "#333333" }]}>Wi-Fi Network (SSID)</Text>
               <TouchableOpacity
                 onPress={handleScanNetworks}
-                style={styles.scanButton}
+                style={[
+                  styles.scanButton,
+                  isLightTheme && {
+                    backgroundColor: "rgba(0, 97, 164, 0.08)",
+                    borderColor: "rgba(0, 97, 164, 0.2)",
+                  }
+                ]}
                 disabled={isSending || isScanning}
               >
                 {isScanning ? (
-                  <ActivityIndicator size="small" color="#4A90E2" />
+                  <ActivityIndicator size="small" color={isLightTheme ? "#0061A4" : "#4A90E2"} />
                 ) : (
                   <>
-                    <Ionicons name="search" size={16} color="#4A90E2" />
-                    <Text style={styles.scanButtonText}>Scan Networks</Text>
+                    <Ionicons name="search" size={16} color={isLightTheme ? "#0061A4" : "#4A90E2"} />
+                    <Text style={[styles.scanButtonText, isLightTheme && { color: "#0061A4" }]}>Scan Networks</Text>
                   </>
                 )}
               </TouchableOpacity>
             </View>
-            <BlurView intensity={20} tint="dark" style={styles.inputWrapper}>
-              <Ionicons
-                name="wifi"
-                size={20}
-                color="rgba(255, 255, 255, 0.6)"
-                style={styles.inputIcon}
-              />
-              <TextInput
-                value={wifiSSID}
-                onChangeText={setWifiSSID}
-                placeholder="Enter network name"
-                placeholderTextColor="rgba(255, 255, 255, 0.4)"
-                style={styles.textInput}
-                autoCapitalize="none"
-                autoCorrect={false}
-                editable={!isSending}
-              />
-            </BlurView>
+            {isLightTheme ? (
+              <View style={[styles.inputWrapper, { backgroundColor: "#FFFFFF", borderColor: "#E5E7EB" }]}>
+                <Ionicons
+                  name="wifi"
+                  size={20}
+                  color="#666666"
+                  style={styles.inputIcon}
+                />
+                <TextInput
+                  value={wifiSSID}
+                  onChangeText={setWifiSSID}
+                  placeholder="Enter network name"
+                  placeholderTextColor="#9CA3AF"
+                  style={[styles.textInput, { color: "#111111" }]}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  editable={!isSending}
+                />
+              </View>
+            ) : (
+              <BlurView intensity={20} tint="dark" style={styles.inputWrapper}>
+                <Ionicons
+                  name="wifi"
+                  size={20}
+                  color="rgba(255, 255, 255, 0.6)"
+                  style={styles.inputIcon}
+                />
+                <TextInput
+                  value={wifiSSID}
+                  onChangeText={setWifiSSID}
+                  placeholder="Enter network name"
+                  placeholderTextColor="rgba(255, 255, 255, 0.4)"
+                  style={styles.textInput}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  editable={!isSending}
+                />
+              </BlurView>
+            )}
           </View>
 
           {/* Password Input */}
           <View style={styles.inputContainer}>
-            <Text style={styles.inputLabel}>Wi-Fi Password</Text>
-            <BlurView intensity={20} tint="dark" style={styles.inputWrapper}>
-              <Ionicons
-                name="lock-closed"
-                size={20}
-                color="rgba(255, 255, 255, 0.6)"
-                style={styles.inputIcon}
-              />
-              <TextInput
-                value={wifiPassword}
-                onChangeText={setWifiPassword}
-                placeholder="Enter password"
-                placeholderTextColor="rgba(255, 255, 255, 0.4)"
-                secureTextEntry={!showPassword}
-                style={[styles.textInput, { flex: 1 }]}
-                autoCapitalize="none"
-                autoCorrect={false}
-                editable={!isSending}
-              />
-              <TouchableOpacity
-                onPress={() => setShowPassword(!showPassword)}
-                style={styles.eyeButton}
-                disabled={isSending}
-              >
+            <Text style={[styles.inputLabel, isLightTheme && { color: "#333333" }]}>Wi-Fi Password</Text>
+            {isLightTheme ? (
+              <View style={[styles.inputWrapper, { backgroundColor: "#FFFFFF", borderColor: "#E5E7EB" }]}>
                 <Ionicons
-                  name={showPassword ? "eye-off" : "eye"}
+                  name="lock-closed"
+                  size={20}
+                  color="#666666"
+                  style={styles.inputIcon}
+                />
+                <TextInput
+                  value={wifiPassword}
+                  onChangeText={setWifiPassword}
+                  placeholder="Enter password"
+                  placeholderTextColor="#9CA3AF"
+                  secureTextEntry={!showPassword}
+                  style={[styles.textInput, { flex: 1, color: "#111111" }]}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  editable={!isSending}
+                />
+                <TouchableOpacity
+                  onPress={() => setShowPassword(!showPassword)}
+                  style={styles.eyeButton}
+                  disabled={isSending}
+                >
+                  <Ionicons
+                    name={showPassword ? "eye-off" : "eye"}
+                    size={20}
+                    color="#666666"
+                  />
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <BlurView intensity={20} tint="dark" style={styles.inputWrapper}>
+                <Ionicons
+                  name="lock-closed"
                   size={20}
                   color="rgba(255, 255, 255, 0.6)"
+                  style={styles.inputIcon}
                 />
-              </TouchableOpacity>
-            </BlurView>
+                <TextInput
+                  value={wifiPassword}
+                  onChangeText={setWifiPassword}
+                  placeholder="Enter password"
+                  placeholderTextColor="rgba(255, 255, 255, 0.4)"
+                  secureTextEntry={!showPassword}
+                  style={[styles.textInput, { flex: 1 }]}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  editable={!isSending}
+                />
+                <TouchableOpacity
+                  onPress={() => setShowPassword(!showPassword)}
+                  style={styles.eyeButton}
+                  disabled={isSending}
+                >
+                  <Ionicons
+                    name={showPassword ? "eye-off" : "eye"}
+                    size={20}
+                    color="rgba(255, 255, 255, 0.6)"
+                  />
+                </TouchableOpacity>
+              </BlurView>
+            )}
           </View>
 
           {/* Security Note */}
           <View style={styles.securityNote}>
-            <Ionicons name="shield-checkmark" size={18} color="#4A90E2" />
-            <Text style={styles.securityText}>
+            <Ionicons name="shield-checkmark" size={18} color={isLightTheme ? "#0061A4" : "#4A90E2"} />
+            <Text style={[styles.securityText, isLightTheme && { color: "#666666" }]}>
               Your credentials are transmitted securely via Bluetooth
             </Text>
           </View>
@@ -654,19 +752,20 @@ export default function WiFiSetupScreen() {
             onPress={handleSend}
             style={[
               styles.sendButton,
+              isLightTheme && { backgroundColor: "#0061A4", shadowColor: "#0061A4", shadowOpacity: 0.15 },
               isSending && styles.sendButtonDisabled,
             ]}
             disabled={isSending}
           >
             {isSending ? (
               <View style={styles.sendingContainer}>
-                <ActivityIndicator size="small" color="#1D244D" />
-                <Text style={styles.sendButtonText}>Sending...</Text>
+                <ActivityIndicator size="small" color={isLightTheme ? "#FFFFFF" : "#1D244D"} />
+                <Text style={[styles.sendButtonText, isLightTheme && { color: "#FFFFFF" }]}>Sending...</Text>
               </View>
             ) : (
               <>
-                <Text style={styles.sendButtonText}>Send to Device</Text>
-                <Ionicons name="arrow-forward" size={20} color="#1D244D" />
+                <Text style={[styles.sendButtonText, isLightTheme && { color: "#FFFFFF" }]}>Send to Device</Text>
+                <Ionicons name="arrow-forward" size={20} color={isLightTheme ? "#FFFFFF" : "#1D244D"} />
               </>
             )}
           </TouchableOpacity>
@@ -678,6 +777,7 @@ export default function WiFiSetupScreen() {
           title={alertTitle}
           message={alertMessage}
           buttons={alertButtons}
+          isLight={isLightTheme}
           onClose={() => {
             setShowAlert(false);
             // Reset the flag when alert is closed
@@ -689,94 +789,179 @@ export default function WiFiSetupScreen() {
         {showNetworkPicker && (
           <View style={styles.modalOverlay}>
             <TouchableWithoutFeedback onPress={() => setShowNetworkPicker(false)}>
-              <View style={styles.modalBackdrop} />
+              <View style={[styles.modalBackdrop, isLightTheme && { backgroundColor: "rgba(0, 0, 0, 0.4)" }]} />
             </TouchableWithoutFeedback>
             <View style={styles.modalContainer}>
-                  <LinearGradient
-                    colors={["#1D244D", "#02041A", "#1A1D3E"]}
-                    style={styles.modalGradient}
-                  >
-                    {/* Modal Header */}
-                    <View style={styles.modalHeader}>
-                      <Text style={styles.modalTitle}>Available Networks</Text>
-                      <TouchableOpacity
-                        onPress={() => setShowNetworkPicker(false)}
-                        style={styles.modalCloseButton}
-                      >
-                        <Ionicons name="close" size={24} color="#FFF" />
-                      </TouchableOpacity>
-                    </View>
+                  {isLightTheme ? (
+                    <View style={[styles.modalGradient, { backgroundColor: "#FFFFFF" }]}>
+                      {/* Modal Header */}
+                      <View style={styles.modalHeader}>
+                        <Text style={[styles.modalTitle, { color: "#111111" }]}>Available Networks</Text>
+                        <TouchableOpacity
+                          onPress={() => setShowNetworkPicker(false)}
+                          style={styles.modalCloseButton}
+                        >
+                          <Ionicons name="close" size={24} color="#111111" />
+                        </TouchableOpacity>
+                      </View>
 
-                    {/* Networks List */}
-                    <ScrollView style={styles.networksList}>
-                      {availableNetworks.length === 0 ? (
-                        <View style={styles.emptyContainer}>
-                          <Ionicons name="wifi-outline" size={48} color="rgba(255, 255, 255, 0.3)" />
-                          <Text style={styles.emptyText}>No networks found</Text>
-                        </View>
-                      ) : (
-                        availableNetworks.map((network, index) => (
-                          <TouchableOpacity
-                            key={`${network.ssid}-${index}`}
-                            onPress={() => handleSelectNetwork(network)}
-                            style={styles.networkItem}
-                          >
-                            <BlurView intensity={25} tint="dark" style={styles.networkItemBlur}>
-                              <View style={styles.networkItemContent}>
-                                <Ionicons 
-                                  name={network.capabilities && /(WPA|WEP)/i.test(network.capabilities) ? "lock-closed" : "wifi"} 
-                                  size={24} 
-                                  color="#4A90E2" 
-                                />
-                                <View style={styles.networkInfo}>
-                                  <Text style={styles.networkName}>{network.ssid}</Text>
-                                  {network.capabilities && (
-                                    <Text style={styles.networkCapabilities}>
-                                      {network.capabilities.replace(/\[|\]/g, '').split('-').slice(0, 2).join(' • ')}
-                                    </Text>
+                      {/* Networks List */}
+                      <ScrollView style={styles.networksList}>
+                        {availableNetworks.length === 0 ? (
+                          <View style={styles.emptyContainer}>
+                            <Ionicons name="wifi-outline" size={48} color="#9CA3AF" />
+                            <Text style={[styles.emptyText, { color: "#666666" }]}>No networks found</Text>
+                          </View>
+                        ) : (
+                          availableNetworks.map((network, index) => (
+                            <TouchableOpacity
+                              key={`${network.ssid}-${index}`}
+                              onPress={() => handleSelectNetwork(network)}
+                              style={styles.networkItem}
+                            >
+                              <View style={[styles.networkItemBlur, { backgroundColor: "#F9FAFB", borderColor: "#E5E7EB" }]}>
+                                <View style={styles.networkItemContent}>
+                                  <Ionicons 
+                                    name={network.capabilities && /(WPA|WEP)/i.test(network.capabilities) ? "lock-closed" : "wifi"} 
+                                    size={24} 
+                                    color="#0061A4" 
+                                  />
+                                  <View style={styles.networkInfo}>
+                                    <Text style={[styles.networkName, { color: "#111111" }]}>{network.ssid}</Text>
+                                    {network.capabilities && (
+                                      <Text style={[styles.networkCapabilities, { color: "#666666" }]}>
+                                        {network.capabilities.replace(/\[|\]/g, '').split('-').slice(0, 2).join(' • ')}
+                                      </Text>
+                                    )}
+                                  </View>
+                                  {network.level && (
+                                    <View style={styles.signalStrength}>
+                                      <Ionicons 
+                                        name={
+                                          network.level > -50 ? "cellular" : 
+                                          network.level > -70 ? "cellular-outline" : 
+                                          "cellular-outline"
+                                        } 
+                                        size={20} 
+                                        color={
+                                          network.level > -50 ? "#4CAF50" : 
+                                          network.level > -70 ? "#FFC107" : 
+                                          "#F44336"
+                                        } 
+                                      />
+                                      <Text style={[styles.signalText, { color: "#666666" }]}>{network.level} dBm</Text>
+                                    </View>
                                   )}
                                 </View>
-                                {network.level && (
-                                  <View style={styles.signalStrength}>
-                                    <Ionicons 
-                                      name={
-                                        network.level > -50 ? "cellular" : 
-                                        network.level > -70 ? "cellular-outline" : 
-                                        "cellular-outline"
-                                      } 
-                                      size={20} 
-                                      color={
-                                        network.level > -50 ? "#4CAF50" : 
-                                        network.level > -70 ? "#FFC107" : 
-                                        "#F44336"
-                                      } 
-                                    />
-                                    <Text style={styles.signalText}>{network.level} dBm</Text>
-                                  </View>
-                                )}
                               </View>
-                            </BlurView>
-                          </TouchableOpacity>
-                        ))
-                      )}
-                    </ScrollView>
+                            </TouchableOpacity>
+                          ))
+                        )}
+                      </ScrollView>
 
-                    {/* Rescan Button */}
-                    <TouchableOpacity
-                      onPress={handleScanNetworks}
-                      style={styles.rescanButton}
-                      disabled={isScanning}
+                      {/* Rescan Button */}
+                      <TouchableOpacity
+                        onPress={handleScanNetworks}
+                        style={[styles.rescanButton, { backgroundColor: "#0061A4" }]}
+                        disabled={isScanning}
+                      >
+                        {isScanning ? (
+                          <ActivityIndicator size="small" color="#FFFFFF" />
+                        ) : (
+                          <>
+                            <Ionicons name="refresh" size={20} color="#FFFFFF" />
+                            <Text style={[styles.rescanButtonText, { color: "#FFFFFF" }]}>Rescan</Text>
+                          </>
+                        )}
+                      </TouchableOpacity>
+                    </View>
+                  ) : (
+                    <LinearGradient
+                      colors={["#1D244D", "#02041A", "#1A1D3E"]}
+                      style={styles.modalGradient}
                     >
-                      {isScanning ? (
-                        <ActivityIndicator size="small" color="#1D244D" />
-                      ) : (
-                        <>
-                          <Ionicons name="refresh" size={20} color="#1D244D" />
-                          <Text style={styles.rescanButtonText}>Rescan</Text>
-                        </>
-                      )}
-                    </TouchableOpacity>
-                  </LinearGradient>
+                      {/* Modal Header */}
+                      <View style={styles.modalHeader}>
+                        <Text style={styles.modalTitle}>Available Networks</Text>
+                        <TouchableOpacity
+                          onPress={() => setShowNetworkPicker(false)}
+                          style={styles.modalCloseButton}
+                        >
+                          <Ionicons name="close" size={24} color="#FFF" />
+                        </TouchableOpacity>
+                      </View>
+
+                      {/* Networks List */}
+                      <ScrollView style={styles.networksList}>
+                        {availableNetworks.length === 0 ? (
+                          <View style={styles.emptyContainer}>
+                            <Ionicons name="wifi-outline" size={48} color="rgba(255, 255, 255, 0.3)" />
+                            <Text style={styles.emptyText}>No networks found</Text>
+                          </View>
+                        ) : (
+                          availableNetworks.map((network, index) => (
+                            <TouchableOpacity
+                              key={`${network.ssid}-${index}`}
+                              onPress={() => handleSelectNetwork(network)}
+                              style={styles.networkItem}
+                            >
+                              <BlurView intensity={25} tint="dark" style={styles.networkItemBlur}>
+                                <View style={styles.networkItemContent}>
+                                  <Ionicons 
+                                    name={network.capabilities && /(WPA|WEP)/i.test(network.capabilities) ? "lock-closed" : "wifi"} 
+                                    size={24} 
+                                    color="#4A90E2" 
+                                  />
+                                  <View style={styles.networkInfo}>
+                                    <Text style={styles.networkName}>{network.ssid}</Text>
+                                    {network.capabilities && (
+                                      <Text style={styles.networkCapabilities}>
+                                        {network.capabilities.replace(/\[|\]/g, '').split('-').slice(0, 2).join(' • ')}
+                                      </Text>
+                                    )}
+                                  </View>
+                                  {network.level && (
+                                    <View style={styles.signalStrength}>
+                                      <Ionicons 
+                                        name={
+                                          network.level > -50 ? "cellular" : 
+                                          network.level > -70 ? "cellular-outline" : 
+                                          "cellular-outline"
+                                        } 
+                                        size={20} 
+                                        color={
+                                          network.level > -50 ? "#4CAF50" : 
+                                          network.level > -70 ? "#FFC107" : 
+                                          "#F44336"
+                                        } 
+                                      />
+                                      <Text style={styles.signalText}>{network.level} dBm</Text>
+                                    </View>
+                                  )}
+                                </View>
+                              </BlurView>
+                            </TouchableOpacity>
+                          ))
+                        )}
+                      </ScrollView>
+
+                      {/* Rescan Button */}
+                      <TouchableOpacity
+                        onPress={handleScanNetworks}
+                        style={styles.rescanButton}
+                        disabled={isScanning}
+                      >
+                        {isScanning ? (
+                          <ActivityIndicator size="small" color="#1D244D" />
+                        ) : (
+                          <>
+                            <Ionicons name="refresh" size={20} color="#1D244D" />
+                            <Text style={styles.rescanButtonText}>Rescan</Text>
+                          </>
+                        )}
+                      </TouchableOpacity>
+                    </LinearGradient>
+                  )}
             </View>
           </View>
         )}

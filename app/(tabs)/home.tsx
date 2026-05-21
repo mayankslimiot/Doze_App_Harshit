@@ -14,7 +14,9 @@ import {
   Alert,
   TextInput,
   ActivityIndicator,
+  useColorScheme,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import DateTimePickerModal from 'react-native-modal-datetime-picker';
@@ -25,7 +27,8 @@ import { BlurView } from 'expo-blur';
 import { useAuth } from '@/contexts/AuthContext';
 import { useDevice } from '@/contexts/DeviceContext';
 import { useBoot } from '@/contexts/BootContext';
-import { useRouter } from 'expo-router';
+import { useTheme } from '@/contexts/ThemeContext';
+import { useRouter, useFocusEffect } from 'expo-router';
 import { HealthGauge } from '@/components/HealthGauge';
 import {
   calculateBMI,
@@ -38,7 +41,7 @@ import {
   calculateAge,
   HINTS,
 } from '@/utils/bodyMetrics';
-import { API_BASE_URL } from '@/services/api';
+import { API_BASE_URL, apiUrl } from '@/services/api';
 import { getHealthData, getHistoricalData, getStressGraph, updateDeviceName, deleteDevice, activateDevice, removeSharedDevice, cleanupLocalBleStores } from '@/services/deviceData';
 import { getSleepSession, getSleepSessions, calculateSleepSession, type SleepSession } from '@/services/sleepAnalytics';
 // MQTT imports commented out - using WebSocket instead
@@ -122,38 +125,51 @@ function CalculatedIndexRow({
   subtitle,
   value,
   score,
-  onInfoPress
+  onInfoPress,
+  isLight = false
 }: {
   label: string;
   subtitle?: string;
   value: string;
   score: number;
   onInfoPress?: () => void;
+  isLight?: boolean;
 }) {
   return (
-    <View style={styles.calculatedIndexCard}>
+    <View style={[
+      styles.calculatedIndexCard,
+      isLight && {
+        backgroundColor: '#FFFFFF',
+        borderColor: 'rgba(0, 0, 0, 0.06)',
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.04,
+        shadowRadius: 3,
+        elevation: 1
+      }
+    ]}>
       <View style={styles.calculatedIndexHeader}>
         <View style={styles.calculatedIndexLabelContainer}>
-          <Text style={styles.calculatedIndexLabel}>{label}</Text>
-          {subtitle ? <Text style={styles.calculatedIndexSubtitle}>{subtitle}</Text> : null}
+          <Text style={[styles.calculatedIndexLabel, isLight && { color: '#666666' }]}>{label}</Text>
+          {subtitle ? <Text style={[styles.calculatedIndexSubtitle, isLight && { color: '#888888' }]}>{subtitle}</Text> : null}
         </View>
         <TouchableOpacity onPress={onInfoPress} style={styles.infoIcon}>
-          <Ionicons name="information-circle-outline" size={18} color="rgba(255,255,255,0.7)" />
+          <Ionicons name="information-circle-outline" size={18} color={isLight ? '#666666' : 'rgba(255,255,255,0.7)'} />
         </TouchableOpacity>
       </View>
       <View style={styles.calculatedIndexContent}>
         <View style={styles.calculatedIndexGaugeContainer}>
           <HealthGauge score={score} size={84} />
-          <Text style={styles.calculatedIndexScore}>{score.toFixed(1)}</Text>
+          <Text style={[styles.calculatedIndexScore, isLight && { color: '#111111' }]}>{score.toFixed(1)}</Text>
         </View>
-        <Text style={styles.calculatedIndexValue}>{value}</Text>
+        <Text style={[styles.calculatedIndexValue, isLight && { color: '#111111' }]}>{value}</Text>
       </View>
     </View>
   );
 }
 
 // Mini bar chart component for Sleep card - simple white bars with varying heights
-function MiniSleepChart({ width = 120, height = 32 }: { width?: number; height?: number }) {
+function MiniSleepChart({ width = 120, height = 32, isLight = false }: { width?: number; height?: number; isLight?: boolean }) {
   const barWidth = 10;
   const barSpacing = 6;
   const chartPadding = 4;
@@ -176,7 +192,7 @@ function MiniSleepChart({ width = 120, height = 32 }: { width?: number; height?:
             y={barY}
             width={barWidth}
             height={barHeight}
-            fill="rgba(255,255,255,0.9)"
+            fill={isLight ? '#0061A4' : 'rgba(255,255,255,0.9)'}
             rx={2}
             ry={2}
           />
@@ -187,7 +203,7 @@ function MiniSleepChart({ width = 120, height = 32 }: { width?: number; height?:
 }
 
 // Mini bar chart component for Stress card - simple white bars with varying heights
-function MiniStressChart({ width = 120, height = 32 }: { width?: number; height?: number }) {
+function MiniStressChart({ width = 120, height = 32, isLight = false }: { width?: number; height?: number; isLight?: boolean }) {
   const barWidth = 10;
   const barSpacing = 6;
   const chartPadding = 4;
@@ -210,7 +226,7 @@ function MiniStressChart({ width = 120, height = 32 }: { width?: number; height?
             y={barY}
             width={barWidth}
             height={barHeight}
-            fill="rgba(255,255,255,0.9)"
+            fill={isLight ? '#0061A4' : 'rgba(255,255,255,0.9)'}
             rx={2}
             ry={2}
           />
@@ -225,6 +241,8 @@ export default function HomeScreen() {
   const { auth } = useAuth();
   const { activeDevice, devices, ownedDevices, sharedDevices, refreshDevices, setActiveDevice } = useDevice();
   const router = useRouter();
+
+  const { isLightTheme } = useTheme();
 
   // FIXED: Prevent double-tap navigation with a more robust lock
   const isNavigatingRef = React.useRef(false);
@@ -923,6 +941,20 @@ export default function HomeScreen() {
 
             if (addedCount > 0) {
               console.log(`[Home] ✅ Stress fallback: Added ${addedCount} points to buffer`);
+
+              // Extract the latest valid stress value (last point with y > 0)
+              // and update latestHealthData so the Home card shows Low/Moderate/High
+              const latestStressPoint = [...result.data.points]
+                .reverse()
+                .find((p: { x: number; y: number }) => p.y > 0 && p.y <= 100);
+
+              if (latestStressPoint) {
+                console.log(`[Home] 📊 Stress fallback: Latest stress value = ${latestStressPoint.y}`);
+                setLatestHealthData((prev: any) => ({
+                  ...(prev || {}),
+                  stress: latestStressPoint.y,
+                }));
+              }
             } else {
               console.log('[Home] ⚠️ Stress fallback: No valid points to add');
             }
@@ -1109,6 +1141,12 @@ export default function HomeScreen() {
     const second = parts.length > 1 ? parts[1]?.[0] : '';
     return (first + (second || '')).toUpperCase();
   }, [activeName, activeEmail]);
+
+  const profileImageUri = React.useMemo(() => {
+    const img = auth.user?.profile?.profileImage;
+    if (!img) return null;
+    return img.startsWith('data:') ? img : apiUrl(img);
+  }, [auth.user?.profile?.profileImage]);
 
   // Data for health section - 4 cards (using real data)
   // CRITICAL: Include updateCounter in dependencies to force recomputation
@@ -1571,30 +1609,42 @@ export default function HomeScreen() {
   };
 
   return (
-    <View style={styles.container}>
-      <StatusBar barStyle="light-content" backgroundColor="#02041A" />
-      <LinearGradient colors={['#1D244D', '#02041A', '#1A1D3E']} style={styles.gradientBackground} />
+    <View style={[styles.container, isLightTheme && { backgroundColor: '#F8F9FA' }]}>
+      <StatusBar 
+        barStyle={isLightTheme ? 'dark-content' : 'light-content'} 
+        backgroundColor={isLightTheme ? '#F8F9FA' : '#02041A'} 
+      />
+      {isLightTheme ? null : (
+        <LinearGradient colors={['#1D244D', '#02041A', '#1A1D3E']} style={styles.gradientBackground} />
+      )}
 
       <ScrollView
-        contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + 100 }]}
+        contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + 20 }]}
         showsVerticalScrollIndicator={false}
         refreshControl={
           <RefreshControl
             refreshing={isLoadingData}
             onRefresh={fetchDeviceData}
-            tintColor="#FFFFFF"
+            tintColor={isLightTheme ? '#0061A4' : '#FFFFFF'}
           />
         }
       >
         {/* --- My Health Section (NEW Grid + Sparklines) --- */}
         <View style={[styles.sectionHeaderRow, { marginTop: insets.top + 10 }]}>
-          <Text style={styles.sectionTitle}>My Health</Text>
+          <Text style={[styles.sectionTitle, isLightTheme && { color: '#111111' }]}>My Health</Text>
           <View style={styles.cardHeaderRight}>
             {activeDevice ? (
               <TouchableOpacity
-                style={styles.deviceNameIndicator}
+                style={[
+                  styles.deviceNameIndicator,
+                  isLightTheme && {
+                    backgroundColor: 'rgba(0, 97, 164, 0.06)',
+                    borderColor: 'rgba(0, 97, 164, 0.12)',
+                  }
+                ]}
                 onPress={() => debouncedPush('/(tabs)/all-devices')}
                 activeOpacity={0.7}
+                hitSlop={{ top: 12, bottom: 12, left: 12, right: 8 }}
               >
                 <View
                   style={[
@@ -1602,137 +1652,176 @@ export default function HomeScreen() {
                     wsConnected && lastStreamAt !== null ? styles.deviceIndicatorGreen : styles.deviceIndicatorYellow,
                   ]}
                 />
-                <Text style={styles.deviceNameText}>
+                <Text style={[styles.deviceNameText, isLightTheme && { color: '#666666' }]}>
                   {activeDevice && getDeviceDisplayName(activeDevice)}
                 </Text>
               </TouchableOpacity>
             ) : (
               <TouchableOpacity 
                 onPress={() => debouncedPush('/(bluetooth)/ScanScreen')}
-                style={{ marginRight: 8 }}
+                style={[
+                  styles.deviceNameIndicator,
+                  isLightTheme && {
+                    backgroundColor: 'rgba(0, 97, 164, 0.06)',
+                    borderColor: 'rgba(0, 97, 164, 0.12)',
+                  }
+                ]}
+                activeOpacity={0.7}
+                hitSlop={{ top: 12, bottom: 12, left: 12, right: 8 }}
               >
-                <Text style={styles.viewAll}>Add Device</Text>
+                <Text style={[styles.deviceNameText, isLightTheme && { color: '#0061A4' }, !isLightTheme && { color: '#7EA6FF' }]}>
+                  + Add Device
+                </Text>
               </TouchableOpacity>
             )}
             <TouchableOpacity
-              style={styles.avatarPill}
+              style={[styles.avatarPill, isLightTheme && { backgroundColor: 'rgba(0, 97, 164, 0.12)' }]}
               onPress={() => debouncedPush('/(tabs)/profile')}
               activeOpacity={0.8}
+              hitSlop={{ top: 12, bottom: 12, left: 8, right: 12 }}
             >
-              <Text style={styles.avatarText}>{initials}</Text>
+              {profileImageUri ? (
+                <Image source={{ uri: profileImageUri }} style={{ width: '100%', height: '100%' }} />
+              ) : (
+                <Text style={[styles.avatarText, isLightTheme && { color: '#0061A4' }]}>{initials}</Text>
+              )}
             </TouchableOpacity>
           </View>
         </View>
 
-        <View style={styles.envCard}>
-          {/* container for grid */}
-          <View style={styles.envGrid}>
-            {(() => {
-              // split into rows of 2 (flex: 1 ensures consistent widths; marginHorizontal provides gaps)
-              const rows = [];
-              for (let i = 0; i < healthMetrics.length; i += 2) rows.push(healthMetrics.slice(i, i + 2));
-              return rows.map((pair, rowIndex) => (
-                <View key={`health-row-${rowIndex}`} style={styles.envRow}>
-                  {pair.map((m) => {
-                    const spark = sparklines[m.key];
-                    const Container: any = m.key === 'sleep' || m.key === 'heartRate' || m.key === 'respiration' || m.key === 'stress' ? TouchableOpacity : View;
-                    return (
-                      <Container
-                        key={m.key}
-                        style={styles.envTile}
-                        {...(m.key === 'sleep'
-                          ? { activeOpacity: 0.85, onPress: () => debouncedPush('/charts/sleep-insights') }
-                          : m.key === 'heartRate'
-                            ? { activeOpacity: 0.85, onPress: () => debouncedPush('/charts/heart-rate-insights') }
-                            : m.key === 'respiration'
-                              ? { activeOpacity: 0.85, onPress: () => debouncedPush('/charts/respiration-insights') }
-                              : m.key === 'stress'
-                                ? { activeOpacity: 0.85, onPress: () => debouncedPush('/charts/stress-insights') }
-                                : {})}
-                      >
-                        <LinearGradient colors={m.colors} style={styles.envTileBg} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} />
-                        <View style={styles.envTileInner}>
-                          <View style={styles.envTopRow}>
-                            <View style={[styles.envIconWrap, { marginRight: 4 }]}>
-                              <Text style={styles.envIcon}>{m.icon}</Text>
-                            </View>
-                            <View style={{ flex: 1 }}>
-                              <Text style={styles.envName} numberOfLines={1} ellipsizeMode="tail">{m.name}</Text>
-                            </View>
+        {/* container for grid */}
+        <View style={styles.envGrid}>
+          {(() => {
+            // split into rows of 2 (flex: 1 ensures consistent widths; marginHorizontal provides gaps)
+            const rows = [];
+            for (let i = 0; i < healthMetrics.length; i += 2) rows.push(healthMetrics.slice(i, i + 2));
+            return rows.map((pair, rowIndex) => (
+              <View key={`health-row-${rowIndex}`} style={styles.envRow}>
+                {pair.map((m) => {
+                  const spark = sparklines[m.key];
+                  const Container: any = m.key === 'sleep' || m.key === 'heartRate' || m.key === 'respiration' || m.key === 'stress' ? TouchableOpacity : View;
+                  return (
+                    <Container
+                      key={m.key}
+                      style={[
+                        styles.envTile,
+                        isLightTheme && {
+                          backgroundColor: '#FFFFFF',
+                          borderColor: 'rgba(0, 0, 0, 0.06)',
+                          shadowColor: '#000',
+                          shadowOffset: { width: 0, height: 2 },
+                          shadowOpacity: 0.04,
+                          shadowRadius: 3,
+                          elevation: 1
+                        }
+                      ]}
+                      {...(m.key === 'sleep'
+                        ? { activeOpacity: 0.85, onPress: () => debouncedPush('/charts/sleep-insights') }
+                        : m.key === 'heartRate'
+                          ? { activeOpacity: 0.85, onPress: () => debouncedPush('/charts/heart-rate-insights') }
+                          : m.key === 'respiration'
+                            ? { activeOpacity: 0.85, onPress: () => debouncedPush('/charts/respiration-insights') }
+                            : m.key === 'stress'
+                              ? { activeOpacity: 0.85, onPress: () => debouncedPush('/charts/stress-insights') }
+                              : {})}
+                    >
+                      <LinearGradient colors={m.colors} style={[styles.envTileBg, isLightTheme && { opacity: 0 }]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} />
+                      <View style={styles.envTileInner}>
+                        <View style={styles.envTopRow}>
+                          <View style={[styles.envIconWrap, { marginRight: 4 }, isLightTheme && { backgroundColor: 'rgba(0, 97, 164, 0.08)' }]}>
+                            <Text style={styles.envIcon}>{m.icon}</Text>
                           </View>
-
-                          <View style={styles.envValueRow}>
-                            <Text key={`env-value-${m.key}-${updateCounter}`} style={styles.envValueNum}>{m.value}</Text>
-                            <Text style={styles.envUnit}>{m.unit ? ` ${m.unit}` : ''}</Text>
-                          </View>
-
-                          {/* mini chart - bar chart for sleep and stress, sparkline for others */}
-                          <View style={styles.sparklineWrap}>
-                            {m.key === 'sleep' ? (
-                              // No device data -> keep empty (no static chart)
-                              hasAnyDeviceData ? <MiniSleepChart width={120} height={32} /> : null
-                            ) : m.key === 'stress' ? (
-                              hasAnyDeviceData ? <MiniStressChart width={120} height={32} /> : null
-                            ) : (
-                              <Svg height={28} width={120}>
-                                {(() => {
-                                  if (!spark || !spark.svgPoints) {
-                                    return null;
-                                  }
-
-                                  const pts = spark.svgPoints.split(' ').filter(p => p.trim().length > 0);
-                                  if (!pts.length || pts.length < 2) {
-                                    return null;
-                                  }
-
-                                  // Ensure we have valid coordinates
-                                  const validPts = pts.filter(pt => pt && pt.includes(','));
-                                  if (validPts.length < 2) {
-                                    return null;
-                                  }
-
-                                  const d = `M ${validPts[0]} L ${validPts.slice(1).join(' L ')}`;
-
-                                  return (
-                                    <Path
-                                      d={d}
-                                      fill="none"
-                                      stroke="rgba(255,255,255,0.9)"
-                                      strokeWidth={2}
-                                      strokeLinecap="round"
-                                      strokeLinejoin="round"
-                                      opacity={0.95}
-                                    />
-                                  );
-                                })()}
-                              </Svg>
-                            )}
+                          <View style={{ flex: 1 }}>
+                            <Text style={[styles.envName, isLightTheme && { color: '#666666' }]} numberOfLines={1} ellipsizeMode="tail">{m.name}</Text>
                           </View>
                         </View>
-                      </Container>
-                    );
-                  })}
 
-                  {/* if only one item in row, render a spacer to keep layout stable */}
-                  {pair.length === 1 ? <View style={[styles.envTile, styles.emptyTile]} /> : null}
-                </View>
-              ));
-            })()}
-          </View>
+                        <View style={styles.envValueRow}>
+                          <Text key={`env-value-${m.key}-${updateCounter}`} style={[styles.envValueNum, isLightTheme && { color: '#111111' }]}>{m.value}</Text>
+                          <Text style={[styles.envUnit, isLightTheme && { color: '#888888' }]}>{m.unit ? ` ${m.unit}` : ''}</Text>
+                        </View>
+
+                        {/* mini chart - bar chart for sleep and stress, sparkline for others */}
+                        <View style={styles.sparklineWrap}>
+                          {m.key === 'sleep' ? (
+                            // No device data -> keep empty (no static chart)
+                            hasAnyDeviceData ? <MiniSleepChart width={120} height={32} isLight={isLightTheme} /> : null
+                          ) : m.key === 'stress' ? (
+                            hasAnyDeviceData ? <MiniStressChart width={120} height={32} isLight={isLightTheme} /> : null
+                          ) : (
+                            <Svg height={28} width={120}>
+                              {(() => {
+                                if (!spark || !spark.svgPoints) {
+                                  return null;
+                                }
+
+                                const pts = spark.svgPoints.split(' ').filter(p => p.trim().length > 0);
+                                if (!pts.length || pts.length < 2) {
+                                  return null;
+                                }
+
+                                // Ensure we have valid coordinates
+                                const validPts = pts.filter(pt => pt && pt.includes(','));
+                                if (validPts.length < 2) {
+                                  return null;
+                                }
+
+                                const d = `M ${validPts[0]} L ${validPts.slice(1).join(' L ')}`;
+
+                                return (
+                                  <Path
+                                    d={d}
+                                    fill="none"
+                                    stroke={isLightTheme ? '#0061A4' : 'rgba(255,255,255,0.9)'}
+                                    strokeWidth={2}
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                    opacity={0.95}
+                                  />
+                                );
+                              })()}
+                            </Svg>
+                          )}
+                        </View>
+                      </View>
+                    </Container>
+                  );
+                })}
+
+                {/* if only one item in row, render a spacer to keep layout stable */}
+                {pair.length === 1 ? <View style={[styles.envTile, styles.emptyTile]} /> : null}
+              </View>
+            ));
+          })()}
         </View>
 
         {/* --- My Sleep Section (Restored with Bars) --- */}
-        <View style={[styles.sectionHeaderRow, { marginTop: 18 }]}>
-          <Text style={styles.sectionTitle}>My Sleep</Text>
+        <View style={[styles.sectionHeaderRow, { marginTop: 6 }]}>
+          <Text style={[styles.sectionTitle, isLightTheme && { color: '#111111' }]}>My Sleep</Text>
         </View>
 
-        <BlurView intensity={25} tint="dark" style={styles.sleepRedesignCard}>
+        <BlurView 
+          intensity={25} 
+          tint={isLightTheme ? 'light' : 'dark'} 
+          style={[
+            styles.sleepRedesignCard,
+            isLightTheme && {
+              backgroundColor: '#FFFFFF',
+              borderColor: 'rgba(0, 0, 0, 0.06)',
+              shadowColor: '#000',
+              shadowOffset: { width: 0, height: 2 },
+              shadowOpacity: 0.04,
+              shadowRadius: 3,
+              elevation: 1
+            }
+          ]}
+        >
           <View style={styles.sleepMetricBarRow}>
             <View style={styles.sleepMetricBarInfo}>
-              <Text style={styles.sleepMetricBarLabel}>Duration</Text>
-              <Text style={styles.sleepMetricBarValue}>{sleepMetrics.durationLabel}</Text>
+              <Text style={[styles.sleepMetricBarLabel, isLightTheme && { color: '#666666' }]}>Duration</Text>
+              <Text style={[styles.sleepMetricBarValue, isLightTheme && { color: '#111111' }]}>{sleepMetrics.durationLabel}</Text>
             </View>
-            <View style={styles.sleepMetricBarTrack}>
+            <View style={[styles.sleepMetricBarTrack, isLightTheme && { backgroundColor: '#EBF1F6' }]}>
               <LinearGradient 
                 colors={['#4facfe', '#00f2fe']} 
                 style={[styles.sleepMetricBarFill, { width: `${Math.min(100, (sleepMetrics.duration / 8) * 100)}%` }]} 
@@ -1744,10 +1833,10 @@ export default function HomeScreen() {
 
           <View style={[styles.sleepMetricBarRow, { marginTop: 16 }]}>
             <View style={styles.sleepMetricBarInfo}>
-              <Text style={styles.sleepMetricBarLabel}>Efficiency</Text>
-              <Text style={styles.sleepMetricBarValue}>{sleepMetrics.efficiencyLabel}</Text>
+              <Text style={[styles.sleepMetricBarLabel, isLightTheme && { color: '#666666' }]}>Efficiency</Text>
+              <Text style={[styles.sleepMetricBarValue, isLightTheme && { color: '#111111' }]}>{sleepMetrics.efficiencyLabel}</Text>
             </View>
-            <View style={styles.sleepMetricBarTrack}>
+            <View style={[styles.sleepMetricBarTrack, isLightTheme && { backgroundColor: '#EBF1F6' }]}>
               <LinearGradient 
                 colors={['#f6d365', '#fda085']} 
                 style={[styles.sleepMetricBarFill, { width: `${sleepMetrics.efficiency}%` }]} 
@@ -1760,134 +1849,159 @@ export default function HomeScreen() {
 
 
         {/* --- Body Measurement Section --- */}
-        <View style={[styles.sectionHeaderRow, { marginTop: 18 }]}>
-          <Text style={styles.sectionTitle}>Body Measurement</Text>
+        <View style={[styles.sectionHeaderRow, { marginTop: 6 }]}>
+          <Text style={[styles.sectionTitle, isLightTheme && { color: '#111111' }]}>Body Measurement</Text>
         </View>
-        <BlurView intensity={25} tint="dark" style={styles.bodyMeasurementCard}>
-          <View style={{ position: 'relative' }}>
-            <View style={styles.calculatedIndicesGrid}>
+        <View style={{ position: 'relative' }}>
+          <View style={styles.calculatedIndicesGrid}>
+            <View style={styles.envRow}>
               <CalculatedIndexRow
                 label="Waist Height ratio"
                 value={bodyMetrics.waistHeightRatio}
                 score={bodyMetrics.waistHeightScore}
                 onInfoPress={() => Alert.alert('Waist-to-height ratio', HINTS.WHR)}
+                isLight={isLightTheme}
               />
               <CalculatedIndexRow
                 label="BMI"
                 value={bodyMetrics.bmi}
                 score={bodyMetrics.bmiScore}
                 onInfoPress={() => Alert.alert('BMI', HINTS.BMI)}
+                isLight={isLightTheme}
               />
+            </View>
+            <View style={styles.envRow}>
               <CalculatedIndexRow
                 label="ABSI"
                 value={bodyMetrics.absi}
                 score={bodyMetrics.absiScore}
                 onInfoPress={() => Alert.alert('ABSI', HINTS.ABSI)}
+                isLight={isLightTheme}
               />
               <CalculatedIndexRow
                 label="Overall Body Index"
                 value={bodyMetrics.allFieldsFilled ? bodyMetrics.overallScore.toFixed(1) : '—'}
                 score={bodyMetrics.overallScore}
                 onInfoPress={() => Alert.alert('Overall Body Index', HINTS.OBI)}
+                isLight={isLightTheme}
               />
             </View>
-
-            {/* Blur overlay when DOB or Sex is missing */}
-            {!bodyMetrics.hasProfileInfo && (
-              <View style={styles.gaugeOverlay}>
-                <BlurView intensity={80} tint="dark" style={styles.gaugeBlur}>
-                  <Ionicons name="person-circle-outline" size={36} color="rgba(199, 185, 255, 0.8)" />
-                  <Text style={styles.gaugeOverlayTitle}>Complete Your Profile</Text>
-                  <Text style={styles.gaugeOverlayMessage}>
-                    Please add your Date of Birth and Sex in Profile to see your body metrics.
-                  </Text>
-                </BlurView>
-              </View>
-            )}
           </View>
-        </BlurView>
 
-        {/* --- Environment Data (NEW Grid + Sparklines) --- */}
-        <View style={[styles.sectionHeaderRow, { marginTop: 18 }]}>
-          <Text style={styles.sectionTitle}>Environment Data</Text>
+          {/* Blur overlay when DOB or Sex is missing */}
+          {!bodyMetrics.hasProfileInfo && (
+            <View style={styles.gaugeOverlay}>
+              <BlurView 
+                intensity={80} 
+                tint={isLightTheme ? 'light' : 'dark'} 
+                style={[styles.gaugeBlur, isLightTheme && { backgroundColor: 'rgba(255, 255, 255, 0.85)' }]}
+              >
+                <Ionicons name="person-circle-outline" size={36} color={isLightTheme ? '#0061A4' : 'rgba(199, 185, 255, 0.8)'} />
+                <Text style={[styles.gaugeOverlayTitle, isLightTheme && { color: '#111111' }]}>Complete Your Profile</Text>
+                <Text style={[styles.gaugeOverlayMessage, isLightTheme && { color: '#666666' }]}>
+                  Please add your Date of Birth and Sex in Profile to see your body metrics.
+                </Text>
+              </BlurView>
+            </View>
+          )}
         </View>
 
-        <View style={styles.envCard}>
-          {/* container for grid */}
-          <View style={styles.envGrid}>
-            {(() => {
-              // split into rows of 2 (flex: 1 ensures consistent widths; marginHorizontal provides gaps)
-              const rows = [];
-              for (let i = 0; i < envMetrics.length; i += 2) rows.push(envMetrics.slice(i, i + 2));
-              return rows.map((pair, rowIndex) => (
-                <View key={`env-row-${rowIndex}`} style={styles.envRow}>
-                  {pair.map((m) => {
-                    const spark = sparklines[m.key];
-                    return (
-                      <View
-                        key={m.key}
-                        style={styles.envTile}
-                      >
-                        <LinearGradient colors={m.colors} style={styles.envTileBg} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} />
-                        <View style={styles.envTileInner}>
-                          <View style={styles.envTopRow}>
-                            <View style={[styles.envIconWrap, { marginRight: 4 }]}>
-                              <Text style={styles.envIcon}>{m.icon}</Text>
-                            </View>
-                            <View style={{ flex: 1 }}>
-                              <Text style={styles.envName} numberOfLines={1} ellipsizeMode="tail">{m.name}</Text>
-                            </View>
-                          </View>
+        {/* --- Environment Data (NEW Grid + Sparklines) --- */}
+        <View style={[styles.sectionHeaderRow, { marginTop: 6 }]}>
+          <Text style={[styles.sectionTitle, isLightTheme && { color: '#111111' }]}>Environment Data</Text>
+        </View>
 
-                          <View style={styles.envValueRow}>
-                            <Text key={`env-value-${m.key}-${updateCounter}`} style={styles.envValueNum}>{m.value}</Text>
-                            <Text style={styles.envUnit}>{m.unit ? ` ${m.unit}` : ''}</Text>
+        {/* container for grid */}
+        <View style={styles.envGrid}>
+          {(() => {
+            // split into rows of 2 (flex: 1 ensures consistent widths; marginHorizontal provides gaps)
+            const rows = [];
+            for (let i = 0; i < envMetrics.length; i += 2) rows.push(envMetrics.slice(i, i + 2));
+            return rows.map((pair, rowIndex) => (
+              <View key={`env-row-${rowIndex}`} style={styles.envRow}>
+                {pair.map((m) => {
+                  const spark = sparklines[m.key];
+                  const Container: any = (['temp', 'hum', 'iaq', 'eco2', 'tvoc', 'etoh'].includes(m.key)) ? TouchableOpacity : View;
+                  return (
+                    <Container
+                      key={m.key}
+                      style={[
+                        styles.envTile,
+                        isLightTheme && {
+                          backgroundColor: '#FFFFFF',
+                          borderColor: 'rgba(0, 0, 0, 0.06)',
+                          shadowColor: '#000',
+                          shadowOffset: { width: 0, height: 2 },
+                          shadowOpacity: 0.04,
+                          shadowRadius: 3,
+                          elevation: 1
+                        }
+                      ]}
+                      {...(m.key === 'temp' ? { activeOpacity: 0.85, onPress: () => debouncedPush('/charts/temperature-insights') } : m.key === 'hum' ? { activeOpacity: 0.85, onPress: () => debouncedPush('/charts/humidity-insights') } : m.key === 'iaq' ? { activeOpacity: 0.85, onPress: () => debouncedPush('/charts/iaq-insights') } : m.key === 'eco2' ? { activeOpacity: 0.85, onPress: () => debouncedPush('/charts/eco2-insights') } : m.key === 'tvoc' ? { activeOpacity: 0.85, onPress: () => debouncedPush('/charts/tvoc-insights') } : m.key === 'etoh' ? { activeOpacity: 0.85, onPress: () => debouncedPush('/charts/etoh-insights') } : {})}
+                    >
+                      <LinearGradient colors={m.colors} style={[styles.envTileBg, isLightTheme && { opacity: 0 }]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} />
+                      <View style={styles.envTileInner}>
+                        <View style={styles.envTopRow}>
+                          <View style={[styles.envIconWrap, { marginRight: 4 }, isLightTheme && { backgroundColor: 'rgba(0, 97, 164, 0.08)' }]}>
+                            <Text style={styles.envIcon}>{m.icon}</Text>
                           </View>
-
-                          {/* mini sparkline */}
-                          <View style={styles.sparklineWrap}>
-                            <Svg height={28} width={120}>
-                              {(() => {
-                                if (!spark || !spark.svgPoints) return null;
-                                const pts = spark.svgPoints.split(' ').filter(p => p.trim().length > 0);
-                                if (!pts.length || pts.length < 2) return null;
-                                // Ensure we have valid coordinates
-                                const validPts = pts.filter(pt => pt && pt.includes(','));
-                                if (validPts.length < 2) return null;
-                                const d = `M ${validPts[0]} L ${validPts.slice(1).join(' L ')}`;
-                                return (
-                                  <Path
-                                    d={d}
-                                    fill="none"
-                                    stroke="rgba(255,255,255,0.9)"
-                                    strokeWidth={2}
-                                    strokeLinecap="round"
-                                    strokeLinejoin="round"
-                                    opacity={0.95}
-                                  />
-                                );
-                              })()}
-                            </Svg>
+                          <View style={{ flex: 1 }}>
+                            <Text style={[styles.envName, isLightTheme && { color: '#666666' }]} numberOfLines={1} ellipsizeMode="tail">{m.name}</Text>
                           </View>
                         </View>
-                      </View>
-                    );
-                  })}
 
-                  {/* if only one item in row, render a spacer to keep layout stable */}
-                  {pair.length === 1 ? <View style={[styles.envTile, styles.emptyTile]} /> : null}
-                </View>
-              ));
-            })()}
-          </View>
+                        <View style={styles.envValueRow}>
+                          <Text key={`env-value-${m.key}-${updateCounter}`} style={[styles.envValueNum, isLightTheme && { color: '#111111' }]}>{m.value}</Text>
+                          <Text style={[styles.envUnit, isLightTheme && { color: '#888888' }]}>{m.unit ? ` ${m.unit}` : ''}</Text>
+                        </View>
+
+                        {/* mini sparkline */}
+                        <View style={styles.sparklineWrap}>
+                          <Svg height={28} width={120}>
+                            {(() => {
+                              if (!spark || !spark.svgPoints) return null;
+                              const pts = spark.svgPoints.split(' ').filter(p => p.trim().length > 0);
+                              if (!pts.length || pts.length < 2) return null;
+                              // Ensure we have valid coordinates
+                              const validPts = pts.filter(pt => pt && pt.includes(','));
+                              if (validPts.length < 2) return null;
+                              const d = `M ${validPts[0]} L ${validPts.slice(1).join(' L ')}`;
+                              return (
+                                <Path
+                                  d={d}
+                                  fill="none"
+                                  stroke={isLightTheme ? '#0061A4' : 'rgba(255,255,255,0.9)'}
+                                  strokeWidth={2}
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  opacity={0.95}
+                                />
+                              );
+                            })()}
+                          </Svg>
+                        </View>
+                      </View>
+                    </Container>
+                  );
+                })}
+
+                {/* if only one item in row, render a spacer to keep layout stable */}
+                {pair.length === 1 ? <View style={[styles.envTile, styles.emptyTile]} /> : null}
+              </View>
+            ));
+          })()}
         </View>
 
         <View style={styles.disclaimerContainer}>
-          <Text style={styles.disclaimerText}>
+          <Text style={[styles.disclaimerText, isLightTheme && { color: '#888888' }]}>
             This app is not a medical device and does not diagnose, treat, cure, or prevent any disease. For general wellness and lifestyle purposes only.
           </Text>
         </View>
-        <View style={{ height: 40 }} />
+        
+        <View style={styles.bottomBrandContainer}>
+          <Text style={[styles.bottomBrandText, isLightTheme && { color: '#000000' }]}>DOZEMATE</Text>
+          <Text style={[styles.bottomBrandSubtitle, isLightTheme && { color: '#000000' }]}>LIVE HEALTHY  •  SLEEP BETTER</Text>
+        </View>
       </ScrollView>
 
       <DateTimePickerModal
@@ -1913,7 +2027,11 @@ export default function HomeScreen() {
           <View style={styles.sheet}>
             <View style={styles.sheetHeader}>
               <View style={styles.sheetAvatarLg}>
-                <Text style={styles.avatarLgText}>{initials}</Text>
+                {profileImageUri ? (
+                  <Image source={{ uri: profileImageUri }} style={{ width: '100%', height: '100%' }} />
+                ) : (
+                  <Text style={styles.avatarLgText}>{initials}</Text>
+                )}
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={styles.sheetGreeting}>Hi, {activeName}!</Text>
@@ -2122,10 +2240,32 @@ export default function HomeScreen() {
 }
 
 const styles = StyleSheet.create({
+  bottomBrandContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 16,
+    marginBottom: 0,
+    opacity: 0.12, // Premium subtle watermark aesthetic
+  },
+  bottomBrandText: {
+    color: '#FFFFFF',
+    fontSize: 48,
+    fontWeight: '900',
+    letterSpacing: 14,
+    textAlign: 'center',
+  },
+  bottomBrandSubtitle: {
+    color: '#B7C2FF',
+    fontSize: 9,
+    fontWeight: '700',
+    letterSpacing: 6,
+    marginTop: 6,
+    textAlign: 'center',
+  },
   disclaimerContainer: {
     paddingHorizontal: 20,
-    marginTop: 10,
-    marginBottom: 10,
+    marginTop: 8,
+    marginBottom: 0,
     alignItems: 'center',
   },
   disclaimerText: {
@@ -2151,7 +2291,13 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    marginRight: 8,
+    marginRight: 4,
+    paddingVertical: 5,
+    paddingHorizontal: 10,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.12)',
   },
   deviceIndicatorDot: {
     width: 8,
@@ -2328,12 +2474,13 @@ const styles = StyleSheet.create({
 
   // Profile switcher styles
   avatarPill: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(255,255,255,0.18)',
+    backgroundColor: 'rgba(255, 255, 255, 0.18)',
+    overflow: 'hidden',
   },
   avatarText: { color: '#FFF', fontWeight: '800', fontSize: 12 },
 
@@ -2356,6 +2503,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: 'rgba(255,255,255,0.18)',
     marginRight: 12,
+    overflow: 'hidden',
   },
   avatarLgText: { color: '#FFF', fontWeight: '900', fontSize: 20 },
   sheetGreeting: { color: '#FFF', fontSize: 18, fontWeight: '800' },
@@ -2508,18 +2656,16 @@ const styles = StyleSheet.create({
     overflow: 'hidden'
   },
   calculatedIndicesGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'space-between',
+    width: '100%',
   },
   calculatedIndexCard: {
-    width: '48%',
+    flex: 1,
+    marginHorizontal: 6,
     backgroundColor: 'rgba(255,255,255,0.04)',
-    borderRadius: 12,
+    borderRadius: 14,
     padding: 16, // Matched to profile
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.08)',
-    marginBottom: 12,
+    borderColor: 'rgba(255,255,255,0.06)',
   },
   calculatedIndexHeader: {
     flexDirection: 'row',
@@ -2568,7 +2714,7 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     padding: 20,
     marginHorizontal: 0,
-    marginBottom: 20,
+    marginBottom: 12,
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.1)',
     overflow: 'hidden',

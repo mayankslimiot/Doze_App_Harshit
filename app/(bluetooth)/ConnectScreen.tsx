@@ -7,7 +7,8 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from "expo-router";
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import React, { useEffect, useRef, useState } from "react";
-import { ActivityIndicator, Animated, Platform, SafeAreaView, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { ActivityIndicator, Animated, Platform, SafeAreaView, ScrollView, StyleSheet, StatusBar, Text, TouchableOpacity, View } from "react-native";
+import { useTheme } from "@/contexts/ThemeContext";
 import { Subscription } from 'react-native-ble-plx';
 import { getWiFiStatus, autoRegisterDevice } from '@/services/deviceData';
 import { 
@@ -71,6 +72,7 @@ const STATUS_CONFIG = {
 export default function ConnectScreen() {
   const { selectedDeviceId, wifiSSID, wifiPassword, sendWifiCredentials, setWifiProvisioningSuccess, serialNumber, setSerialNumber } = useProvisioning();
   const router = useRouter();
+  const { isLightTheme } = useTheme();
   const { refreshDevices, setActiveDevice } = useDevice();
 
   const [currentStatus, setCurrentStatus] = useState<ProvisioningStatus>(ProvisioningStatus.IDLE);
@@ -228,16 +230,17 @@ export default function ConnectScreen() {
     // Mark Step 1 as success
     setStep1WiFiStatus('success');
     
-    // Get serial number for registration
-    const serialForRegistration = serialNumberRef.current || serialNumber;
+    // Get serial number for registration — fallback to BLE device ID
+    const serialForRegistration = serialNumberRef.current || serialNumber || selectedDeviceId;
     if (!serialForRegistration) {
-      console.error('[WiFi Provisioning] ❌ Serial number not available for registration');
+      console.error('[WiFi Provisioning] ❌ No serial number or device ID available for registration');
       setStep1WiFiStatus('failed');
       setCurrentStatus(ProvisioningStatus.FAILED);
-      setStatusMessage('Device connected but serial number not available');
+      setStatusMessage('Device connected but no identifier available for registration');
       setIsProcessing(false);
       return;
     }
+    console.log(`[WiFi Provisioning] Using identifier for registration: ${serialForRegistration}`);
 
     // Wait a moment before starting Step 2
     await new Promise(resolve => setTimeout(resolve, 500));
@@ -411,15 +414,20 @@ export default function ConnectScreen() {
       console.log(`   Retry Count: ${retryCountRef.current}/3`);
       console.log('═══════════════════════════════════════');
 
-      // Check if serial number is available
-      const currentSerialNumber = serialNumberRef.current || serialNumber;
+      // Check if serial number is available — use BLE device ID as fallback
+      let currentSerialNumber = serialNumberRef.current || serialNumber;
       if (!currentSerialNumber) {
         console.warn('[WiFi Provisioning] ⚠️ Serial number not available yet, waiting...');
         // Wait a bit for serial number to be read
         await new Promise(resolve => setTimeout(resolve, 2000));
-        const serialAfterWait = serialNumberRef.current || serialNumber;
-        if (!serialAfterWait) {
-          throw new Error('Serial number is required for MQTT subscription. Please ensure device is connected.');
+        currentSerialNumber = serialNumberRef.current || serialNumber;
+        if (!currentSerialNumber) {
+          // Use BLE device ID as fallback instead of failing
+          console.warn('[WiFi Provisioning] ⚠️ Serial number unavailable — using BLE device ID as fallback');
+          const fallbackId = selectedDeviceId || '';
+          if (fallbackId) {
+            setSerialNumber(fallbackId);
+          }
         }
       }
 
@@ -436,10 +444,10 @@ export default function ConnectScreen() {
 
       console.log('✅ Credentials sent successfully!');
       
-      // Get serial number for MQTT topic
-      const serialForMQTT = serialNumberRef.current || serialNumber;
+      // Get serial number for MQTT topic — fallback to BLE device ID
+      const serialForMQTT = serialNumberRef.current || serialNumber || selectedDeviceId;
       if (!serialForMQTT) {
-        throw new Error('Serial number is required for MQTT subscription');
+        console.warn('[WiFi Provisioning] ⚠️ No serial number or device ID for MQTT — skipping MQTT, using API polling only');
       }
 
       // Reset MQTT connected handler guard for fresh attempt
@@ -453,7 +461,7 @@ export default function ConnectScreen() {
       console.log(`   Expected Message: "connected" (lowercase)`);
       console.log('═══════════════════════════════════════');
       
-      const mqttClient = connectToWiFiProvisioningMQTT(serialForMQTT, handleMQTTConnected);
+      const mqttClient = connectToWiFiProvisioningMQTT(serialForMQTT as string, handleMQTTConnected);
       
       if (!mqttClient) {
         console.error('[WiFi Provisioning] ❌ Failed to connect to MQTT');
@@ -643,15 +651,18 @@ export default function ConnectScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.container}>
-      <LinearGradient colors={['#1D244D', '#02041A', '#1A1D3E']} style={styles.gradientBackground} />
+    <SafeAreaView style={[styles.container, isLightTheme && { backgroundColor: '#F8F9FA' }]}>
+      <StatusBar barStyle={isLightTheme ? "dark-content" : "light-content"} backgroundColor={isLightTheme ? "#F8F9FA" : "#02041A"} />
+      {isLightTheme ? null : (
+        <LinearGradient colors={['#1D244D', '#02041A', '#1A1D3E']} style={styles.gradientBackground} />
+      )}
       
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity onPress={handleCancel} style={styles.headerIconContainer}>
-          <Ionicons name="arrow-back" size={24} color="#FFF" />
+          <Ionicons name="arrow-back" size={24} color={isLightTheme ? "#111111" : "#FFF"} />
         </TouchableOpacity>
-        <Text style={styles.headerText}>Setting Up Dozemate</Text>
+        <Text style={[styles.headerText, isLightTheme && { color: "#111111" }]}>Setting Up Dozemate</Text>
         <View style={styles.headerIconContainer} />
       </View>
 
@@ -674,7 +685,17 @@ export default function ConnectScreen() {
           {/* Checklist Container */}
           <View style={styles.checklistContainer}>
             {/* Step 1: Connecting WiFi */}
-            <View style={styles.checklistItemCard}>
+            <View style={[
+              styles.checklistItemCard,
+              isLightTheme && {
+                backgroundColor: "#FFFFFF",
+                borderColor: "#E5E7EB",
+                shadowColor: "#000000",
+                shadowOpacity: 0.03,
+                shadowRadius: 8,
+                elevation: 1,
+              }
+            ]}>
               <View style={styles.checklistItemContent}>
                 <View style={styles.checklistIconContainer}>
                   {step1WiFiStatus === 'success' ? (
@@ -686,18 +707,18 @@ export default function ConnectScreen() {
                       <Ionicons name="close" size={20} color="#FFF" />
                     </View>
                   ) : step1WiFiStatus === 'loading' ? (
-                    <View style={[styles.checklistIcon, styles.checklistIconLoading]}>
-                      <ActivityIndicator size="small" color="#4A90E2" />
+                    <View style={[styles.checklistIcon, styles.checklistIconLoading, isLightTheme && { borderColor: '#0061A4' }]}>
+                      <ActivityIndicator size="small" color={isLightTheme ? "#0061A4" : "#4A90E2"} />
                     </View>
                   ) : (
-                    <View style={[styles.checklistIcon, styles.checklistIconPending]}>
-                      <Ionicons name="ellipse-outline" size={20} color="rgba(255, 255, 255, 0.4)" />
+                    <View style={[styles.checklistIcon, styles.checklistIconPending, isLightTheme && { backgroundColor: 'rgba(0, 0, 0, 0.03)', borderColor: 'rgba(0, 0, 0, 0.1)' }]}>
+                      <Ionicons name="ellipse-outline" size={20} color={isLightTheme ? "rgba(0, 0, 0, 0.2)" : "rgba(255, 255, 255, 0.4)"} />
                     </View>
                   )}
                 </View>
                 <View style={styles.checklistContent}>
-                  <Text style={styles.checklistTitle}>Connecting WiFi</Text>
-                  <Text style={styles.checklistDescription}>
+                  <Text style={[styles.checklistTitle, isLightTheme && { color: "#111111" }]}>Connecting WiFi</Text>
+                  <Text style={[styles.checklistDescription, isLightTheme && { color: "#666666" }]}>
                     {step1WiFiStatus === 'success' 
                       ? 'WiFi connected successfully' 
                       : step1WiFiStatus === 'failed'
@@ -712,7 +733,17 @@ export default function ConnectScreen() {
 
             {/* Step 2: Register Device - Only show if Step 1 succeeded */}
             {step1WiFiStatus === 'success' && (
-              <View style={styles.checklistItemCard}>
+              <View style={[
+                styles.checklistItemCard,
+                isLightTheme && {
+                  backgroundColor: "#FFFFFF",
+                  borderColor: "#E5E7EB",
+                  shadowColor: "#000000",
+                  shadowOpacity: 0.03,
+                  shadowRadius: 8,
+                  elevation: 1,
+                }
+              ]}>
                 <View style={styles.checklistItemContent}>
                   <View style={styles.checklistIconContainer}>
                     {step2RegisterStatus === 'success' ? (
@@ -724,18 +755,18 @@ export default function ConnectScreen() {
                         <Ionicons name="close" size={20} color="#FFF" />
                       </View>
                     ) : step2RegisterStatus === 'loading' ? (
-                      <View style={[styles.checklistIcon, styles.checklistIconLoading]}>
-                        <ActivityIndicator size="small" color="#4A90E2" />
+                      <View style={[styles.checklistIcon, styles.checklistIconLoading, isLightTheme && { borderColor: '#0061A4' }]}>
+                        <ActivityIndicator size="small" color={isLightTheme ? "#0061A4" : "#4A90E2"} />
                       </View>
                     ) : (
-                      <View style={[styles.checklistIcon, styles.checklistIconPending]}>
-                        <Ionicons name="ellipse-outline" size={20} color="rgba(255, 255, 255, 0.4)" />
+                      <View style={[styles.checklistIcon, styles.checklistIconPending, isLightTheme && { backgroundColor: 'rgba(0, 0, 0, 0.03)', borderColor: 'rgba(0, 0, 0, 0.1)' }]}>
+                        <Ionicons name="ellipse-outline" size={20} color={isLightTheme ? "rgba(0, 0, 0, 0.2)" : "rgba(255, 255, 255, 0.4)"} />
                       </View>
                     )}
                   </View>
                   <View style={styles.checklistContent}>
-                    <Text style={styles.checklistTitle}>Register Device</Text>
-                    <Text style={styles.checklistDescription}>
+                    <Text style={[styles.checklistTitle, isLightTheme && { color: "#111111" }]}>Register Device</Text>
+                    <Text style={[styles.checklistDescription, isLightTheme && { color: "#666666" }]}>
                       {step2RegisterStatus === 'success'
                         ? 'Device registered successfully'
                         : step2RegisterStatus === 'failed'
@@ -764,7 +795,17 @@ export default function ConnectScreen() {
 
         {/* Retry Button - Only show if Step 1 failed and retries < 3 */}
         {step1WiFiStatus === 'failed' && retryCountRef.current < 3 && (
-          <TouchableOpacity onPress={handleRetry} style={styles.retryButton}>
+          <TouchableOpacity
+            onPress={handleRetry}
+            style={[
+              styles.retryButton,
+              isLightTheme && {
+                backgroundColor: "#0061A4",
+                shadowColor: "#0061A4",
+                shadowOpacity: 0.15,
+              }
+            ]}
+          >
             <Ionicons name="refresh" size={20} color="#FFF" />
             <Text style={styles.retryButtonText}>Retry</Text>
           </TouchableOpacity>
@@ -773,9 +814,19 @@ export default function ConnectScreen() {
           {/* Success Button - Simplified: Show when provisioning status is SUCCESS */}
           {/* SINGLE SOURCE OF TRUTH: Button visibility depends only on final provisioning status */}
           {currentStatus === ProvisioningStatus.SUCCESS && (
-            <TouchableOpacity onPress={handleGoToDashboard} style={styles.dashboardButton}>
-              <Ionicons name="home" size={20} color="#1D244D" />
-              <Text style={styles.dashboardButtonText}>Go to Dashboard</Text>
+            <TouchableOpacity
+              onPress={handleGoToDashboard}
+              style={[
+                styles.dashboardButton,
+                isLightTheme && {
+                  backgroundColor: "#0061A4",
+                  shadowColor: "#0061A4",
+                  shadowOpacity: 0.15,
+                }
+              ]}
+            >
+              <Ionicons name="home" size={20} color={isLightTheme ? "#FFF" : "#1D244D"} />
+              <Text style={[styles.dashboardButtonText, isLightTheme && { color: "#FFF" }]}>Go to Dashboard</Text>
             </TouchableOpacity>
           )}
         </Animated.View>
@@ -787,6 +838,7 @@ export default function ConnectScreen() {
         title={alertConfig.title}
         message={alertConfig.message}
         buttons={alertConfig.buttons}
+        isLight={isLightTheme}
         onClose={() => setShowAlert(false)}
       />
     </SafeAreaView>

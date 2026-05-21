@@ -1,26 +1,28 @@
 import React from 'react';
+import { TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Tabs } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useTheme } from '@/contexts/ThemeContext';
 
 export default function TabLayout() {
   const insets = useSafeAreaInsets();
+  const { isLightTheme } = useTheme();
   
   return (
     <Tabs
       screenOptions={{
         headerShown: false,
-        unmountOnBlur: false,
-        tabBarActiveTintColor: '#C7B9FF',
-        tabBarInactiveTintColor: '#FFFFFF',
+        tabBarActiveTintColor: isLightTheme ? '#0061A4' : '#C7B9FF',
+        tabBarInactiveTintColor: isLightTheme ? '#666666' : '#FFFFFF',
         tabBarStyle: {
-          backgroundColor: 'rgba(30, 25, 60, 0.95)',
-          borderTopWidth: 0,
-          borderTopColor: 'transparent',
-          elevation: 0,
-          shadowOpacity: 0,
-          shadowOffset: { width: 0, height: 0 },
-          shadowRadius: 0,
+          backgroundColor: isLightTheme ? '#FFFFFF' : 'rgba(30, 25, 60, 0.95)',
+          borderTopWidth: isLightTheme ? 1 : 0,
+          borderTopColor: isLightTheme ? 'rgba(0, 0, 0, 0.06)' : 'transparent',
+          elevation: isLightTheme ? 2 : 0,
+          shadowOpacity: isLightTheme ? 0.05 : 0,
+          shadowOffset: { width: 0, height: -2 },
+          shadowRadius: isLightTheme ? 3 : 0,
           height: 70 + insets.bottom,
           paddingBottom: 10 + insets.bottom,
           paddingTop: 10,
@@ -29,6 +31,12 @@ export default function TabLayout() {
           fontSize: 12,
           fontWeight: '600',
         },
+        tabBarButton: (props) => (
+          <TouchableOpacity
+            {...props}
+            activeOpacity={0.92}
+          />
+        ),
       }}
     >
       <Tabs.Screen 

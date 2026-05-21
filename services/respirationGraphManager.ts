@@ -283,7 +283,7 @@ export function subscribe(
       lastAggregationTime = now;
       const state = getState(deviceId);
       const currentZoom = state.currentZoomIndex; // Use stored zoom index
-      updateRespirationGraphData(deviceId, currentZoom).catch((error) => {
+      updateRespirationGraphData(deviceId, currentZoom).catch((error: any) => {
         console.error('[RespirationGraphManager] Error updating graph data:', error);
       });
     }

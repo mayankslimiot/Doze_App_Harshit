@@ -17,6 +17,7 @@ import { useFont } from '@shopify/react-native-skia';
 import { CartesianChart, Bar } from 'victory-native';
 import { useDevice } from '@/contexts/DeviceContext';
 import { useAuth } from '@/contexts/AuthContext';
+import { useTheme } from '@/contexts/ThemeContext';
 import { getWeeklyHeartRateData, getMonthlyHeartRateData, getWeeklyRespirationData, getMonthlyRespirationData, getWeeklyStressData, getMonthlyStressData } from '@/services/deviceData';
 
 const { width } = Dimensions.get('window');
@@ -49,6 +50,7 @@ export default function HistoryInsightsScreen() {
   const insets = useSafeAreaInsets();
   const { activeDevice } = useDevice();
   const { auth } = useAuth();
+  const { isLightTheme } = useTheme();
   
   // Get metric from params
   const params = useLocalSearchParams();
@@ -283,16 +285,18 @@ export default function HistoryInsightsScreen() {
   const yDomain = metricConfig.yDomain;
 
   return (
-    <View style={styles.container}>
-      <StatusBar barStyle="light-content" backgroundColor="#02041A" />
-      <LinearGradient colors={metricConfig.colors.gradient as any} style={styles.gradientBackground} />
+    <View style={[styles.container, isLightTheme && { backgroundColor: '#F8F9FA' }]}>
+      <StatusBar barStyle={isLightTheme ? 'dark-content' : 'light-content'} backgroundColor={isLightTheme ? '#F8F9FA' : '#02041A'} />
+      {isLightTheme ? null : (
+        <LinearGradient colors={metricConfig.colors.gradient as any} style={styles.gradientBackground} />
+      )}
 
       {/* Header */}
       <View style={[styles.header, { paddingTop: insets.top + 10 }]}>
         <TouchableOpacity style={styles.backBtn} onPress={() => router.back()} activeOpacity={0.8}>
-          <Ionicons name="chevron-back" size={24} color="#FFF" />
+          <Ionicons name="chevron-back" size={24} color={isLightTheme ? '#333333' : '#FFF'} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>{metricConfig.title}</Text>
+        <Text style={[styles.headerTitle, isLightTheme && { color: '#111111' }]}>{metricConfig.title}</Text>
         <View style={{ width: 40 }} />
       </View>
 
@@ -300,54 +304,65 @@ export default function HistoryInsightsScreen() {
       <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: insets.bottom + 40 }} showsVerticalScrollIndicator={false}>
         
         {/* Toggle Week / Month */}
-        <View style={styles.toggleContainer}>
+        <View style={[styles.toggleContainer, isLightTheme && { backgroundColor: 'rgba(0,0,0,0.04)' }]}>
           <TouchableOpacity
             style={[styles.toggleBtn, selectedPeriod === 'Week' && [styles.toggleBtnActive, { backgroundColor: metricConfig.colors.primary }]]}
             onPress={() => { setSelectedPeriod('Week'); setSelectedDate(new Date()); }}
           >
-            <Text style={[styles.toggleBtnText, selectedPeriod === 'Week' && styles.toggleBtnTextActive]}>Week</Text>
+            <Text style={[styles.toggleBtnText, isLightTheme && { color: 'rgba(0,0,0,0.5)' }, selectedPeriod === 'Week' && { color: '#FFFFFF', fontWeight: '700' }]}>Week</Text>
           </TouchableOpacity>
           <TouchableOpacity
             style={[styles.toggleBtn, selectedPeriod === 'Month' && [styles.toggleBtnActive, { backgroundColor: metricConfig.colors.primary }]]}
             onPress={() => { setSelectedPeriod('Month'); setSelectedDate(new Date()); }}
           >
-            <Text style={[styles.toggleBtnText, selectedPeriod === 'Month' && styles.toggleBtnTextActive]}>Month</Text>
+            <Text style={[styles.toggleBtnText, isLightTheme && { color: 'rgba(0,0,0,0.5)' }, selectedPeriod === 'Month' && { color: '#FFFFFF', fontWeight: '700' }]}>Month</Text>
           </TouchableOpacity>
         </View>
 
         {/* Top Summary Card */}
-        <View style={styles.summaryCard}>
+        <View style={[
+          styles.summaryCard, 
+          isLightTheme && { 
+            backgroundColor: '#FFFFFF', 
+            borderColor: 'rgba(0,0,0,0.06)',
+            shadowColor: '#000',
+            shadowOffset: { width: 0, height: 2 },
+            shadowOpacity: 0.04,
+            shadowRadius: 3,
+            elevation: 1 
+          }
+        ]}>
           <View style={styles.summaryTopRow}>
             <View style={styles.iconTitleRow}>
               <Text style={styles.summaryIcon}>{metricConfig.icon}</Text>
-              <Text style={styles.summaryTitle}>Avg {metricConfig.title.split(' ')[0]}</Text>
+              <Text style={[styles.summaryTitle, isLightTheme && { color: '#666666' }]}>Avg {metricConfig.title.split(' ')[0]}</Text>
             </View>
           </View>
           <View style={styles.summaryValueRow}>
-            <Text style={styles.summaryValue}>{summaryAvg}</Text>
-            <Text style={styles.summaryUnit}>{metricConfig.unit}</Text>
+            <Text style={[styles.summaryValue, isLightTheme && { color: '#111111' }]}>{summaryAvg}</Text>
+            <Text style={[styles.summaryUnit, isLightTheme && { color: '#555555' }]}>{metricConfig.unit}</Text>
           </View>
-          <View style={styles.summaryStatsRow}>
+          <View style={[styles.summaryStatsRow, isLightTheme && { borderTopColor: 'rgba(0,0,0,0.06)' }]}>
             <View style={styles.summaryStatItem}>
-              <Text style={styles.summaryStatLabel}>Min</Text>
-              <Text style={styles.summaryStatValue}>{summaryMin}</Text>
+              <Text style={[styles.summaryStatLabel, isLightTheme && { color: '#666666' }]}>Min</Text>
+              <Text style={[styles.summaryStatValue, isLightTheme && { color: '#111111' }]}>{summaryMin}</Text>
             </View>
             <View style={styles.summaryStatItem}>
-              <Text style={styles.summaryStatLabel}>Max</Text>
-              <Text style={styles.summaryStatValue}>{summaryMax}</Text>
+              <Text style={[styles.summaryStatLabel, isLightTheme && { color: '#666666' }]}>Max</Text>
+              <Text style={[styles.summaryStatValue, isLightTheme && { color: '#111111' }]}>{summaryMax}</Text>
             </View>
           </View>
         </View>
 
         {/* Chart Section */}
-        <View style={styles.chartSection}>
+        <View style={[styles.chartSection, isLightTheme && { borderTopColor: 'rgba(0,0,0,0.06)', backgroundColor: 'transparent' }]}>
           <View style={styles.dateSelector}>
-            <TouchableOpacity onPress={handlePrevPeriod} style={styles.dateBtn}>
-              <Ionicons name="chevron-back" size={20} color="#7EA6FF" />
+            <TouchableOpacity onPress={handlePrevPeriod} style={[styles.dateBtn, isLightTheme && { backgroundColor: 'rgba(0,0,0,0.04)' }]}>
+              <Ionicons name="chevron-back" size={20} color={isLightTheme ? '#0061A4' : '#7EA6FF'} />
             </TouchableOpacity>
-            <Text style={styles.dateText}>{formattedDateRange}</Text>
-            <TouchableOpacity onPress={handleNextPeriod} style={[styles.dateBtn, isCurrentPeriodSelected && styles.dateBtnDisabled]} disabled={isCurrentPeriodSelected}>
-              <Ionicons name="chevron-forward" size={20} color={isCurrentPeriodSelected ? 'rgba(255,255,255,0.2)' : '#7EA6FF'} />
+            <Text style={[styles.dateText, isLightTheme && { color: '#111111' }]}>{formattedDateRange}</Text>
+            <TouchableOpacity onPress={handleNextPeriod} style={[styles.dateBtn, isLightTheme && { backgroundColor: 'rgba(0,0,0,0.04)' }, isCurrentPeriodSelected && styles.dateBtnDisabled]} disabled={isCurrentPeriodSelected}>
+              <Ionicons name="chevron-forward" size={20} color={isCurrentPeriodSelected ? (isLightTheme ? 'rgba(0,0,0,0.1)' : 'rgba(255,255,255,0.2)') : (isLightTheme ? '#0061A4' : '#7EA6FF')} />
             </TouchableOpacity>
           </View>
 
@@ -355,7 +370,7 @@ export default function HistoryInsightsScreen() {
             {((selectedPeriod === 'Week' && isLoadingWeekly) || (selectedPeriod === 'Month' && isLoadingMonthly)) ? (
               <View style={styles.loadingContainer}>
                 <ActivityIndicator size="large" color={metricConfig.colors.primary} />
-                <Text style={styles.loadingText}>Loading data...</Text>
+                <Text style={[styles.loadingText, isLightTheme && { color: '#666666' }]}>Loading data...</Text>
               </View>
             ) : chartData.length > 0 && chartData.some(d => d.hasData) ? (
               skiaFont ? (
@@ -368,8 +383,8 @@ export default function HistoryInsightsScreen() {
                   xAxis={{
                     font: skiaFont,
                     tickCount: selectedPeriod === 'Week' ? 7 : 7,
-                    labelColor: 'rgba(199,214,255,0.75)',
-                    lineColor: 'rgba(255,255,255,0.08)',
+                    labelColor: isLightTheme ? '#666666' : 'rgba(199,214,255,0.75)',
+                    lineColor: isLightTheme ? 'rgba(0,0,0,0.05)' : 'rgba(255,255,255,0.08)',
                     labelOffset: 4,
                     formatXLabel: (label: string | number) => {
                       if (selectedPeriod === 'Week') {
@@ -388,8 +403,8 @@ export default function HistoryInsightsScreen() {
                   yAxis={[{
                     font: skiaFont,
                     tickCount: 5,
-                    labelColor: 'rgba(199,214,255,0.75)',
-                    lineColor: 'rgba(255,255,255,0.08)',
+                    labelColor: isLightTheme ? '#666666' : 'rgba(199,214,255,0.75)',
+                    lineColor: isLightTheme ? 'rgba(0,0,0,0.05)' : 'rgba(255,255,255,0.08)',
                     labelOffset: 4,
                     formatYLabel: (v) => `${Math.round(Number(v))}`,
                   }]}
@@ -412,8 +427,8 @@ export default function HistoryInsightsScreen() {
               ) : null
             ) : (
               <View style={styles.noDataContainer}>
-                <Ionicons name="bar-chart-outline" size={48} color="rgba(255,255,255,0.2)" />
-                <Text style={styles.noDataText}>No {metricConfig.title} data available for this {selectedPeriod.toLowerCase()}</Text>
+                <Ionicons name="bar-chart-outline" size={48} color={isLightTheme ? "rgba(0,0,0,0.15)" : "rgba(255,255,255,0.2)"} />
+                <Text style={[styles.noDataText, isLightTheme && { color: '#666666' }]}>No {metricConfig.title} data available for this {selectedPeriod.toLowerCase()}</Text>
               </View>
             )}
           </View>

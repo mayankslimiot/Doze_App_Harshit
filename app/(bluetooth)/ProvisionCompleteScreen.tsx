@@ -4,11 +4,13 @@ import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useLocalSearchParams, useRouter } from "expo-router";
 import React, { useEffect, useRef, useState } from "react";
-import { Animated, SafeAreaView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { Animated, SafeAreaView, StyleSheet, StatusBar, Text, TouchableOpacity, View } from "react-native";
 import { useDevice } from '@/contexts/DeviceContext';
+import { useTheme } from '@/contexts/ThemeContext';
 
 export default function ProvisionCompleteScreen() {
   const router = useRouter();
+  const { isLightTheme } = useTheme();
   const { refreshDevices } = useDevice();
   const params = useLocalSearchParams();
   const wifiSSID = (params.wifiSSID as string) || 'WiFi Network';
@@ -78,61 +80,75 @@ export default function ProvisionCompleteScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.container}>
-      <LinearGradient colors={['#1D244D', '#02041A', '#1A1D3E']} style={styles.gradientBackground} />
+    <SafeAreaView style={[styles.container, isLightTheme && { backgroundColor: '#F8F9FA' }]}>
+      <StatusBar barStyle={isLightTheme ? 'dark-content' : 'light-content'} backgroundColor={isLightTheme ? '#F8F9FA' : '#02041A'} />
+      {isLightTheme ? null : (
+        <LinearGradient colors={['#1D244D', '#02041A', '#1A1D3E']} style={styles.gradientBackground} />
+      )}
       
       <View style={styles.content}>
         {/* Success Icon */}
         <Animated.View style={[styles.iconContainer, { transform: [{ scale: scaleAnim }] }]}>
-          <View style={styles.iconCircle}>
+          <View style={[styles.iconCircle, isLightTheme && { backgroundColor: 'rgba(76, 175, 80, 0.1)' }]}>
             <Ionicons name="checkmark-circle" size={120} color="#4CAF50" />
           </View>
         </Animated.View>
 
         <Animated.View style={[styles.textContainer, { opacity: fadeAnim }]}>
-          <Text style={styles.title}>Setup Complete! 🎉</Text>
-          <Text style={styles.subtitle}>
+          <Text style={[styles.title, isLightTheme && { color: '#111111' }]}>Setup Complete! 🎉</Text>
+          <Text style={[styles.subtitle, isLightTheme && { color: '#666666' }]}>
             Your Dozemate device is now connected to WiFi and ready to use.
           </Text>
 
-          <View style={styles.infoCard}>
+          <View style={[
+            styles.infoCard,
+            isLightTheme && {
+              backgroundColor: '#FFFFFF',
+              borderColor: '#E5E7EB',
+              shadowColor: '#000',
+              shadowOffset: { width: 0, height: 4 },
+              shadowOpacity: 0.03,
+              shadowRadius: 10,
+              elevation: 2,
+            }
+          ]}>
             <View style={styles.infoRow}>
               <Ionicons name="wifi" size={24} color="#4CAF50" />
               <View style={styles.infoTextContainer}>
-                <Text style={styles.infoLabel}>WiFi Network</Text>
-                <Text style={styles.infoValue}>{wifiSSID}</Text>
+                <Text style={[styles.infoLabel, isLightTheme && { color: '#666666' }]}>WiFi Network</Text>
+                <Text style={[styles.infoValue, isLightTheme && { color: '#111111' }]}>{wifiSSID}</Text>
               </View>
             </View>
 
-            <View style={styles.divider} />
+            <View style={[styles.divider, isLightTheme && { backgroundColor: '#E5E7EB' }]} />
 
             <View style={styles.infoRow}>
               <Ionicons name="time" size={24} color="#4CAF50" />
               <View style={styles.infoTextContainer}>
-                <Text style={styles.infoLabel}>Connected At</Text>
-                <Text style={styles.infoValue}>
+                <Text style={[styles.infoLabel, isLightTheme && { color: '#666666' }]}>Connected At</Text>
+                <Text style={[styles.infoValue, isLightTheme && { color: '#111111' }]}>
                   {connectedAt.toLocaleTimeString('en-IN', { hour12: false })}
                 </Text>
               </View>
             </View>
 
-            <View style={styles.divider} />
+            <View style={[styles.divider, isLightTheme && { backgroundColor: '#E5E7EB' }]} />
 
             <View style={styles.infoRow}>
               <Ionicons name="cloud-done" size={24} color="#4CAF50" />
               <View style={styles.infoTextContainer}>
-                <Text style={styles.infoLabel}>Cloud Sync</Text>
-                <Text style={styles.infoValue}>Active</Text>
+                <Text style={[styles.infoLabel, isLightTheme && { color: '#666666' }]}>Cloud Sync</Text>
+                <Text style={[styles.infoValue, isLightTheme && { color: '#111111' }]}>Active</Text>
               </View>
             </View>
 
-            <View style={styles.divider} />
+            <View style={[styles.divider, isLightTheme && { backgroundColor: '#E5E7EB' }]} />
 
             <View style={styles.infoRow}>
               <Ionicons name="heart" size={24} color="#4CAF50" />
               <View style={styles.infoTextContainer}>
-                <Text style={styles.infoLabel}>Wellness Tracking</Text>
-                <Text style={styles.infoValue}>Running</Text>
+                <Text style={[styles.infoLabel, isLightTheme && { color: '#666666' }]}>Wellness Tracking</Text>
+                <Text style={[styles.infoValue, isLightTheme && { color: '#111111' }]}>Running</Text>
               </View>
             </View>
           </View>
@@ -143,19 +159,28 @@ export default function ProvisionCompleteScreen() {
           </TouchableOpacity>
 
           {autoNavigateCountdown > 0 && (
-            <Text style={styles.autoNavigateText}>
+            <Text style={[styles.autoNavigateText, isLightTheme && { color: '#666666' }]}>
               Auto-navigating in {autoNavigateCountdown} second{autoNavigateCountdown !== 1 ? 's' : ''}...
             </Text>
           )}
 
           <View style={styles.actionButtons}>
-            <TouchableOpacity onPress={handleAddAnother} style={styles.secondaryButton}>
-              <Ionicons name="add-circle-outline" size={20} color="#4A90E2" />
-              <Text style={styles.secondaryButtonText}>Add Another Device</Text>
+            <TouchableOpacity
+              onPress={handleAddAnother}
+              style={[
+                styles.secondaryButton,
+                isLightTheme && {
+                  backgroundColor: 'rgba(0, 97, 164, 0.06)',
+                  borderColor: 'rgba(0, 97, 164, 0.15)',
+                }
+              ]}
+            >
+              <Ionicons name="add-circle-outline" size={20} color={isLightTheme ? '#0061A4' : '#4A90E2'} />
+              <Text style={[styles.secondaryButtonText, isLightTheme && { color: '#0061A4' }]}>Add Another Device</Text>
             </TouchableOpacity>
           </View>
 
-          <Text style={styles.note}>
+          <Text style={[styles.note, isLightTheme && { color: '#9CA3AF' }]}>
             Your device will now send health data to the Dozemate cloud server
           </Text>
         </Animated.View>

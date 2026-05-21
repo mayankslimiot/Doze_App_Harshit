@@ -1,14 +1,16 @@
 import React from 'react';
-import { View, Text, StyleSheet, StatusBar, ScrollView, Dimensions, TouchableOpacity, Modal, Pressable, Animated, Easing, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, StatusBar, ScrollView, Dimensions, TouchableOpacity, Modal, Pressable, Animated, Easing, ActivityIndicator, useColorScheme } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import Svg from 'react-native-svg';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useBluetooth } from '@/contexts/BluetoothProvider';
 import { useDevice } from '@/contexts/DeviceContext';
+import { useTheme } from '@/contexts/ThemeContext';
 import { getHistoricalData, getStressGraph } from '@/services/deviceData';
 import { getSleepSessions } from '@/services/sleepAnalytics';
-import { useRouter } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const RNSvg = require('react-native-svg');
@@ -37,6 +39,8 @@ export default function HistoryScreen() {
   const { activeDevice } = useDevice();
   const router = useRouter();
 
+  const { isLightTheme } = useTheme();
+
   const [isLoadingData, setIsLoadingData] = React.useState(false);
   const [availableMetrics, setAvailableMetrics] = React.useState<string[]>([]);
 
@@ -44,10 +48,10 @@ export default function HistoryScreen() {
   const [isFilterOpen, setFilterOpen] = React.useState(false);
   // Committed state used by the screen
   const [selectedMetrics, setSelectedMetrics] = React.useState<string[]>([]);
-  const [period, setPeriod] = React.useState<'24h' | '2d' | '3d' | '7d' | '30d'>('30d');
+  const [period, setPeriod] = React.useState<'24h' | '2d' | '3d' | '7d' | '30d'>('24h');
   // Pending state while filter sheet is open (applied only on Apply)
   const [pendingSelectedMetrics, setPendingSelectedMetrics] = React.useState<string[]>([]);
-  const [pendingPeriod, setPendingPeriod] = React.useState<'24h' | '2d' | '3d' | '7d' | '30d'>('30d');
+  const [pendingPeriod, setPendingPeriod] = React.useState<'24h' | '2d' | '3d' | '7d' | '30d'>('24h');
   // Active badge/outline only when metrics are selected (never for time period)
   const isFilterActive = selectedMetrics.length > 0;
 
@@ -305,22 +309,27 @@ export default function HistoryScreen() {
   };
   const onRefresh = () => {
     setSelectedMetrics([]);
-    setPeriod('30d');
+    setPeriod('24h');
     // In real impl: refetch latest data
   };
 
   return (
-    <View style={styles.container}>
-      <StatusBar barStyle="light-content" backgroundColor="#02041A" />
-      <LinearGradient colors={['#1D244D', '#02041A', '#1A1D3E']} style={styles.gradientBackground} />
+    <View style={[styles.container, isLightTheme && { backgroundColor: '#F8F9FA' }]}>
+      <StatusBar 
+        barStyle={isLightTheme ? 'dark-content' : 'light-content'} 
+        backgroundColor={isLightTheme ? '#F8F9FA' : '#02041A'} 
+      />
+      {isLightTheme ? null : (
+        <LinearGradient colors={['#1D244D', '#02041A', '#1A1D3E']} style={styles.gradientBackground} />
+      )}
 
       {/* Header */}
       <View style={[styles.header, { paddingTop: insets.top + 6 }]}> 
-        <Text style={styles.headerTitle}>History</Text>
+        <Text style={[styles.headerTitle, isLightTheme && { color: '#111111' }]}>History</Text>
         <View style={styles.headerActions}>
 
-          <TouchableOpacity style={styles.headerIconBtn} activeOpacity={0.8} onPress={onRefresh}>
-            <Ionicons name="refresh" size={18} color="#C7B9FF" />
+          <TouchableOpacity style={[styles.headerIconBtn, isLightTheme && { backgroundColor: 'rgba(0, 97, 164, 0.08)' }]} activeOpacity={0.8} onPress={onRefresh}>
+            <Ionicons name="refresh" size={18} color={isLightTheme ? '#0061A4' : '#C7B9FF'} />
           </TouchableOpacity>
         </View>
       </View>
@@ -328,14 +337,23 @@ export default function HistoryScreen() {
       <ScrollView contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + 100 }]} showsVerticalScrollIndicator={false}>
         {/* Control row */}
         <View style={styles.controlsRow}>
-          <View style={styles.pill}><Text style={styles.pillText}>Device: {deviceLabel}</Text></View>
+          <View style={[styles.pill, isLightTheme && { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: 'rgba(0, 0, 0, 0.06)' }]}><Text style={[styles.pillText, isLightTheme && { color: '#666666' }]}>Device: {deviceLabel}</Text></View>
         </View>
 
         {/* Quick chips */}
         <View style={styles.chipsRow}>
           {(['24h', '2d', '3d', '7d', '30d'] as const).map((p) => (
-            <Pressable key={p} onPress={() => setPeriod(p)} style={[styles.chip, period === p && styles.chipActive]}>
-              <Text style={styles.chipText}>{p.toUpperCase()}</Text>
+            <Pressable 
+              key={p} 
+              onPress={() => setPeriod(p)} 
+              style={[
+                styles.chip, 
+                period === p && styles.chipActive,
+                isLightTheme && { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: 'rgba(0, 0, 0, 0.06)' },
+                period === p && isLightTheme && { backgroundColor: 'rgba(0, 97, 164, 0.12)', borderColor: '#0061A4', borderWidth: 1 }
+              ]}
+            >
+              <Text style={[styles.chipText, isLightTheme && { color: period === p ? '#0061A4' : '#666666' }]}>{p.toUpperCase()}</Text>
             </Pressable>
           ))}
         </View>
@@ -344,10 +362,10 @@ export default function HistoryScreen() {
         {/* Metric cards grid (same style as Home Environment Data) */}
         <View style={[styles.envCard, isLoadingData && { minHeight: 200, justifyContent: 'center' }]}>
           {isLoadingData ? (
-             <ActivityIndicator color="#7EA6FF" size="large" />
+             <ActivityIndicator color={isLightTheme ? '#0061A4' : '#7EA6FF'} size="large" />
           ) : tilesToRender.length === 0 ? (
              <View style={{ padding: 20, alignItems: 'center' }}>
-               <Text style={{ color: 'rgba(255,255,255,0.6)', fontSize: 16 }}>No data recorded for this period.</Text>
+               <Text style={{ color: isLightTheme ? '#666666' : 'rgba(255,255,255,0.6)', fontSize: 16 }}>No data recorded for this period.</Text>
              </View>
           ) : (
           <View style={styles.envGrid}>
@@ -364,21 +382,32 @@ export default function HistoryScreen() {
                     return (
                       <TouchableOpacity 
                         key={m.key} 
-                        style={styles.envTile}
+                        style={[
+                          styles.envTile,
+                          isLightTheme && {
+                            backgroundColor: '#FFFFFF',
+                            borderColor: 'rgba(0, 0, 0, 0.06)',
+                            shadowColor: '#000',
+                            shadowOffset: { width: 0, height: 2 },
+                            shadowOpacity: 0.04,
+                            shadowRadius: 3,
+                            elevation: 1
+                          }
+                        ]}
                         activeOpacity={0.8}
                         onPress={() => {
                           const routeParam = m.key === 'hr' ? 'heartRate' : (m.key === 'resp' ? 'respiration' : m.key);
                           router.push(`/charts/history-insights?metric=${routeParam}` as any);
                         }}
                       >
-                        <LinearGradient colors={m.colors} style={styles.envTileBg} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} />
+                        <LinearGradient colors={m.colors} style={[styles.envTileBg, isLightTheme && { opacity: 0 }]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} />
                         <View style={styles.envTileInner}>
                           <View style={styles.envTopRow}>
-                            <View style={[styles.envIconWrap, { marginRight: 4 }]}>
+                            <View style={[styles.envIconWrap, { marginRight: 4 }, isLightTheme && { backgroundColor: 'rgba(0, 97, 164, 0.08)' }]}>
                               <Text style={styles.envIcon}>{m.icon}</Text>
                             </View>
                             <View style={{ flex: 1 }}>
-                              <Text style={styles.envName} numberOfLines={1} ellipsizeMode="tail">{m.name}</Text>
+                              <Text style={[styles.envName, isLightTheme && { color: '#666666' }]} numberOfLines={1} ellipsizeMode="tail">{m.name}</Text>
                             </View>
                           </View>
                         </View>
@@ -398,16 +427,16 @@ export default function HistoryScreen() {
       <Modal visible={isFilterOpen} animationType="slide" transparent onRequestClose={onCloseFilter}>
         <View style={styles.sheetBackdrop}>
           <Pressable style={styles.backdropTouch} onPress={onCloseFilter} />
-          <View style={styles.sheet}>
+          <View style={[styles.sheet, isLightTheme && { backgroundColor: '#FFFFFF', borderColor: 'rgba(0,0,0,0.06)' }]}>
             <View style={styles.sheetHeaderRow}>
-              <Text style={styles.sheetTitle}>Data Filters</Text>
-              <TouchableOpacity onPress={onCloseFilter} style={styles.closeBtn}>
-                <Ionicons name="close" size={20} color="#C7B9FF" />
+              <Text style={[styles.sheetTitle, isLightTheme && { color: '#111111' }]}>Data Filters</Text>
+              <TouchableOpacity onPress={onCloseFilter} style={[styles.closeBtn, isLightTheme && { backgroundColor: 'rgba(0, 97, 164, 0.08)' }]}>
+                <Ionicons name="close" size={20} color={isLightTheme ? '#0061A4' : '#C7B9FF'} />
               </TouchableOpacity>
             </View>
 
             {/* Time period (pending) */}
-            <Text style={styles.sheetSectionLabel}>Time Period</Text>
+            <Text style={[styles.sheetSectionLabel, isLightTheme && { color: '#666666' }]}>Time Period</Text>
             <ScrollView
               horizontal
               showsHorizontalScrollIndicator={false}
@@ -415,8 +444,17 @@ export default function HistoryScreen() {
               contentContainerStyle={styles.sheetChipsRow}
             >
               {(['24h', '2d', '3d', '7d', '30d'] as const).map((p) => (
-                <Pressable key={p} onPress={() => setPendingPeriod(p)} style={[styles.chip, pendingPeriod === p && styles.chipActive]}>
-                  <Text style={styles.chipText}>
+                <Pressable 
+                  key={p} 
+                  onPress={() => setPendingPeriod(p)} 
+                  style={[
+                    styles.chip, 
+                    pendingPeriod === p && styles.chipActive,
+                    isLightTheme && { backgroundColor: '#F8F9FA', borderWidth: 1, borderColor: 'rgba(0,0,0,0.06)' },
+                    pendingPeriod === p && isLightTheme && { backgroundColor: 'rgba(0, 97, 164, 0.12)', borderColor: '#0061A4', borderWidth: 1 }
+                  ]}
+                >
+                  <Text style={[styles.chipText, isLightTheme && { color: pendingPeriod === p ? '#0061A4' : '#666666' }]}>
                     {p === '24h' ? 'Last 24 Hours' : p === '2d' ? 'Last 2 Days' : p === '3d' ? 'Last 3 Days' : p === '7d' ? 'Last 7 Days' : 'Last 30 Days'}
                   </Text>
                 </Pressable>
@@ -424,25 +462,29 @@ export default function HistoryScreen() {
             </ScrollView>
 
             {/* Metrics multi-select (pending) */}
-            <Text style={[styles.sheetSectionLabel, { marginTop: 12 }]}>Select Metrics</Text>
+            <Text style={[styles.sheetSectionLabel, { marginTop: 12 }, isLightTheme && { color: '#666666' }]}>Select Metrics</Text>
             <View style={styles.metricsList}>
               {AVAILABLE_METRICS.map((m) => {
                 const checked = pendingSelectedMetrics.includes(m.key);
                 return (
                   <Pressable key={m.key} onPress={() => onToggleMetric(m.key)} style={styles.metricRow}>
-                    <Ionicons name={checked ? 'checkbox-outline' : 'square-outline'} size={20} color={checked ? '#7EA6FF' : 'rgba(255,255,255,0.8)'} />
-                    <Text style={styles.metricLabelText}>{m.label}</Text>
+                    <Ionicons 
+                      name={checked ? 'checkbox-outline' : 'square-outline'} 
+                      size={20} 
+                      color={checked ? (isLightTheme ? '#0061A4' : '#7EA6FF') : (isLightTheme ? '#888888' : 'rgba(255,255,255,0.8)')} 
+                    />
+                    <Text style={[styles.metricLabelText, isLightTheme && { color: '#111111' }]}>{m.label}</Text>
                   </Pressable>
                 );
               })}
             </View>
 
             <View style={styles.sheetButtonsRow}>
-              <TouchableOpacity onPress={() => { setPendingSelectedMetrics([]); }} style={[styles.sheetBtn, { backgroundColor: 'rgba(255,255,255,0.08)' }]}>
-                <Text style={styles.sheetBtnText}>Clear</Text>
+              <TouchableOpacity onPress={() => { setPendingSelectedMetrics([]); }} style={[styles.sheetBtn, { backgroundColor: isLightTheme ? '#F0F2F5' : 'rgba(255,255,255,0.08)' }]}>
+                <Text style={[styles.sheetBtnText, isLightTheme && { color: '#666666' }]}>Clear</Text>
               </TouchableOpacity>
-              <TouchableOpacity onPress={onApplyFilter} style={[styles.sheetBtn, { backgroundColor: '#7EA6FF' }]}>
-                <Text style={[styles.sheetBtnText, { color: '#0F112B' }]}>Apply</Text>
+              <TouchableOpacity onPress={onApplyFilter} style={[styles.sheetBtn, { backgroundColor: isLightTheme ? '#0061A4' : '#7EA6FF' }]}>
+                <Text style={[styles.sheetBtnText, { color: isLightTheme ? '#FFFFFF' : '#0F112B' }]}>Apply</Text>
               </TouchableOpacity>
             </View>
           </View>

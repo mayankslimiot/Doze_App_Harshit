@@ -22,6 +22,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useBoot } from '@/contexts/BootContext';
 import { getDeviceHistory, getWeeklyRespirationData, getMonthlyRespirationData, getHealthData, getDeviceDetails, getRespirationGraphForDateRange } from '@/services/deviceData';
 import { useFocusEffect } from 'expo-router';
+import { useTheme } from '@/contexts/ThemeContext';
 import { ZOOM_LEVELS } from '@/utils/zoomLevels';
 import { aggregateRespiration } from '@/utils/respirationAggregation';
 import { 
@@ -68,6 +69,9 @@ export default function RespirationInsightsScreen() {
   const insets = useSafeAreaInsets();
   const { activeDevice } = useDevice();
   const { auth } = useAuth();
+  const { isLightTheme } = useTheme();
+  const chartLabelColor = isLightTheme ? 'rgba(0,0,0,0.5)' : 'rgba(199,214,255,0.75)';
+  const chartLineColor = isLightTheme ? 'rgba(0,0,0,0.06)' : 'rgba(255,255,255,0.08)';
   const [selectedPeriod, setSelectedPeriod] = React.useState<'Day' | 'Week' | 'Month'>('Day');
   
   const { onboardingSeen } = useBoot();
@@ -610,7 +614,7 @@ export default function RespirationInsightsScreen() {
 
     console.log('[RespirationInsights] Setting up Respiration graph subscription for device (today):', activeDevice.deviceId);
     import('@/services/respirationGraphManager').then(({ prepareRespirationGraph }) => {
-      prepareRespirationGraph(activeDevice.deviceId).catch((err) => {
+      prepareRespirationGraph(activeDevice.deviceId).catch((err: any) => {
         console.error('[RespirationInsights] Failed to prepare Respiration graph:', err);
       });
     });
@@ -639,7 +643,7 @@ export default function RespirationInsightsScreen() {
       setRespirationGraphReady(true);
     } else {
       import('@/services/respirationGraphManager').then(({ prepareRespirationGraph }) => {
-        prepareRespirationGraph(activeDevice.deviceId).catch((error) => {
+        prepareRespirationGraph(activeDevice.deviceId).catch((error: any) => {
           console.error('[RespirationInsights] Failed to prepare Respiration graph:', error);
         });
       });
@@ -711,13 +715,13 @@ export default function RespirationInsightsScreen() {
         }
         const rawPoints = res.data.points
           .filter((p) => p.x >= startMs && p.x <= endMs)
-          .map((p) => ({ timestamp: p.x, value: p.y }));
+          .map((p: any) => ({ timestamp: p.x, value: p.y }));
         historicalDayRawPointsRef.current = rawPoints;
         historicalDayDateRef.current = dateKey;
         setHistoricalDayRawPointsKey((k) => k + 1); // trigger metrics re-run after ref is populated
         applyHistoricalAggregation(rawPoints, startMs, endMs, 0);
       })
-      .catch((err) => {
+      .catch((err: any) => {
         if (!cancelled) {
           console.error('[RespirationInsights] Historical day fetch failed:', err);
           historicalDayRawPointsRef.current = [];
@@ -767,7 +771,7 @@ export default function RespirationInsightsScreen() {
     if (!activeDevice?.deviceId || selectedPeriod !== 'Day' || !isTodaySelected) {
       return;
     }
-    updateZoomLevel(activeDevice.deviceId, zoomIndex).catch((error) => {
+    updateZoomLevel(activeDevice.deviceId, zoomIndex).catch((error: any) => {
       console.error('[RespirationInsights] Failed to update zoom level:', error);
     });
   }, [activeDevice?.deviceId, selectedPeriod, zoomIndex, isTodaySelected]);
@@ -915,7 +919,7 @@ export default function RespirationInsightsScreen() {
     };
 
     // Connect WebSocket and add device update handler
-    connectWebSocket(deviceId, statusHandler).catch((error) => {
+    connectWebSocket(deviceId, statusHandler).catch((error: any) => {
       console.error('[RespirationInsights] Failed to connect WebSocket:', error);
     });
 
@@ -1492,20 +1496,20 @@ export default function RespirationInsightsScreen() {
     (selectedPeriod === 'Month' && isLoadingMonthly && monthlyRespirationData.length === 0);
 
   return (
-    <View style={styles.container}>
-      <StatusBar barStyle="light-content" backgroundColor="#02041A" />
+    <View style={[styles.container, isLightTheme && { backgroundColor: '#F8F9FA' }]}>
+      <StatusBar barStyle={isLightTheme ? "dark-content" : "light-content"} backgroundColor={isLightTheme ? "#F8F9FA" : "#02041A"} />
       <LinearGradient 
-        colors={['#1D244D', '#02041A', '#1A1D3E']} 
+        colors={isLightTheme ? ['#F8F9FA', '#F8F9FA'] : ['#1D244D', '#02041A', '#1A1D3E']} 
         style={StyleSheet.absoluteFill}
         pointerEvents="none"
       />
 
       {/* Header */}
       <View style={[styles.header, { paddingTop: insets.top + 10 }]}>
-        <TouchableOpacity onPress={() => router.back()} style={styles.backButton} activeOpacity={0.8}>
-          <Ionicons name="arrow-back" size={24} color="#FFFFFF" />
+        <TouchableOpacity onPress={() => router.back()} style={[styles.backButton, isLightTheme && { backgroundColor: 'rgba(0,97,164,0.06)' }]} activeOpacity={0.8}>
+          <Ionicons name="arrow-back" size={24} color={isLightTheme ? "#0061A4" : "#FFFFFF"} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle} numberOfLines={1}>{activeDevice?.customName || activeDevice?.defaultName || 'Estimated Respiration Trends'}</Text>
+        <Text style={[styles.headerTitle, isLightTheme && { color: '#111111' }]} numberOfLines={1}>{activeDevice?.customName || activeDevice?.defaultName || 'Estimated Respiration Trends'}</Text>
         <View style={{ width: 40 }} />
       </View>
 
@@ -1514,15 +1518,15 @@ export default function RespirationInsightsScreen() {
         showsVerticalScrollIndicator={false}
       >
         {/* Period Selector Tabs */}
-        <View style={styles.periodContainer}>
+        <View style={[styles.periodContainer, isLightTheme && { backgroundColor: 'rgba(0,0,0,0.04)' }]}>
           {(['Day', 'Week', 'Month'] as const).map((period) => (
             <TouchableOpacity
               key={period}
-              style={[styles.periodTab, selectedPeriod === period && styles.periodTabActive]}
+              style={[styles.periodTab, selectedPeriod === period && [styles.periodTabActive, isLightTheme && { backgroundColor: '#0061A4' }]]}
               onPress={() => setSelectedPeriod(period)}
               activeOpacity={0.8}
             >
-              <Text style={[styles.periodTabText, selectedPeriod === period && styles.periodTabTextActive]}>
+              <Text style={[styles.periodTabText, isLightTheme && { color: '#666666' }, selectedPeriod === period && [styles.periodTabTextActive, isLightTheme && { color: '#FFFFFF' }]]}>
                 {period}
               </Text>
             </TouchableOpacity>
@@ -1533,27 +1537,27 @@ export default function RespirationInsightsScreen() {
         <View style={styles.dateNavigation}>
           <TouchableOpacity 
             onPress={goToPrevious} 
-            style={isFetchingData ? [styles.dateNavButton, styles.dateNavButtonDisabled] : styles.dateNavButton} 
+            style={isFetchingData ? [styles.dateNavButton, styles.dateNavButtonDisabled, isLightTheme && { backgroundColor: 'rgba(0,0,0,0.02)' }] : [styles.dateNavButton, isLightTheme && { backgroundColor: 'rgba(0,0,0,0.04)' }]} 
             activeOpacity={0.8}
             disabled={isFetchingData}
           >
             {(isFetchingData && navDirection === 'prev') ? (
-              <ActivityIndicator size="small" color="rgba(199,214,255,0.5)" />
+              <ActivityIndicator size="small" color={isLightTheme ? "#0061A4" : "rgba(199,214,255,0.5)"} />
             ) : (
-              <Ionicons name="chevron-back" size={20} color={isFetchingData ? "rgba(199,214,255,0.3)" : "#C7D6FF"} />
+              <Ionicons name="chevron-back" size={20} color={isFetchingData ? (isLightTheme ? "rgba(0,0,0,0.2)" : "rgba(199,214,255,0.3)") : (isLightTheme ? "#0061A4" : "#C7D6FF")} />
             )}
           </TouchableOpacity>
-          <Text style={styles.dateText}>{formattedDate}</Text>
+          <Text style={[styles.dateText, isLightTheme && { color: '#111111' }]}>{formattedDate}</Text>
           <TouchableOpacity 
             onPress={goToNext} 
-            style={(canGoNext && !isFetchingData) ? styles.dateNavButton : [styles.dateNavButton, styles.dateNavButtonDisabled]} 
+            style={(canGoNext && !isFetchingData) ? [styles.dateNavButton, isLightTheme && { backgroundColor: 'rgba(0,0,0,0.04)' }] : [styles.dateNavButton, styles.dateNavButtonDisabled, isLightTheme && { backgroundColor: 'rgba(0,0,0,0.02)' }]} 
             activeOpacity={0.8}
             disabled={!canGoNext || isFetchingData}
           >
             {(isFetchingData && navDirection === 'next') ? (
-              <ActivityIndicator size="small" color="rgba(199,214,255,0.5)" />
+              <ActivityIndicator size="small" color={isLightTheme ? "#0061A4" : "rgba(199,214,255,0.5)"} />
             ) : (
-              <Ionicons name="chevron-forward" size={20} color={(canGoNext && !isFetchingData) ? "#C7D6FF" : "rgba(199,214,255,0.3)"} />
+              <Ionicons name="chevron-forward" size={20} color={(canGoNext && !isFetchingData) ? (isLightTheme ? "#0061A4" : "#C7D6FF") : (isLightTheme ? "rgba(0,0,0,0.2)" : "rgba(199,214,255,0.3)")} />
             )}
           </TouchableOpacity>
         </View>
@@ -1565,26 +1569,26 @@ export default function RespirationInsightsScreen() {
           <>
             {/* Key Respiration Metrics */}
             <View style={styles.metricsRow}>
-              <View style={styles.metricCard}>
-                <Text style={styles.metricLabel}>Min Respiration</Text>
-                <Text style={styles.metricValue}>{displayMetrics.min}</Text>
-                <Text style={styles.metricUnit}>RPM</Text>
+              <View style={[styles.metricCard, isLightTheme && { backgroundColor: '#FFFFFF', borderColor: 'rgba(0,0,0,0.06)', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.04, shadowRadius: 3, elevation: 1 }]}>
+                <Text style={[styles.metricLabel, isLightTheme && { color: '#666666' }]}>Min Respiration</Text>
+                <Text style={[styles.metricValue, isLightTheme && { color: '#111111' }]}>{displayMetrics.min}</Text>
+                <Text style={[styles.metricUnit, isLightTheme && { color: '#888888' }]}>RPM</Text>
               </View>
-              <View style={styles.metricCard}>
-                <Text style={styles.metricLabel}>Avg Respiration</Text>
-                <Text style={styles.metricValue}>{displayMetrics.average}</Text>
-                <Text style={styles.metricUnit}>RPM</Text>
+              <View style={[styles.metricCard, isLightTheme && { backgroundColor: '#FFFFFF', borderColor: 'rgba(0,0,0,0.06)', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.04, shadowRadius: 3, elevation: 1 }]}>
+                <Text style={[styles.metricLabel, isLightTheme && { color: '#666666' }]}>Avg Respiration</Text>
+                <Text style={[styles.metricValue, isLightTheme && { color: '#111111' }]}>{displayMetrics.average}</Text>
+                <Text style={[styles.metricUnit, isLightTheme && { color: '#888888' }]}>RPM</Text>
               </View>
-              <View style={styles.metricCard}>
-                <Text style={styles.metricLabel}>Max Respiration</Text>
-                <Text style={styles.metricValue}>{displayMetrics.max}</Text>
-                <Text style={styles.metricUnit}>RPM</Text>
+              <View style={[styles.metricCard, isLightTheme && { backgroundColor: '#FFFFFF', borderColor: 'rgba(0,0,0,0.06)', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.04, shadowRadius: 3, elevation: 1 }]}>
+                <Text style={[styles.metricLabel, isLightTheme && { color: '#666666' }]}>Max Respiration</Text>
+                <Text style={[styles.metricValue, isLightTheme && { color: '#111111' }]}>{displayMetrics.max}</Text>
+                <Text style={[styles.metricUnit, isLightTheme && { color: '#888888' }]}>RPM</Text>
               </View>
             </View>
 
             {/* Last Sync Time */}
             <View style={styles.lastSyncContainer}>
-              <Text style={styles.lastSyncText}>
+              <Text style={[styles.lastSyncText, isLightTheme && { color: '#666666' }]}>
                 Last sync: {(() => {
                   // Use latestPoint which already finds the last valid point
                   if (latestPoint && latestPoint.timestamp) {
@@ -1606,26 +1610,26 @@ export default function RespirationInsightsScreen() {
             {selectedPeriod === 'Month' ? (
               // Monthly Bar Chart View
               monthlyError && monthlyRespirationData.length === 0 ? (
-                <View style={styles.errorContainer}>
-                  <Ionicons name="alert-circle-outline" size={48} color="rgba(255,255,255,0.3)" />
-                  <Text style={styles.errorText}>{monthlyError}</Text>
-                  <TouchableOpacity onPress={fetchMonthlyRespirationData} style={styles.retryButton}>
+                <View style={[styles.errorContainer, isLightTheme && { backgroundColor: '#FFFFFF', borderColor: 'rgba(0,0,0,0.06)' }]}>
+                  <Ionicons name="alert-circle-outline" size={48} color={isLightTheme ? "rgba(0,0,0,0.2)" : "rgba(255,255,255,0.3)"} />
+                  <Text style={[styles.errorText, isLightTheme && { color: '#111111' }]}>{monthlyError}</Text>
+                  <TouchableOpacity onPress={fetchMonthlyRespirationData} style={[styles.retryButton, isLightTheme && { backgroundColor: '#0061A4' }]}>
                     <Text style={styles.retryButtonText}>Retry</Text>
                   </TouchableOpacity>
                 </View>
               ) : monthlyChartData.length === 0 ? (
-                <View style={styles.emptyContainer}>
-                  <Ionicons name="pulse-outline" size={48} color="rgba(255,255,255,0.3)" />
-                  <Text style={styles.emptyText}>No monthly respiration data available</Text>
-                  <Text style={styles.emptySubtext}>Data will appear here when available</Text>
+                <View style={[styles.emptyContainer, isLightTheme && { backgroundColor: '#FFFFFF', borderColor: 'rgba(0,0,0,0.06)' }]}>
+                  <Ionicons name="pulse-outline" size={48} color={isLightTheme ? "rgba(0,0,0,0.2)" : "rgba(255,255,255,0.3)"} />
+                  <Text style={[styles.emptyText, isLightTheme && { color: '#111111' }]}>No monthly respiration data available</Text>
+                  <Text style={[styles.emptySubtext, isLightTheme && { color: '#666666' }]}>Data will appear here when available</Text>
                 </View>
               ) : (
-                <View style={styles.chartContainer}>
+                <View style={[styles.chartContainer, isLightTheme && { backgroundColor: '#FFFFFF', borderColor: 'rgba(0,0,0,0.06)', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.04, shadowRadius: 3, elevation: 1 }]}>
                   {/* Healthy Range Legend */}
                   <View style={styles.legendContainer}>
                     <View style={styles.legendItem}>
                       <View style={[styles.legendRectangle, { backgroundColor: 'rgba(126,166,255,0.3)' }]} />
-                      <Text style={styles.legendText}>Your healthy range</Text>
+                      <Text style={[styles.legendText, isLightTheme && { color: '#666666' }]}>Your healthy range</Text>
                     </View>
                   </View>
 
@@ -1643,8 +1647,8 @@ export default function RespirationInsightsScreen() {
                       xAxis={{
                         font: skiaFont,
                         tickCount: 7,
-                        labelColor: 'rgba(199,214,255,0.75)',
-                        lineColor: 'rgba(255,255,255,0.08)',
+                        labelColor: chartLabelColor,
+                        lineColor: chartLineColor,
                         labelOffset: 4,
                         formatXLabel: formatMonthDayLabel,
                       }}
@@ -1652,8 +1656,8 @@ export default function RespirationInsightsScreen() {
                         {
                           font: skiaFont,
                           tickCount: 4,
-                          labelColor: 'rgba(199,214,255,0.75)',
-                          lineColor: 'rgba(255,255,255,0.08)',
+                          labelColor: chartLabelColor,
+                          lineColor: chartLineColor,
                           labelOffset: 4,
                           formatYLabel: (label) => `${Math.round(Number(label))}`,
                         },
@@ -1722,37 +1726,37 @@ export default function RespirationInsightsScreen() {
                   </View>
 
               {/* Disclaimer for 12 PM - 12 PM cycle */}
-              <View style={styles.disclaimerContainer}>
-                <Text style={styles.disclaimerText}>
+              <View style={[styles.disclaimerContainer, isLightTheme && { borderTopColor: 'rgba(0,0,0,0.06)' }]}>
+                <Text style={[styles.disclaimerText, isLightTheme && { color: '#666666' }]}>
                   Disclaimer: Our day cycle is 12 noon to 12 noon. For example, Monday data counts from Sunday 12 noon to Monday 12 noon.
                 </Text>
               </View>
 
                 </View>
               )
-            ) : selectedPeriod === 'Week' ? (
+          ) : selectedPeriod === 'Week' ? (
               // Weekly Bar Chart View
               weeklyError && weeklyRespirationData.length === 0 ? (
-                <View style={styles.errorContainer}>
-                  <Ionicons name="alert-circle-outline" size={48} color="rgba(255,255,255,0.3)" />
-                  <Text style={styles.errorText}>{weeklyError}</Text>
-                  <TouchableOpacity onPress={fetchWeeklyRespirationData} style={styles.retryButton}>
+                <View style={[styles.errorContainer, isLightTheme && { backgroundColor: '#FFFFFF', borderColor: 'rgba(0,0,0,0.06)' }]}>
+                  <Ionicons name="alert-circle-outline" size={48} color={isLightTheme ? "rgba(0,0,0,0.2)" : "rgba(255,255,255,0.3)"} />
+                  <Text style={[styles.errorText, isLightTheme && { color: '#111111' }]}>{weeklyError}</Text>
+                  <TouchableOpacity onPress={fetchWeeklyRespirationData} style={[styles.retryButton, isLightTheme && { backgroundColor: '#0061A4' }]}>
                     <Text style={styles.retryButtonText}>Retry</Text>
                   </TouchableOpacity>
                 </View>
               ) : weeklyChartData.length === 0 ? (
-                <View style={styles.emptyContainer}>
-                  <Ionicons name="pulse-outline" size={48} color="rgba(255,255,255,0.3)" />
-                  <Text style={styles.emptyText}>No weekly respiration data available</Text>
-                  <Text style={styles.emptySubtext}>Data will appear here when available</Text>
+                <View style={[styles.emptyContainer, isLightTheme && { backgroundColor: '#FFFFFF', borderColor: 'rgba(0,0,0,0.06)' }]}>
+                  <Ionicons name="pulse-outline" size={48} color={isLightTheme ? "rgba(0,0,0,0.2)" : "rgba(255,255,255,0.3)"} />
+                  <Text style={[styles.emptyText, isLightTheme && { color: '#111111' }]}>No weekly respiration data available</Text>
+                  <Text style={[styles.emptySubtext, isLightTheme && { color: '#666666' }]}>Data will appear here when available</Text>
                 </View>
               ) : (
-                <View style={styles.chartContainer}>
+                <View style={[styles.chartContainer, isLightTheme && { backgroundColor: '#FFFFFF', borderColor: 'rgba(0,0,0,0.06)', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.04, shadowRadius: 3, elevation: 1 }]}>
                   {/* Healthy Range Legend */}
                   <View style={styles.legendContainer}>
                     <View style={styles.legendItem}>
                       <View style={[styles.legendRectangle, { backgroundColor: 'rgba(126,166,255,0.3)' }]} />
-                      <Text style={styles.legendText}>Your healthy range</Text>
+                      <Text style={[styles.legendText, isLightTheme && { color: '#666666' }]}>Your healthy range</Text>
                     </View>
                   </View>
 
@@ -1770,8 +1774,8 @@ export default function RespirationInsightsScreen() {
                       xAxis={{
                         font: skiaFont,
                         tickCount: 7,
-                        labelColor: 'rgba(199,214,255,0.75)',
-                        lineColor: 'rgba(255,255,255,0.08)',
+                        labelColor: chartLabelColor,
+                        lineColor: chartLineColor,
                         labelOffset: 4,
                         formatXLabel: formatWeekDayLabel,
                       }}
@@ -1779,8 +1783,8 @@ export default function RespirationInsightsScreen() {
                         {
                           font: skiaFont,
                           tickCount: 4,
-                          labelColor: 'rgba(199,214,255,0.75)',
-                          lineColor: 'rgba(255,255,255,0.08)',
+                          labelColor: chartLabelColor,
+                          lineColor: chartLineColor,
                           labelOffset: 4,
                           formatYLabel: (label) => `${Math.round(Number(label))}`,
                         },
@@ -1849,8 +1853,8 @@ export default function RespirationInsightsScreen() {
                   </View>
 
               {/* Disclaimer for 12 PM - 12 PM cycle */}
-              <View style={styles.disclaimerContainer}>
-                <Text style={styles.disclaimerText}>
+              <View style={[styles.disclaimerContainer, isLightTheme && { borderTopColor: 'rgba(0,0,0,0.06)' }]}>
+                <Text style={[styles.disclaimerText, isLightTheme && { color: '#666666' }]}>
                   Disclaimer: Our day cycle is 12 noon to 12 noon. For example, Monday data counts from Sunday 12 noon to Monday 12 noon.
                 </Text>
               </View>
@@ -1860,38 +1864,38 @@ export default function RespirationInsightsScreen() {
             ) : (
               // Day Line Chart View — when no device show "No data available" (no stuck skeleton)
               !activeDevice?.deviceId ? (
-                <View style={styles.emptyContainer}>
-                  <Ionicons name="pulse-outline" size={48} color="rgba(255,255,255,0.3)" />
-                  <Text style={styles.emptyText}>No data available</Text>
-                  <Text style={styles.emptySubtext}>Data will appear here when available</Text>
+                <View style={[styles.emptyContainer, isLightTheme && { backgroundColor: '#FFFFFF', borderColor: 'rgba(0,0,0,0.06)' }]}>
+                  <Ionicons name="pulse-outline" size={48} color={isLightTheme ? "rgba(0,0,0,0.2)" : "rgba(255,255,255,0.3)"} />
+                  <Text style={[styles.emptyText, isLightTheme && { color: '#111111' }]}>No data available</Text>
+                  <Text style={[styles.emptySubtext, isLightTheme && { color: '#666666' }]}>Data will appear here when available</Text>
                 </View>
               ) : !respirationGraphReady ? (
                 <HeartRateSkeleton />
               ) : !graphData || graphData.points.length === 0 ? (
-                <View style={styles.emptyContainer}>
-                  <Ionicons name="pulse-outline" size={48} color="rgba(255,255,255,0.3)" />
-                  <Text style={styles.emptyText}>No data available</Text>
-                  <Text style={styles.emptySubtext}>Data will appear here when available</Text>
+                <View style={[styles.emptyContainer, isLightTheme && { backgroundColor: '#FFFFFF', borderColor: 'rgba(0,0,0,0.06)' }]}>
+                  <Ionicons name="pulse-outline" size={48} color={isLightTheme ? "rgba(0,0,0,0.2)" : "rgba(255,255,255,0.3)"} />
+                  <Text style={[styles.emptyText, isLightTheme && { color: '#111111' }]}>No data available</Text>
+                  <Text style={[styles.emptySubtext, isLightTheme && { color: '#666666' }]}>Data will appear here when available</Text>
                 </View>
               ) : (
-                <View style={styles.chartContainer}>
+                <View style={[styles.chartContainer, isLightTheme && { backgroundColor: '#FFFFFF', borderColor: 'rgba(0,0,0,0.06)', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.04, shadowRadius: 3, elevation: 1 }]}>
                   {/* Healthy Range Legend with Zoom Controls and Top Tooltip */}
                   <View style={styles.legendContainer}>
                     <View style={styles.legendItem}>
                       <View style={[styles.legendRectangle, { backgroundColor: 'rgba(126,166,255,0.3)' }]} />
-                      <Text style={styles.legendText}>Your healthy range</Text>
+                      <Text style={[styles.legendText, isLightTheme && { color: '#666666' }]}>Your healthy range</Text>
                     </View>
                     
                     {/* Top Tooltip - Shows value and time above the graph */}
                     {selectedPeriod === 'Day' && topTooltipData && respirationGraphReady && (
                       <View style={styles.topTooltipInline} pointerEvents="none">
-                        <View style={styles.topTooltipBoxInline}>
+                        <View style={[styles.topTooltipBoxInline, isLightTheme && { backgroundColor: '#F0F2F5' }]}>
                           {/* Value - First line */}
                           <Text style={[styles.topTooltipValueInline, { color: '#FFD700' }]}>
                             {topTooltipData.respiration !== null ? Math.round(topTooltipData.respiration) : '--'}
                           </Text>
                           {/* Time - Second line */}
-                          <Text style={styles.topTooltipTimeInline}>
+                          <Text style={[styles.topTooltipTimeInline, isLightTheme && { color: '#666666' }]}>
                             {formatTime(topTooltipData.timestamp)}
                           </Text>
                         </View>
@@ -1902,7 +1906,7 @@ export default function RespirationInsightsScreen() {
                     {selectedPeriod === 'Day' && (
                       <View style={styles.zoomButtonsInline}>
                         <TouchableOpacity
-                          style={[styles.zoomButtonSmall, zoomIndex === 0 && styles.zoomButtonDisabled]}
+                          style={[styles.zoomButtonSmall, isLightTheme && { backgroundColor: 'rgba(0,0,0,0.06)' }, zoomIndex === 0 && styles.zoomButtonDisabled]}
                           onPress={() => {
                             const newIndex = Math.max(0, zoomIndex - 1);
                             setZoomIndex(newIndex);
@@ -1910,14 +1914,15 @@ export default function RespirationInsightsScreen() {
                           disabled={zoomIndex === 0}
                           activeOpacity={0.7}
                         >
-                          <Ionicons name="remove" size={14} color={zoomIndex === 0 ? '#666' : '#FFFFFF'} />
+                          <Ionicons name="remove" size={14} color={zoomIndex === 0 ? (isLightTheme ? 'rgba(0,0,0,0.2)' : '#666') : (isLightTheme ? '#0061A4' : '#FFFFFF')} />
                         </TouchableOpacity>
-                        <Text style={styles.zoomLabelSmall}>
+                        <Text style={[styles.zoomLabelSmall, isLightTheme && { color: '#111111' }]}>
                           {ZOOM_LEVELS[zoomIndex].label}
                         </Text>
                         <TouchableOpacity
                           style={[
                             styles.zoomButtonSmall,
+                            isLightTheme && { backgroundColor: 'rgba(0,0,0,0.06)' },
                             zoomIndex === ZOOM_LEVELS.length - 1 && styles.zoomButtonDisabled,
                           ]}
                           onPress={() => {
@@ -1930,7 +1935,7 @@ export default function RespirationInsightsScreen() {
                           <Ionicons
                             name="add"
                             size={14}
-                            color={zoomIndex === ZOOM_LEVELS.length - 1 ? '#666' : '#FFFFFF'}
+                            color={zoomIndex === ZOOM_LEVELS.length - 1 ? (isLightTheme ? 'rgba(0,0,0,0.2)' : '#666') : (isLightTheme ? '#0061A4' : '#FFFFFF')}
                           />
                         </TouchableOpacity>
                       </View>
@@ -1950,8 +1955,8 @@ export default function RespirationInsightsScreen() {
                         xAxis={{
                           font: skiaFont,
                           tickCount: 5,
-                          labelColor: 'rgba(199,214,255,0.75)',
-                          lineColor: 'rgba(255,255,255,0.08)',
+                          labelColor: chartLabelColor,
+                          lineColor: chartLineColor,
                           labelOffset: 4,
                           enableRescaling: true,
                           formatXLabel: (label) => formatTime(Number(label)),
@@ -1960,8 +1965,8 @@ export default function RespirationInsightsScreen() {
                           {
                             font: skiaFont,
                             tickCount: 6,
-                            labelColor: 'rgba(199,214,255,0.75)',
-                            lineColor: 'rgba(255,255,255,0.08)',
+                            labelColor: chartLabelColor,
+                            lineColor: chartLineColor,
                             labelOffset: 4,
                             enableRescaling: true,
                             formatYLabel: (label) => `${Math.round(Number(label))}`,
@@ -2035,7 +2040,7 @@ export default function RespirationInsightsScreen() {
                     ) : (
                       <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 }}>
                         <ActivityIndicator size="small" color="#FFD700" />
-                        <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 12, textAlign: 'center', marginTop: 8 }}>
+                        <Text style={{ color: isLightTheme ? '#666666' : 'rgba(255,255,255,0.5)', fontSize: 12, textAlign: 'center', marginTop: 8 }}>
                           Preparing chart...
                         </Text>
                       </View>
@@ -2047,15 +2052,17 @@ export default function RespirationInsightsScreen() {
                     <View style={styles.bedStatusContainer}>
                       <View style={[
                         styles.bedStatusIndicator, 
+                        isLightTheme && { backgroundColor: '#FFFFFF', borderColor: 'rgba(0,0,0,0.06)' },
                         bedStatus === 'Occupied' && styles.bedStatusOccupied,
                         bedStatus === 'Waiting' && styles.bedStatusWaiting
                       ]}>
                         <View style={[
                           styles.bedStatusDot, 
+                          isLightTheme && { backgroundColor: 'rgba(0,0,0,0.2)' },
                           bedStatus === 'Occupied' && styles.bedStatusDotOccupied,
                           bedStatus === 'Waiting' && styles.bedStatusDotWaiting
                         ]} />
-                        <Text style={styles.bedStatusText}>
+                        <Text style={[styles.bedStatusText, isLightTheme && { color: '#111111' }]}>
                           Bed {bedStatus}
                         </Text>
                       </View>

@@ -23,6 +23,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useBoot } from '@/contexts/BootContext';
 import { getWeeklyStressData, getMonthlyStressData } from '@/services/deviceData';
 import { useFocusEffect } from 'expo-router';
+import { useTheme } from '@/contexts/ThemeContext';
 import { 
   getStressGraphData, 
   isStressGraphReady, 
@@ -64,6 +65,9 @@ export default function StressInsightsScreen() {
   const insets = useSafeAreaInsets();
   const { activeDevice } = useDevice();
   const { auth } = useAuth();
+  const { isLightTheme } = useTheme();
+  const chartLabelColor = isLightTheme ? 'rgba(0,0,0,0.5)' : 'rgba(199,214,255,0.75)';
+  const chartLineColor = isLightTheme ? 'rgba(0,0,0,0.06)' : 'rgba(255,255,255,0.08)';
   const [selectedPeriod, setSelectedPeriod] = React.useState<'Day' | 'Week' | 'Month'>('Day');
   
   const { onboardingSeen } = useBoot();
@@ -204,7 +208,7 @@ export default function StressInsightsScreen() {
     // Always prepare for the selected date (will skip if already hydrated for that date)
     console.log('[StressInsights] Preparing Stress graph for date:', selectedDate.toISOString().split('T')[0]);
     import('@/services/stressGraphManager').then(({ prepareStressGraph }) => {
-      prepareStressGraph(activeDevice.deviceId, selectedDate).catch((error) => {
+      prepareStressGraph(activeDevice.deviceId, selectedDate).catch((error: any) => {
         console.error('[StressInsights] Failed to prepare Stress graph:', error);
         setError('Failed to load stress data');
         setIsLoading(false);
@@ -545,18 +549,18 @@ export default function StressInsightsScreen() {
           setXDomain(viewportDomain);
           hasUserPannedRef.current = false; // Reset pan flag on initial load
           // Reset transform to ensure latest point is visible on right
-          const IDENTITY_MATRIX = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
-          transformState.matrix.value = IDENTITY_MATRIX;
-          transformState.offset.value = IDENTITY_MATRIX;
+          const IDENTITY_MATRIX = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1] as const;
+          transformState.matrix.value = IDENTITY_MATRIX as any;
+          transformState.offset.value = IDENTITY_MATRIX as any;
           lastPanX.current = 0;
         } else if (isNewData && !hasUserPannedRef.current) {
           // New data arrived and user hasn't panned - always update to show latest point on right
           domainRef.current = viewportDomain;
           setXDomain(viewportDomain);
           // Reset transform to ensure latest point is visible on right
-          const IDENTITY_MATRIX = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
-          transformState.matrix.value = IDENTITY_MATRIX;
-          transformState.offset.value = IDENTITY_MATRIX;
+          const IDENTITY_MATRIX = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1] as const;
+          transformState.matrix.value = IDENTITY_MATRIX as any;
+          transformState.offset.value = IDENTITY_MATRIX as any;
           lastPanX.current = 0;
         }
         // If user has panned, don't auto-update - preserve their view
@@ -585,9 +589,9 @@ export default function StressInsightsScreen() {
   React.useEffect(() => {
     if (selectedPeriod === 'Day' && xDomain) {
       // Reset transform matrix when domain changes
-      const IDENTITY_MATRIX = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
-      transformState.matrix.value = IDENTITY_MATRIX;
-      transformState.offset.value = IDENTITY_MATRIX;
+      const IDENTITY_MATRIX = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1] as const;
+      transformState.matrix.value = IDENTITY_MATRIX as any;
+      transformState.offset.value = IDENTITY_MATRIX as any;
       lastPanX.current = 0;
     }
   }, [selectedPeriod, xDomain, transformState]);
@@ -833,20 +837,20 @@ export default function StressInsightsScreen() {
     (selectedPeriod === 'Month' && isLoadingMonthly && monthlyStressData.length === 0);
 
   return (
-    <View style={styles.container}>
-      <StatusBar barStyle="light-content" backgroundColor="#02041A" />
+    <View style={[styles.container, isLightTheme && { backgroundColor: '#F8F9FA' }]}>
+      <StatusBar barStyle={isLightTheme ? "dark-content" : "light-content"} backgroundColor={isLightTheme ? "#F8F9FA" : "#02041A"} />
       <LinearGradient 
-        colors={['#1D244D', '#02041A', '#1A1D3E']} 
+        colors={isLightTheme ? ['#F8F9FA', '#F8F9FA'] : ['#1D244D', '#02041A', '#1A1D3E']} 
         style={StyleSheet.absoluteFill}
         pointerEvents="none"
       />
 
       {/* Header */}
       <View style={[styles.header, { paddingTop: insets.top + 10 }]}>
-        <TouchableOpacity onPress={() => router.back()} style={styles.backButton} activeOpacity={0.8}>
-          <Ionicons name="arrow-back" size={24} color="#FFFFFF" />
+        <TouchableOpacity onPress={() => router.back()} style={[styles.backButton, isLightTheme && { backgroundColor: 'rgba(0,97,164,0.06)' }]} activeOpacity={0.8}>
+          <Ionicons name="arrow-back" size={24} color={isLightTheme ? "#0061A4" : "#FFFFFF"} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle} numberOfLines={1}>{activeDevice?.customName || activeDevice?.defaultName || 'Stress Insights'}</Text>
+        <Text style={[styles.headerTitle, isLightTheme && { color: '#111111' }]} numberOfLines={1}>{activeDevice?.customName || activeDevice?.defaultName || 'Stress Insights'}</Text>
         <View style={{ width: 40 }} />
       </View>
 
@@ -855,15 +859,15 @@ export default function StressInsightsScreen() {
         showsVerticalScrollIndicator={false}
       >
         {/* Period Selector Tabs */}
-        <View style={styles.periodContainer}>
+        <View style={[styles.periodContainer, isLightTheme && { backgroundColor: 'rgba(0,0,0,0.04)' }]}>
           {(['Day', 'Week', 'Month'] as const).map((period) => (
             <TouchableOpacity
               key={period}
-              style={[styles.periodTab, selectedPeriod === period && styles.periodTabActive]}
+              style={[styles.periodTab, selectedPeriod === period && [styles.periodTabActive, isLightTheme && { backgroundColor: '#0061A4' }]]}
               onPress={() => setSelectedPeriod(period)}
               activeOpacity={0.8}
             >
-              <Text style={[styles.periodTabText, selectedPeriod === period && styles.periodTabTextActive]}>
+              <Text style={[styles.periodTabText, isLightTheme && { color: '#666666' }, selectedPeriod === period && [styles.periodTabTextActive, isLightTheme && { color: '#FFFFFF' }]]}>
                 {period}
               </Text>
             </TouchableOpacity>
@@ -872,14 +876,14 @@ export default function StressInsightsScreen() {
 
         {/* Date Navigation */}
         <View style={styles.dateNavigation}>
-          <TouchableOpacity onPress={goToPrevious} style={styles.dateNavButton} activeOpacity={0.8}>
-            <Ionicons name="chevron-back" size={20} color="#C7D6FF" />
+          <TouchableOpacity onPress={goToPrevious} style={[styles.dateNavButton, isLightTheme && { backgroundColor: 'rgba(0,0,0,0.04)' }]} activeOpacity={0.8}>
+            <Ionicons name="chevron-back" size={20} color={isLightTheme ? "#0061A4" : "#C7D6FF"} />
           </TouchableOpacity>
           <TouchableOpacity onPress={() => setIsDatePickerVisible(true)} activeOpacity={0.8}>
-            <Text style={styles.dateText}>{formattedDate}</Text>
+            <Text style={[styles.dateText, isLightTheme && { color: '#111111' }]}>{formattedDate}</Text>
           </TouchableOpacity>
-          <TouchableOpacity onPress={goToNext} style={styles.dateNavButton} activeOpacity={0.8}>
-            <Ionicons name="chevron-forward" size={20} color="#C7D6FF" />
+          <TouchableOpacity onPress={goToNext} style={[styles.dateNavButton, isLightTheme && { backgroundColor: 'rgba(0,0,0,0.04)' }]} activeOpacity={0.8}>
+            <Ionicons name="chevron-forward" size={20} color={isLightTheme ? "#0061A4" : "#C7D6FF"} />
           </TouchableOpacity>
         </View>
 
@@ -890,26 +894,26 @@ export default function StressInsightsScreen() {
           <>
             {/* Key Stress Metrics */}
             <View style={styles.metricsRow}>
-              <View style={styles.metricCard}>
-                <Text style={styles.metricLabel}>Min</Text>
-                <Text style={styles.metricValue}>{displayMetrics.min}</Text>
-                <Text style={styles.metricUnit}>Stress</Text>
+              <View style={[styles.metricCard, isLightTheme && { backgroundColor: '#FFFFFF', borderColor: 'rgba(0,0,0,0.06)', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.04, shadowRadius: 3, elevation: 1 }]}>
+                <Text style={[styles.metricLabel, isLightTheme && { color: '#666666' }]}>Min</Text>
+                <Text style={[styles.metricValue, isLightTheme && { color: '#111111' }]}>{displayMetrics.min}</Text>
+                <Text style={[styles.metricUnit, isLightTheme && { color: '#888888' }]}>Stress</Text>
               </View>
-              <View style={styles.metricCard}>
-                <Text style={styles.metricLabel}>Average</Text>
-                <Text style={styles.metricValue}>{displayMetrics.average}</Text>
-                <Text style={styles.metricUnit}>Stress</Text>
+              <View style={[styles.metricCard, isLightTheme && { backgroundColor: '#FFFFFF', borderColor: 'rgba(0,0,0,0.06)', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.04, shadowRadius: 3, elevation: 1 }]}>
+                <Text style={[styles.metricLabel, isLightTheme && { color: '#666666' }]}>Average</Text>
+                <Text style={[styles.metricValue, isLightTheme && { color: '#111111' }]}>{displayMetrics.average}</Text>
+                <Text style={[styles.metricUnit, isLightTheme && { color: '#888888' }]}>Stress</Text>
               </View>
-              <View style={styles.metricCard}>
-                <Text style={styles.metricLabel}>Max</Text>
-                <Text style={styles.metricValue}>{displayMetrics.max}</Text>
-                <Text style={styles.metricUnit}>Stress</Text>
+              <View style={[styles.metricCard, isLightTheme && { backgroundColor: '#FFFFFF', borderColor: 'rgba(0,0,0,0.06)', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.04, shadowRadius: 3, elevation: 1 }]}>
+                <Text style={[styles.metricLabel, isLightTheme && { color: '#666666' }]}>Max</Text>
+                <Text style={[styles.metricValue, isLightTheme && { color: '#111111' }]}>{displayMetrics.max}</Text>
+                <Text style={[styles.metricUnit, isLightTheme && { color: '#888888' }]}>Stress</Text>
+              </View>
             </View>
-          </View>
 
             {/* Last Sync Time */}
             <View style={styles.lastSyncContainer}>
-              <Text style={styles.lastSyncText}>
+              <Text style={[styles.lastSyncText, isLightTheme && { color: '#666666' }]}>
                 Last sync: {(() => {
                   if (selectedPeriod === 'Day' && graphData && graphData.points && graphData.points.length > 0) {
                     const lastPoint = graphData.points[graphData.points.length - 1];
@@ -931,27 +935,27 @@ export default function StressInsightsScreen() {
             {selectedPeriod === 'Month' ? (
               // Monthly Bar Chart View
               monthlyError && monthlyStressData.length === 0 ? (
-                <View style={styles.errorContainer}>
-                  <Ionicons name="alert-circle-outline" size={48} color="rgba(255,255,255,0.3)" />
-                  <Text style={styles.errorText}>{monthlyError}</Text>
-                  <TouchableOpacity onPress={fetchMonthlyStressData} style={styles.retryButton}>
+                <View style={[styles.errorContainer, isLightTheme && { backgroundColor: '#FFFFFF', borderColor: 'rgba(0,0,0,0.06)' }]}>
+                  <Ionicons name="alert-circle-outline" size={48} color={isLightTheme ? "rgba(0,0,0,0.2)" : "rgba(255,255,255,0.3)"} />
+                  <Text style={[styles.errorText, isLightTheme && { color: '#111111' }]}>{monthlyError}</Text>
+                  <TouchableOpacity onPress={fetchMonthlyStressData} style={[styles.retryButton, isLightTheme && { backgroundColor: '#0061A4' }]}>
                     <Text style={styles.retryButtonText}>Retry</Text>
-            </TouchableOpacity>
+                  </TouchableOpacity>
                 </View>
               ) : monthlyChartData.length === 0 ? (
-                <View style={styles.emptyContainer}>
-                  <Ionicons name="pulse-outline" size={48} color="rgba(255,255,255,0.3)" />
-                  <Text style={styles.emptyText}>No monthly stress data available</Text>
-                  <Text style={styles.emptySubtext}>Data will appear here when available</Text>
+                <View style={[styles.emptyContainer, isLightTheme && { backgroundColor: '#FFFFFF', borderColor: 'rgba(0,0,0,0.06)' }]}>
+                  <Ionicons name="pulse-outline" size={48} color={isLightTheme ? "rgba(0,0,0,0.2)" : "rgba(255,255,255,0.3)"} />
+                  <Text style={[styles.emptyText, isLightTheme && { color: '#111111' }]}>No monthly stress data available</Text>
+                  <Text style={[styles.emptySubtext, isLightTheme && { color: '#666666' }]}>Data will appear here when available</Text>
                 </View>
               ) : (
-                <View style={styles.chartContainer}>
+                <View style={[styles.chartContainer, isLightTheme && { backgroundColor: '#FFFFFF', borderColor: 'rgba(0,0,0,0.06)', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.04, shadowRadius: 3, elevation: 1 }]}>
                   <View style={styles.legendContainer}>
                     <View style={styles.legendItem}>
                       <View style={[styles.legendRectangle, { backgroundColor: 'rgba(126,166,255,0.3)' }]} />
-                      <Text style={styles.legendText}>Your stress level</Text>
+                      <Text style={[styles.legendText, isLightTheme && { color: '#666666' }]}>Your stress level</Text>
                     </View>
-          </View>
+                  </View>
 
                   <View style={styles.chartWrapper}>
                     <CartesianChart
@@ -966,8 +970,8 @@ export default function StressInsightsScreen() {
                       xAxis={{
                         font: skiaFont,
                         tickCount: 7,
-                        labelColor: 'rgba(199,214,255,0.75)',
-                        lineColor: 'rgba(255,255,255,0.08)',
+                        labelColor: chartLabelColor,
+                        lineColor: chartLineColor,
                         labelOffset: 4,
                         formatXLabel: formatMonthDayLabel,
                       }}
@@ -975,8 +979,8 @@ export default function StressInsightsScreen() {
                         {
                           font: skiaFont,
                           tickCount: 4,
-                          labelColor: 'rgba(199,214,255,0.75)',
-                          lineColor: 'rgba(255,255,255,0.08)',
+                          labelColor: chartLabelColor,
+                          lineColor: chartLineColor,
                           labelOffset: 4,
                           formatYLabel: (label) => `${Math.round(Number(label))}`,
                         },
@@ -1042,11 +1046,11 @@ export default function StressInsightsScreen() {
                         return allBars;
                       }}
                     </CartesianChart>
-            </View>
+                  </View>
 
               {/* Disclaimer for 12 PM - 12 PM cycle */}
-              <View style={styles.disclaimerContainer}>
-                <Text style={styles.disclaimerText}>
+              <View style={[styles.disclaimerContainer, isLightTheme && { borderTopColor: 'rgba(0,0,0,0.06)' }]}>
+                <Text style={[styles.disclaimerText, isLightTheme && { color: '#666666' }]}>
                   Disclaimer: Our day cycle is 12 noon to 12 noon. For example, Monday data counts from Sunday 12 noon to Monday 12 noon.
                 </Text>
               </View>
@@ -1056,29 +1060,29 @@ export default function StressInsightsScreen() {
             ) : selectedPeriod === 'Week' ? (
               // Weekly Bar Chart View
               weeklyError && weeklyStressData.length === 0 ? (
-                <View style={styles.errorContainer}>
-                  <Ionicons name="alert-circle-outline" size={48} color="rgba(255,255,255,0.3)" />
-                  <Text style={styles.errorText}>{weeklyError}</Text>
-                  <TouchableOpacity onPress={fetchWeeklyStressData} style={styles.retryButton}>
+                <View style={[styles.errorContainer, isLightTheme && { backgroundColor: '#FFFFFF', borderColor: 'rgba(0,0,0,0.06)' }]}>
+                  <Ionicons name="alert-circle-outline" size={48} color={isLightTheme ? "rgba(0,0,0,0.2)" : "rgba(255,255,255,0.3)"} />
+                  <Text style={[styles.errorText, isLightTheme && { color: '#111111' }]}>{weeklyError}</Text>
+                  <TouchableOpacity onPress={fetchWeeklyStressData} style={[styles.retryButton, isLightTheme && { backgroundColor: '#0061A4' }]}>
                     <Text style={styles.retryButtonText}>Retry</Text>
                   </TouchableOpacity>
-        </View>
+                </View>
               ) : weeklyChartData.length === 0 ? (
-                <View style={styles.emptyContainer}>
-                  <Ionicons name="pulse-outline" size={48} color="rgba(255,255,255,0.3)" />
-                  <Text style={styles.emptyText}>No weekly stress data available</Text>
-                  <Text style={styles.emptySubtext}>Data will appear here when available</Text>
+                <View style={[styles.emptyContainer, isLightTheme && { backgroundColor: '#FFFFFF', borderColor: 'rgba(0,0,0,0.06)' }]}>
+                  <Ionicons name="pulse-outline" size={48} color={isLightTheme ? "rgba(0,0,0,0.2)" : "rgba(255,255,255,0.3)"} />
+                  <Text style={[styles.emptyText, isLightTheme && { color: '#111111' }]}>No weekly stress data available</Text>
+                  <Text style={[styles.emptySubtext, isLightTheme && { color: '#666666' }]}>Data will appear here when available</Text>
                 </View>
               ) : (
-        <View style={styles.chartContainer}>
+                <View style={[styles.chartContainer, isLightTheme && { backgroundColor: '#FFFFFF', borderColor: 'rgba(0,0,0,0.06)', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.04, shadowRadius: 3, elevation: 1 }]}>
                   <View style={styles.legendContainer}>
                     <View style={styles.legendItem}>
                       <View style={[styles.legendRectangle, { backgroundColor: 'rgba(126,166,255,0.3)' }]} />
-                      <Text style={styles.legendText}>Your stress level</Text>
+                      <Text style={[styles.legendText, isLightTheme && { color: '#666666' }]}>Your stress level</Text>
                     </View>
                   </View>
 
-          <View style={styles.chartWrapper}>
+                  <View style={styles.chartWrapper}>
                     <CartesianChart
                       data={weeklyChartData}
                       xKey="x"
@@ -1091,8 +1095,8 @@ export default function StressInsightsScreen() {
                       xAxis={{
                         font: skiaFont,
                         tickCount: 7,
-                        labelColor: 'rgba(199,214,255,0.75)',
-                        lineColor: 'rgba(255,255,255,0.08)',
+                        labelColor: chartLabelColor,
+                        lineColor: chartLineColor,
                         labelOffset: 4,
                         formatXLabel: formatWeekDayLabel,
                       }}
@@ -1100,8 +1104,8 @@ export default function StressInsightsScreen() {
                         {
                           font: skiaFont,
                           tickCount: 4,
-                          labelColor: 'rgba(199,214,255,0.75)',
-                          lineColor: 'rgba(255,255,255,0.08)',
+                          labelColor: chartLabelColor,
+                          lineColor: chartLineColor,
                           labelOffset: 4,
                           formatYLabel: (label) => `${Math.round(Number(label))}`,
                         },
@@ -1170,8 +1174,8 @@ export default function StressInsightsScreen() {
                   </View>
 
               {/* Disclaimer for 12 PM - 12 PM cycle */}
-              <View style={styles.disclaimerContainer}>
-                <Text style={styles.disclaimerText}>
+              <View style={[styles.disclaimerContainer, isLightTheme && { borderTopColor: 'rgba(0,0,0,0.06)' }]}>
+                <Text style={[styles.disclaimerText, isLightTheme && { color: '#666666' }]}>
                   Disclaimer: Our day cycle is 12 noon to 12 noon. For example, Monday data counts from Sunday 12 noon to Monday 12 noon.
                 </Text>
               </View>
@@ -1181,29 +1185,29 @@ export default function StressInsightsScreen() {
             ) : (
               // Day Bar Chart View — when no device show "No data available" (no stuck skeleton)
               !activeDevice?.deviceId ? (
-                <View style={styles.emptyContainer}>
-                  <Ionicons name="pulse-outline" size={48} color="rgba(255,255,255,0.3)" />
-                  <Text style={styles.emptyText}>No data available</Text>
-                  <Text style={styles.emptySubtext}>Data will appear here when available</Text>
+                <View style={[styles.emptyContainer, isLightTheme && { backgroundColor: '#FFFFFF', borderColor: 'rgba(0,0,0,0.06)' }]}>
+                  <Ionicons name="pulse-outline" size={48} color={isLightTheme ? "rgba(0,0,0,0.2)" : "rgba(255,255,255,0.3)"} />
+                  <Text style={[styles.emptyText, isLightTheme && { color: '#111111' }]}>No data available</Text>
+                  <Text style={[styles.emptySubtext, isLightTheme && { color: '#666666' }]}>Data will appear here when available</Text>
                 </View>
               ) : !stressGraphReady ? (
                 <HeartRateSkeleton />
               ) : !graphData || graphData.points.length === 0 || dayChartData.length === 0 ? (
-                <View style={styles.emptyContainer}>
-                  <Ionicons name="pulse-outline" size={48} color="rgba(255,255,255,0.3)" />
-                  <Text style={styles.emptyText}>No data available</Text>
-                  <Text style={styles.emptySubtext}>
+                <View style={[styles.emptyContainer, isLightTheme && { backgroundColor: '#FFFFFF', borderColor: 'rgba(0,0,0,0.06)' }]}>
+                  <Ionicons name="pulse-outline" size={48} color={isLightTheme ? "rgba(0,0,0,0.2)" : "rgba(255,255,255,0.3)"} />
+                  <Text style={[styles.emptyText, isLightTheme && { color: '#111111' }]}>No data available</Text>
+                  <Text style={[styles.emptySubtext, isLightTheme && { color: '#666666' }]}>
                     {graphData?.points?.length && dayChartData.length === 0
                       ? 'No stress values ≥ 5 in this period'
                       : 'Data will appear here when available'}
                   </Text>
                 </View>
               ) : (
-                <View style={styles.chartContainer}>
+                <View style={[styles.chartContainer, isLightTheme && { backgroundColor: '#FFFFFF', borderColor: 'rgba(0,0,0,0.06)', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.04, shadowRadius: 3, elevation: 1 }]}>
                   <View style={styles.legendContainer}>
                     <View style={styles.legendItem}>
                       <View style={[styles.legendRectangle, { backgroundColor: 'rgba(126,166,255,0.3)' }]} />
-                      <Text style={styles.legendText}>Your stress level</Text>
+                      <Text style={[styles.legendText, isLightTheme && { color: '#666666' }]}>Your stress level</Text>
                     </View>
                   </View>
 
@@ -1223,8 +1227,8 @@ export default function StressInsightsScreen() {
                         xAxis={{
                           font: skiaFont,
                           tickCount: 9, // 9 ticks for 4 hours with 30-minute intervals (0, 30, 60, 90, 120, 150, 180, 210, 240 min)
-                          labelColor: 'rgba(199,214,255,0.75)',
-                          lineColor: 'rgba(255,255,255,0.08)', // Grid line color
+                          labelColor: chartLabelColor,
+                          lineColor: chartLineColor, // Grid line color
                           labelOffset: 4,
                           enableRescaling: true,
                           // Always show time labels at 30-minute intervals
@@ -1238,8 +1242,8 @@ export default function StressInsightsScreen() {
                           {
                             font: skiaFont,
                             tickCount: 10,
-                            labelColor: 'rgba(199,214,255,0.75)',
-                            lineColor: 'rgba(255,255,255,0.08)',
+                            labelColor: chartLabelColor,
+                            lineColor: chartLineColor,
                             labelOffset: 4,
                             enableRescaling: false, // Disable Y-axis rescaling - keep it fixed
                             formatYLabel: (label) => `${Math.round(Number(label))}`,

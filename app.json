@@ -34,7 +34,7 @@
       },
       "package": "com.slimiot.dozemate2",
       "versionCode": 3,
-      "backgroundColor": "#02041A",
+      "backgroundColor": "#ffffff",
       "edgeToEdgeEnabled": true,
       "googleServicesFile": "./google-services.json",
       "permissions": [
@@ -65,7 +65,11 @@
           "image": "./assets/images/dozemate_transparent.png",
           "imageWidth": 240,
           "resizeMode": "contain",
-          "backgroundColor": "#02041A"
+          "backgroundColor": "#ffffff",
+          "dark": {
+            "image": "./assets/images/dozemate_transparent.png",
+            "backgroundColor": "#02041A"
+          }
         }
       ],
       [
