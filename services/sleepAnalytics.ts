@@ -44,6 +44,39 @@ export interface SleepSession {
   // Metadata
   createdAt?: string;
   updatedAt?: string;
+  
+  // Enriched Snore Data
+  snoreDetail?: SnoreDetail | null;
+}
+
+export interface SnoreDetail {
+  totalEvents: number;
+  totalRawSeconds: number;
+  avgDuration: number;
+  totalSnoreDurationSec: number;
+  freqBreakdown: {
+    freq: number;
+    eventCount: number;
+    share: number;
+    totalTimeSec: number;
+    avgMaxScore: number;
+    avgSnoreCount: number;
+  }[];
+  snoreTimeline: {
+    start: number;
+    duration: number;
+    freq: number;
+  }[];
+  freqCounts: {
+    fc1: number;
+    fc2: number;
+    fc3: number;
+  };
+  freqPct: {
+    freq1Pct: number;
+    freq2Pct: number;
+    freq3Pct: number;
+  };
 }
 
 export interface SleepMotionEvent {

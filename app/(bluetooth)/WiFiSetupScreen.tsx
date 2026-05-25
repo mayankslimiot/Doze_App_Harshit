@@ -8,7 +8,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { BlurView } from "expo-blur";
 import { LinearGradient } from "expo-linear-gradient";
 import * as Location from "expo-location";
-import { useRouter, usePathname } from "expo-router";
+import { useRouter, usePathname, useFocusEffect } from "expo-router";
 import { useTheme } from "@/contexts/ThemeContext";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -61,6 +61,13 @@ export default function WiFiSetupScreen() {
   const [showNetworkPicker, setShowNetworkPicker] = useState(false);
   const [availableNetworks, setAvailableNetworks] = useState<ScannedNetwork[]>([]);
   const [isScanning, setIsScanning] = useState(false);
+
+  // Reset sending state whenever screen is focused (e.g., coming back from ConnectScreen)
+  useFocusEffect(
+    useCallback(() => {
+      setIsSending(false);
+    }, [])
+  );
   
   // Ref to track if we've already shown the disconnection alert
   const hasShownDisconnectAlert = useRef(false);

@@ -1272,9 +1272,9 @@ export default function TemperatureInsightsScreen() {
     }
     if (values.length === 0) return { min: 0, average: 0, max: 0 };
     return {
-      min: Math.round(Math.min(...values)),
-      max: Math.round(Math.max(...values)),
-      average: Math.round(values.reduce((sum, val) => sum + val, 0) / values.length),
+      min: Math.min(...values),
+      max: Math.max(...values),
+      average: values.reduce((sum, val) => sum + val, 0) / values.length,
     };
   }, [selectedPeriod, graphData, isTodaySelected, activeDevice?.deviceId, historicalDayRawPointsKey]);
 
@@ -1292,9 +1292,9 @@ export default function TemperatureInsightsScreen() {
     const maxs = validDays.map((d) => d.max).filter((v) => v !== null && v > 0) as number[];
     
     return {
-      min: mins.length > 0 ? Math.round(Math.min(...mins)) : Math.round(Math.min(...averages)),
-      max: maxs.length > 0 ? Math.round(Math.max(...maxs)) : Math.round(Math.max(...averages)),
-      average: Math.round(averages.reduce((sum, val) => sum + val, 0) / averages.length),
+      min: mins.length > 0 ? Math.min(...mins) : Math.min(...averages),
+      max: maxs.length > 0 ? Math.max(...maxs) : Math.max(...averages),
+      average: averages.reduce((sum, val) => sum + val, 0) / averages.length,
     };
   }, [weeklyTemperatureData]);
 
@@ -1312,9 +1312,9 @@ export default function TemperatureInsightsScreen() {
     const maxs = validDays.map((d) => d.max).filter((v) => v !== null && v > 0) as number[];
     
     return {
-      min: mins.length > 0 ? Math.round(Math.min(...mins)) : Math.round(Math.min(...averages)),
-      max: maxs.length > 0 ? Math.round(Math.max(...maxs)) : Math.round(Math.max(...averages)),
-      average: Math.round(averages.reduce((sum, val) => sum + val, 0) / averages.length),
+      min: mins.length > 0 ? Math.min(...mins) : Math.min(...averages),
+      max: maxs.length > 0 ? Math.max(...maxs) : Math.max(...averages),
+      average: averages.reduce((sum, val) => sum + val, 0) / averages.length,
     };
   }, [monthlyTemperatureData]);
 
@@ -2262,17 +2262,17 @@ export default function TemperatureInsightsScreen() {
             <View style={styles.metricsRow}>
               <View style={[styles.metricCard, isLightTheme && { backgroundColor: '#FFFFFF', borderColor: 'rgba(0,0,0,0.06)', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.04, shadowRadius: 3, elevation: 1 }]}>
                 <Text style={[styles.metricLabel, isLightTheme && { color: '#666666' }]}>Min Temp</Text>
-                <Text style={[styles.metricValue, isLightTheme && { color: '#111111' }]}>{displayMetrics.min}</Text>
+                <Text style={[styles.metricValue, isLightTheme && { color: '#111111' }]}>{displayMetrics.min > 0 ? Number(displayMetrics.min).toFixed(2) : displayMetrics.min}</Text>
                 <Text style={[styles.metricUnit, isLightTheme && { color: '#666666' }]}>°C</Text>
               </View>
               <View style={[styles.metricCard, isLightTheme && { backgroundColor: '#FFFFFF', borderColor: 'rgba(0,0,0,0.06)', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.04, shadowRadius: 3, elevation: 1 }]}>
                 <Text style={[styles.metricLabel, isLightTheme && { color: '#666666' }]}>Avg Temp</Text>
-                <Text style={[styles.metricValue, isLightTheme && { color: '#111111' }]}>{displayMetrics.average}</Text>
+                <Text style={[styles.metricValue, isLightTheme && { color: '#111111' }]}>{displayMetrics.average > 0 ? Number(displayMetrics.average).toFixed(2) : displayMetrics.average}</Text>
                 <Text style={[styles.metricUnit, isLightTheme && { color: '#666666' }]}>°C</Text>
               </View>
               <View style={[styles.metricCard, isLightTheme && { backgroundColor: '#FFFFFF', borderColor: 'rgba(0,0,0,0.06)', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.04, shadowRadius: 3, elevation: 1 }]}>
                 <Text style={[styles.metricLabel, isLightTheme && { color: '#666666' }]}>Max Temp</Text>
-                <Text style={[styles.metricValue, isLightTheme && { color: '#111111' }]}>{displayMetrics.max}</Text>
+                <Text style={[styles.metricValue, isLightTheme && { color: '#111111' }]}>{displayMetrics.max > 0 ? Number(displayMetrics.max).toFixed(2) : displayMetrics.max}</Text>
                 <Text style={[styles.metricUnit, isLightTheme && { color: '#666666' }]}>°C</Text>
               </View>
             </View>
@@ -2357,13 +2357,7 @@ export default function TemperatureInsightsScreen() {
             </View>
           ) : (
             <View style={[styles.chartContainer, isLightTheme && { backgroundColor: '#FFFFFF', borderColor: 'rgba(0,0,0,0.06)', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.04, shadowRadius: 3, elevation: 1 }]}>
-              {/* Healthy Range Legend */}
-              <View style={styles.legendContainer}>
-                <View style={styles.legendItem}>
-                  <View style={[styles.legendRectangle, { backgroundColor: isLightTheme ? 'rgba(0,97,164,0.15)' : 'rgba(126,166,255,0.3)' }]} />
-                  <Text style={[styles.legendText, isLightTheme && { color: '#666666' }]}>Your healthy range</Text>
-                </View>
-              </View>
+
 
               {/* Victory Native Bar Chart */}
               <View style={styles.chartWrapper}>
@@ -2393,7 +2387,7 @@ export default function TemperatureInsightsScreen() {
                       labelColor: chartLabelColor,
                       lineColor: chartLineColor,
                       labelOffset: 4,
-                      formatYLabel: (label) => `${Math.round(Number(label))}`,
+                      formatYLabel: (label) => `${Number(label).toFixed(2)}`,
                     },
                   ]}
                   transformConfig={{
@@ -2489,13 +2483,7 @@ export default function TemperatureInsightsScreen() {
             </View>
           ) : (
             <View style={[styles.chartContainer, isLightTheme && { backgroundColor: '#FFFFFF', borderColor: 'rgba(0,0,0,0.06)', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.04, shadowRadius: 3, elevation: 1 }]}>
-              {/* Healthy Range Legend */}
-              <View style={styles.legendContainer}>
-                <View style={styles.legendItem}>
-                  <View style={[styles.legendRectangle, { backgroundColor: isLightTheme ? 'rgba(0,97,164,0.15)' : 'rgba(126,166,255,0.3)' }]} />
-                  <Text style={[styles.legendText, isLightTheme && { color: '#666666' }]}>Your healthy range</Text>
-                </View>
-              </View>
+
 
               {/* Victory Native Bar Chart */}
               <View style={styles.chartWrapper}>
@@ -2525,7 +2513,7 @@ export default function TemperatureInsightsScreen() {
                       labelColor: chartLabelColor,
                       lineColor: chartLineColor,
                       labelOffset: 4,
-                      formatYLabel: (label) => `${Math.round(Number(label))}`,
+                      formatYLabel: (label) => `${Number(label).toFixed(2)}`,
                     },
                   ]}
                   transformConfig={{
@@ -2647,7 +2635,7 @@ export default function TemperatureInsightsScreen() {
                     {/* Value - First line */}
                     <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}>
                       <Text style={[styles.topTooltipValueInline, { color: isLightTheme ? '#0061A4' : '#4FC3F7' }]}>
-                        {topTooltipData.temperature !== null ? Math.round(topTooltipData.temperature) : '--'}
+                        {topTooltipData.temperature !== null ? Number(topTooltipData.temperature).toFixed(2) : '--'}
                       </Text>
                       {respirationOverlayChecked && (
                         <>
@@ -2761,7 +2749,7 @@ export default function TemperatureInsightsScreen() {
                           lineColor: chartLineColor,
                           labelOffset: 4,
                           enableRescaling: true,
-                          formatYLabel: (label) => `${Math.round(Number(label))}`,
+                          formatYLabel: (label) => `${Number(label).toFixed(2)}`,
                         },
                       ]}
                       transformState={transformState}
@@ -2854,7 +2842,7 @@ export default function TemperatureInsightsScreen() {
                           lineColor: chartLineColor,
                           labelOffset: 4,
                           enableRescaling: true,
-                          formatYLabel: (label) => `${Math.round(Number(label))}`,
+                          formatYLabel: (label) => `${Number(label).toFixed(2)}`,
                         },
                       ]}
                       transformState={transformState}
@@ -2965,7 +2953,7 @@ export default function TemperatureInsightsScreen() {
                         lineColor: chartLineColor,
                         labelOffset: 4,
                         enableRescaling: true,
-                        formatYLabel: (label) => `${Math.round(Number(label))}`,
+                        formatYLabel: (label) => `${Number(label).toFixed(2)}`,
                       },
                     ]}
                     transformState={transformState}

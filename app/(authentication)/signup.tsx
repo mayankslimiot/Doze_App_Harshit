@@ -59,7 +59,7 @@ export default function SignUpScreen() {
         <TouchableOpacity style={styles.agreeButton} onPress={handleAgree}>
           <Text style={styles.agreeButtonText}>Agree & Continue</Text>
         </TouchableOpacity>
-        <Text style={styles.footerText}>Slimiot Dozemate Account</Text>
+        <Text style={styles.footerText} numberOfLines={1} adjustsFontSizeToFit={true}>Slimiot Dozemate Account</Text>
         <Text style={styles.copyrightText}>Copyright © {currentYear}</Text>
       </View>
     </View>

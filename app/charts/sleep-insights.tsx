@@ -261,6 +261,28 @@ export default function SleepInsightsScreen() {
     }, [selectedPeriod, fetchSleepSession, fetchWeeklySessions, fetchMonthlySessions])
   );
 
+  // Snore detail is now pre-computed and attached to the sleep session by the backend
+  const snoreCalc = React.useMemo(() => {
+    if (selectedPeriod !== 'Day' || !sleepSession?.snoreDetail) return null;
+    return sleepSession.snoreDetail;
+  }, [sleepSession, selectedPeriod]);
+
+  const snoreRates = React.useMemo(() => {
+    if (!snoreCalc || !sleepSession) return null;
+    const startMs = new Date(sleepSession.sleepOnsetTime).getTime();
+    const endMs = new Date(sleepSession.sleepEndTime).getTime();
+    const totalSleepHours = (endMs - startMs) / 3600000;
+    
+    if (totalSleepHours <= 0) return null;
+
+    return {
+      overallRate: Math.round((snoreCalc.totalEvents / totalSleepHours) * 10) / 10,
+      f1Rate: Math.round(((snoreCalc.freqCounts?.fc1 || 0) / totalSleepHours) * 10) / 10,
+      f2Rate: Math.round(((snoreCalc.freqCounts?.fc2 || 0) / totalSleepHours) * 10) / 10,
+      f3Rate: Math.round(((snoreCalc.freqCounts?.fc3 || 0) / totalSleepHours) * 10) / 10,
+    };
+  }, [snoreCalc, sleepSession]);
+
   // Motion bars within sleep session (same filter as chart)
   const motionBarsInSession = React.useMemo(() => {
     if (!sleepSession || selectedPeriod !== 'Day' || sleepMotionTimeline.length === 0) {
@@ -716,10 +738,119 @@ export default function SleepInsightsScreen() {
             )}
           </View>
         )}
+
+        {/* ─── SNORE DETAIL SECTION ─────────────────────────────────────────
+            Only shown when: Day view + sleep detected + at least one snore event */}
+        {!isLoading && selectedPeriod === 'Day' && sleepSession && snoreCalc && snoreRates && (() => {
+          const sc = snoreCalc;
+          const sr = snoreRates;
+
+          const getSeverity = (r: number) => {
+            if (r < 15) return { label: 'Normal to mild', color: '#F5C763' };
+            if (r <= 30) return { label: 'Moderate', color: '#F59338' };
+            return { label: 'Severe', color: '#E24B4A' };
+          };
+
+          const cardWidth = (width - 40 - 12) / 2;
+
+          const renderRateCard = (title: string, rate: number) => {
+            const sev = getSeverity(rate);
+            const markerPct = Math.min((rate / 45) * 100, 100);
+            const isYellow = sev.color === '#F5C763';
+
+            return (
+              <View style={[styles.snoreRateCard, { width: cardWidth }, isLightTheme && styles.snoreRateCardLight]} key={title}>
+                <Text style={[styles.snoreRateTitle, isLightTheme && { color: '#111111' }]} numberOfLines={1} adjustsFontSizeToFit>{title}</Text>
+                
+                <View style={[styles.snoreRateCircle, { backgroundColor: sev.color }]}>
+                  <Text style={[styles.snoreRateSeverityText, isYellow && { color: '#111111' }]}>{sev.label}</Text>
+                  <Text style={[styles.snoreRateSubText, isYellow && { color: 'rgba(0,0,0,0.6)' }]}>Snore rate</Text>
+                </View>
+
+                <Text style={[styles.snoreRateValue, isLightTheme && { color: '#111111' }]}>
+                  {rate.toFixed(1)}/hour
+                </Text>
+
+                <View style={styles.snoreScaleContainer}>
+                  {/* Marker */}
+                  <View style={[styles.snoreMarkerWrap, { left: `${markerPct}%` }]}>
+                    <View style={[styles.snoreMarker, { borderTopColor: isLightTheme ? '#333333' : '#FFFFFF' }]} />
+                  </View>
+
+                  {/* Bar segments */}
+                  <View style={styles.snoreScaleBar}>
+                    <View style={[styles.snoreScaleSegment, { backgroundColor: '#F5C763', borderTopLeftRadius: 4, borderBottomLeftRadius: 4 }]} />
+                    <View style={[styles.snoreScaleSegment, { backgroundColor: '#F59338' }]} />
+                    <View style={[styles.snoreScaleSegment, { backgroundColor: '#E24B4A', borderTopRightRadius: 4, borderBottomRightRadius: 4 }]} />
+                  </View>
+
+                  {/* Boundaries and Labels */}
+                  <View style={styles.snoreScaleLabelsWrap}>
+                    <Text style={[styles.snoreScaleBoundary, { left: '33.3%', color: isLightTheme ? '#999' : 'rgba(255,255,255,0.5)' }]}>15</Text>
+                    <Text style={[styles.snoreScaleBoundary, { left: '66.6%', color: isLightTheme ? '#999' : 'rgba(255,255,255,0.5)' }]}>30</Text>
+                  </View>
+                  <View style={styles.snoreScaleZonesRow}>
+                    <Text style={[styles.snoreScaleZoneText, isLightTheme && { color: '#999' }]}>Normal to mild</Text>
+                    <Text style={[styles.snoreScaleZoneText, isLightTheme && { color: '#999' }]}>Moderate</Text>
+                    <Text style={[styles.snoreScaleZoneText, isLightTheme && { color: '#999' }]}>Severe</Text>
+                  </View>
+                </View>
+              </View>
+            );
+          };
+
+          // ── Timeline chart geometry ──────────────────────────────────────────
+          const snoreChartWidth  = width - 40;
+          const snoreChartH      = 140; 
+          const snorePadding     = 16;
+          const snoreBottomSpace = 28;
+          const snoreAvailW      = snoreChartWidth - snorePadding * 2;
+          const snoreAvailH      = snoreChartH - snorePadding - snoreBottomSpace;
+
+          const sessionStartSec = new Date(sleepSession.sleepOnsetTime).getTime() / 1000;
+          const sessionEndSec   = new Date(sleepSession.sleepEndTime).getTime() / 1000;
+          const totalSleepSec   = sessionEndSec - sessionStartSec;
+
+          const timelineEvents = sc.snoreTimeline || [];
+
+          const formatTimeLabel = (epochSec: number) => {
+            const d = new Date(epochSec * 1000);
+            return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+          };
+
+          const freqColor = (f: number, light: boolean) =>
+            f === 1
+              ? (light ? '#0061A4' : '#7EA6FF')
+              : f === 2
+              ? (light ? '#D97706' : '#F59E0B')
+              : (light ? '#DC2626' : '#EF4444');
+
+          return (
+            <View style={styles.snoreSection}>
+              {/* Section heading */}
+              <View style={styles.snoreSectionHeader}>
+                <Text style={[styles.snoreSectionTitle, isLightTheme && { color: '#111111' }]}>
+                  Snore Detail
+                </Text>
+              </View>
+
+              {/* 2x2 Grid for Charts 1-4 */}
+              <View style={styles.snoreRateGrid}>
+                {renderRateCard('Overall snore rate', sr.overallRate)}
+                {renderRateCard('Low frequency (F1)', sr.f1Rate)}
+                {renderRateCard('Medium frequency (F2)', sr.f2Rate)}
+                {renderRateCard('High frequency (F3)', sr.f3Rate)}
+              </View>
+
+            </View>
+          );
+        })()}
+
       </ScrollView>
     </View>
   );
 }
+
 
 const styles = StyleSheet.create({
   container: {
@@ -982,7 +1113,208 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     marginTop: 12,
   },
+
+  // ─── Snore Detail Section ──────────────────────────────────────────────────
+  snoreSection: {
+    marginTop: 32,
+    paddingTop: 24,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,255,255,0.08)',
+  },
+  snoreSectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 16,
+  },
+  snoreSectionTitle: {
+    color: '#FFFFFF',
+    fontSize: 20,
+    fontWeight: '800',
+    letterSpacing: 0.2,
+  },
+  snoreBadge: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 10,
+  },
+  snoreBadgeText: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  snoreSubheading: {
+    color: 'rgba(255,255,255,0.85)',
+    fontSize: 15,
+    fontWeight: '700',
+    marginBottom: 10,
+    marginTop: 20,
+  },
+
+  snoreRateGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+    marginBottom: 20,
+  },
+  snoreRateCard: {
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    borderRadius: 16,
+    padding: 16,
+    alignItems: 'center',
+  },
+  snoreRateCardLight: {
+    backgroundColor: '#FFFFFF',
+    borderColor: 'rgba(0,0,0,0.06)',
+    borderWidth: 1,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.04,
+    shadowRadius: 3,
+    elevation: 1,
+  },
+  snoreRateTitle: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '700',
+    textAlign: 'center',
+    marginBottom: 16,
+  },
+  snoreRateCircle: {
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 16,
+  },
+  snoreRateSeverityText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '800',
+    textAlign: 'center',
+    paddingHorizontal: 8,
+  },
+  snoreRateSubText: {
+    color: 'rgba(255,255,255,0.8)',
+    fontSize: 11,
+    fontWeight: '600',
+    marginTop: 2,
+  },
+  snoreRateValue: {
+    color: '#FFFFFF',
+    fontSize: 22,
+    fontWeight: '800',
+    marginBottom: 16,
+  },
+  snoreScaleContainer: {
+    width: '100%',
+    position: 'relative',
+    marginTop: 4,
+  },
+  snoreMarkerWrap: {
+    position: 'absolute',
+    top: -9,
+    marginLeft: -6, // Center the 12px wide triangle
+    zIndex: 10,
+  },
+  snoreMarker: {
+    width: 0,
+    height: 0,
+    backgroundColor: 'transparent',
+    borderStyle: 'solid',
+    borderLeftWidth: 6,
+    borderRightWidth: 6,
+    borderTopWidth: 8,
+    borderLeftColor: 'transparent',
+    borderRightColor: 'transparent',
+  },
+  snoreScaleBar: {
+    flexDirection: 'row',
+    height: 6,
+    width: '100%',
+    marginBottom: 4,
+  },
+  snoreScaleSegment: {
+    flex: 1,
+    height: '100%',
+  },
+  snoreScaleLabelsWrap: {
+    position: 'relative',
+    height: 12,
+    width: '100%',
+  },
+  snoreScaleBoundary: {
+    position: 'absolute',
+    fontSize: 9,
+    fontWeight: '700',
+    transform: [{ translateX: -6 }],
+  },
+  snoreScaleZonesRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    width: '100%',
+    marginTop: 2,
+  },
+  snoreScaleZoneText: {
+    flex: 1,
+    textAlign: 'center',
+    color: 'rgba(255,255,255,0.4)',
+    fontSize: 7,
+    fontWeight: '700',
+  },
+
+  snoreChartContainer: {
+    padding: 16,
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    borderRadius: 16,
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  snoreEmptyChart: {
+    height: 120,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  snoreEmptyText: {
+    color: 'rgba(255,255,255,0.5)',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+
+  snoreDonutContainer: {
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    borderRadius: 16,
+    padding: 20,
+    marginBottom: 4,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.06)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 20,
+  },
+  snoreDonutLegend: {
+    flex: 1,
+    gap: 12,
+  },
+  snoreDonutLegendItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  snoreDonutDot: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+  },
+  snoreDonutLabelText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  snoreDonutCountText: {
+    color: 'rgba(255,255,255,0.55)',
+    fontSize: 11,
+    fontWeight: '600',
+    marginTop: 1,
+  },
 });
-
-
-

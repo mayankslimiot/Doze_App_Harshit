@@ -1505,7 +1505,7 @@ export default function IaqInsightsScreen() {
     const max = Math.max(...values);
     const padding = (max - min) * 0.2 || 10;
     
-    return [Math.max(0, Math.floor(min - padding)), Math.min(50, Math.ceil(max + padding))];
+    return [Math.max(0, Math.floor(min - padding)), Math.ceil(max + padding)];
   }, [monthlyChartData]);
 
   // Format X-axis labels for monthly view (day numbers)
@@ -1846,7 +1846,7 @@ export default function IaqInsightsScreen() {
     
     // Ensure reasonable bounds
     yMin = Math.max(0, Math.floor(yMin));
-    yMax = Math.min(50, Math.ceil(yMax)); // Cap at 200 BPM
+    yMax = Math.ceil(yMax);
     
     return [yMin, yMax];
   }, []);
@@ -2006,7 +2006,7 @@ export default function IaqInsightsScreen() {
     const max = Math.max(...values);
     const padding = (max - min) * 0.2 || 10; // 20 padding or minimum 10
     
-    return [Math.max(0, Math.floor(min - padding)), Math.min(50, Math.ceil(max + padding))];
+    return [Math.max(0, Math.floor(min - padding)), Math.ceil(max + padding)];
   }, [weeklyChartData]);
 
   // Format X-axis labels for weekly view (day names)
@@ -2757,8 +2757,8 @@ export default function IaqInsightsScreen() {
                       xAxis={{
                         font: skiaFont,
                         tickCount: 5,
-                        labelColor: 'rgba(199,214,255,0.75)',
-                        lineColor: 'rgba(255,255,255,0.08)',
+                        labelColor: chartLabelColor,
+                        lineColor: chartLineColor,
                         labelOffset: 4,
                         enableRescaling: true,
                         formatXLabel: (label) => formatTime(Number(label)),
@@ -2767,8 +2767,8 @@ export default function IaqInsightsScreen() {
                         {
                           font: skiaFont,
                           tickCount: 6,
-                          labelColor: 'rgba(199,214,255,0.75)',
-                          lineColor: 'rgba(255,255,255,0.08)',
+                          labelColor: chartLabelColor,
+                          lineColor: chartLineColor,
                           labelOffset: 4,
                           enableRescaling: true,
                           formatYLabel: (label) => `${Math.round(Number(label))}`,
@@ -2850,8 +2850,8 @@ export default function IaqInsightsScreen() {
                       xAxis={{
                         font: skiaFont,
                         tickCount: 5,
-                        labelColor: 'rgba(199,214,255,0.75)',
-                        lineColor: 'rgba(255,255,255,0.08)',
+                        labelColor: chartLabelColor,
+                        lineColor: chartLineColor,
                         labelOffset: 4,
                         enableRescaling: true,
                         formatXLabel: (label) => formatTime(Number(label)),
@@ -2860,8 +2860,8 @@ export default function IaqInsightsScreen() {
                         {
                           font: skiaFont,
                           tickCount: respirationYTickCount,
-                          labelColor: 'rgba(199,214,255,0.75)',
-                          lineColor: 'rgba(255,255,255,0.08)',
+                          labelColor: chartLabelColor,
+                          lineColor: chartLineColor,
                           labelOffset: 4,
                           enableRescaling: true,
                           formatYLabel: (label) => `${Math.round(Number(label))}`,
@@ -2961,8 +2961,8 @@ export default function IaqInsightsScreen() {
                     xAxis={{
                       font: skiaFont,
                       tickCount: 5,
-                      labelColor: 'rgba(199,214,255,0.75)',
-                      lineColor: 'rgba(255,255,255,0.08)',
+                      labelColor: chartLabelColor,
+                      lineColor: chartLineColor,
                       labelOffset: 4,
                       enableRescaling: true,
                       formatXLabel: (label) => formatTime(Number(label)),
@@ -2971,8 +2971,8 @@ export default function IaqInsightsScreen() {
                       {
                         font: skiaFont,
                         tickCount: 6,
-                        labelColor: 'rgba(199,214,255,0.75)',
-                        lineColor: 'rgba(255,255,255,0.08)',
+                        labelColor: chartLabelColor,
+                        lineColor: chartLineColor,
                         labelOffset: 4,
                         enableRescaling: true,
                         formatYLabel: (label) => `${Math.round(Number(label))}`,

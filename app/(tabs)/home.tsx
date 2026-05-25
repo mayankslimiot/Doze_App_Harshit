@@ -55,6 +55,9 @@ import { addRawPoint as addRespirationRawPoint } from '@/services/respirationBuf
 import { prepareRespirationGraph, clearRespirationGraphState } from '@/services/respirationGraphManager';
 import { addRawPoint as addStressRawPoint } from '@/services/stressBuffer';
 import { prepareStressGraph, clearStressGraphState } from '@/services/stressGraphManager';
+import { addTemperaturePoint } from '@/services/temperatureBuffer';
+import { addHumidityPoint } from '@/services/humidityBuffer';
+import { addTvocPoint } from '@/services/tvocBuffer';
 import { processHeartRateReading } from '@/services/heartRateNotifications';
 import { processRespirationReading } from '@/services/respirationNotifications';
 import { useFont } from '@shopify/react-native-skia';
@@ -573,6 +576,28 @@ export default function HomeScreen() {
         }
       }
 
+      // Feed raw temperature data to shared buffer
+      if (data.temperature !== undefined || data.temp !== undefined) {
+        const tVal = data.temperature ?? data.temp;
+        if (tVal != null && Number.isFinite(Number(tVal))) {
+          addTemperaturePoint(deviceId, timestamp, Number(tVal));
+        }
+      }
+
+      // Feed raw humidity data to shared buffer
+      if (data.humidity !== undefined && data.humidity != null) {
+        if (Number.isFinite(Number(data.humidity))) {
+          addHumidityPoint(deviceId, timestamp, Number(data.humidity));
+        }
+      }
+
+      // Feed raw tvoc data to shared buffer
+      if (data.tvoc !== undefined && data.tvoc != null) {
+        if (Number.isFinite(Number(data.tvoc))) {
+          addTvocPoint(deviceId, timestamp, Number(data.tvoc));
+        }
+      }
+
       // CRITICAL: Update state immediately for real-time updates
       // React Native will batch these updates automatically
       // Use functional state update to ensure React detects changes
@@ -1029,9 +1054,7 @@ export default function HomeScreen() {
       (latestHealthData.humidity ?? 0) > 0 ||
       (latestHealthData.stress ?? 0) > 0 ||
       (latestHealthData.iaq ?? 0) > 0 ||
-      (latestHealthData.eco2 ?? 0) > 0 ||
-      (latestHealthData.tvoc ?? 0) > 0 ||
-      (latestHealthData.etoh ?? 0) > 0;
+      (latestHealthData.tvoc ?? latestHealthData.voc ?? 0) > 0;
     return anyNonZero;
   }, [latestHealthData]);
 
@@ -1184,18 +1207,23 @@ export default function HomeScreen() {
   const envMetrics = React.useMemo(() => {
     const temp = latestHealthData?.temperature || latestHealthData?.temp || 0;
     const hum = latestHealthData?.humidity || 0;
-    const iaq = latestHealthData?.iaq || 0;
-    const eco2 = latestHealthData?.eco2 || 0;
-    const tvoc = latestHealthData?.tvoc || 0;
-    const etoh = latestHealthData?.etoh || 0;
+    const iaq = latestHealthData?.iaq || latestHealthData?.raw?.AIR || 0;
+    const tvoc = latestHealthData?.tvoc || latestHealthData?.voc || 0;
+
+    const getTvocRating = (val: number) => {
+      if (!val || val <= 0) return '--';
+      if (val <= 150) return '🟢 Excellent';
+      if (val <= 300) return '🟡 Good';
+      if (val <= 600) return '🟠 Moderate';
+      if (val <= 1000) return '🔴 Poor';
+      return '⛔ Bad';
+    };
 
     return [
-      { key: 'temp', name: 'Temperature', value: temp > 0 ? temp.toFixed(1) : '--', unit: '°C', icon: '🌡️', colors: ['#2B2E57', '#1B1E3D'] as const },
-      { key: 'hum', name: 'Humidity', value: hum > 0 ? String(Math.round(hum)) : '--', unit: '%', icon: '💧', colors: ['#24425F', '#18253A'] as const },
+      { key: 'temp', name: 'Temperature', value: temp > 0 ? temp.toFixed(2) : '--', unit: '°C', icon: '🌡️', colors: ['#2B2E57', '#1B1E3D'] as const },
+      { key: 'hum', name: 'Humidity', value: hum > 0 ? hum.toFixed(2) : '--', unit: '%', icon: '💧', colors: ['#24425F', '#18253A'] as const },
       { key: 'iaq', name: 'IAQ', value: iaq > 0 ? String(Math.round(iaq)) : '--', unit: '', icon: '🌬️', colors: ['#3A2C59', '#1D1430'] as const },
-      { key: 'eco2', name: 'eCO₂', value: eco2 > 0 ? String(Math.round(eco2)) : '--', unit: 'ppm', icon: '🫧', colors: ['#29334D', '#121A2A'] as const },
-      { key: 'tvoc', name: 'TVOC', value: tvoc > 0 ? String(Math.round(tvoc)) : '--', unit: 'ppb', icon: '☁️', colors: ['#2F2E4A', '#17162A'] as const },
-      { key: 'etoh', name: 'ETOH', value: etoh > 0 ? etoh.toFixed(2) : '--', unit: 'ppb', icon: '🍷', colors: ['#2B2F3F', '#161925'] as const },
+      { key: 'tvoc', name: 'TVOC', value: getTvocRating(tvoc), unit: '', icon: '☁️', colors: ['#2F2E4A', '#17162A'] as const },
     ];
   }, [latestHealthData, updateCounter]);
 
@@ -1350,10 +1378,11 @@ export default function HomeScreen() {
       stress: historicalData.map(d => d.stress || 0).filter(v => v > 0),
       temp: historicalData.map(d => d.temperature || d.temp || 0).filter(v => v > 0),
       hum: historicalData.map(d => d.humidity || 0).filter(v => v > 0),
-      iaq: historicalData.map(d => d.iaq || 0).filter(v => v > 0),
-      eco2: historicalData.map(d => d.eco2 || 0).filter(v => v > 0),
-      tvoc: historicalData.map(d => d.tvoc || 0).filter(v => v > 0),
-      etoh: historicalData.map(d => d.etoh || 0).filter(v => v > 0),
+      iaq: historicalData.map(d => {
+        const val = d.iaq || (d.raw && d.raw.AIR) || 0;
+        return val;
+      }).filter(v => v > 0),
+      tvoc: historicalData.map(d => d.tvoc || d.voc || 0).filter(v => v > 0),
     };
 
     [...healthMetrics, ...envMetrics].forEach((m) => {
@@ -1921,7 +1950,7 @@ export default function HomeScreen() {
               <View key={`env-row-${rowIndex}`} style={styles.envRow}>
                 {pair.map((m) => {
                   const spark = sparklines[m.key];
-                  const Container: any = (['temp', 'hum', 'iaq', 'eco2', 'tvoc', 'etoh'].includes(m.key)) ? TouchableOpacity : View;
+                  const Container: any = (['temp', 'hum', 'iaq', 'tvoc'].includes(m.key)) ? TouchableOpacity : View;
                   return (
                     <Container
                       key={m.key}
@@ -1937,7 +1966,7 @@ export default function HomeScreen() {
                           elevation: 1
                         }
                       ]}
-                      {...(m.key === 'temp' ? { activeOpacity: 0.85, onPress: () => debouncedPush('/charts/temperature-insights') } : m.key === 'hum' ? { activeOpacity: 0.85, onPress: () => debouncedPush('/charts/humidity-insights') } : m.key === 'iaq' ? { activeOpacity: 0.85, onPress: () => debouncedPush('/charts/iaq-insights') } : m.key === 'eco2' ? { activeOpacity: 0.85, onPress: () => debouncedPush('/charts/eco2-insights') } : m.key === 'tvoc' ? { activeOpacity: 0.85, onPress: () => debouncedPush('/charts/tvoc-insights') } : m.key === 'etoh' ? { activeOpacity: 0.85, onPress: () => debouncedPush('/charts/etoh-insights') } : {})}
+                      {...(m.key === 'temp' ? { activeOpacity: 0.85, onPress: () => debouncedPush('/charts/temperature-insights') } : m.key === 'hum' ? { activeOpacity: 0.85, onPress: () => debouncedPush('/charts/humidity-insights') } : m.key === 'iaq' ? { activeOpacity: 0.85, onPress: () => debouncedPush('/charts/iaq-insights') } : m.key === 'tvoc' ? { activeOpacity: 0.85, onPress: () => debouncedPush('/charts/tvoc-insights') } : {})}
                     >
                       <LinearGradient colors={m.colors} style={[styles.envTileBg, isLightTheme && { opacity: 0 }]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} />
                       <View style={styles.envTileInner}>
@@ -1951,7 +1980,7 @@ export default function HomeScreen() {
                         </View>
 
                         <View style={styles.envValueRow}>
-                          <Text key={`env-value-${m.key}-${updateCounter}`} style={[styles.envValueNum, isLightTheme && { color: '#111111' }]}>{m.value}</Text>
+                          <Text key={`env-value-${m.key}-${updateCounter}`} style={[styles.envValueNum, isLightTheme && { color: '#111111' }, m.key === 'tvoc' && { fontSize: 14, fontWeight: '700' }]}>{m.value}</Text>
                           <Text style={[styles.envUnit, isLightTheme && { color: '#888888' }]}>{m.unit ? ` ${m.unit}` : ''}</Text>
                         </View>
 
@@ -1999,7 +2028,7 @@ export default function HomeScreen() {
         </View>
         
         <View style={styles.bottomBrandContainer}>
-          <Text style={[styles.bottomBrandText, isLightTheme && { color: '#000000' }]}>DOZEMATE</Text>
+          <Text style={[styles.bottomBrandText, isLightTheme && { color: '#000000' }]} numberOfLines={1} adjustsFontSizeToFit={true}>DOZEMATE</Text>
           <Text style={[styles.bottomBrandSubtitle, isLightTheme && { color: '#000000' }]}>LIVE HEALTHY  •  SLEEP BETTER</Text>
         </View>
       </ScrollView>

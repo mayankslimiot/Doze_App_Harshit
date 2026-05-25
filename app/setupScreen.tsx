@@ -121,7 +121,7 @@ export default function SetupScreen() {
                   onPress={handleSetupDozemate}
                   activeOpacity={0.8}
                 >
-                  <Text style={[styles.setupButtonText, { color: '#FFFFFF' }]}>Setup Dozemate</Text>
+                  <Text style={[styles.setupButtonText, { color: '#FFFFFF' }]} numberOfLines={1} adjustsFontSizeToFit={true}>Setup Dozemate</Text>
                 </TouchableOpacity>
 
                 <View style={styles.orDivider}>
@@ -135,7 +135,7 @@ export default function SetupScreen() {
                   onPress={handleBuyDozemate}
                   activeOpacity={0.8}
                 >
-                  <Text style={[styles.buyButtonText, { color: '#0061A4' }]}>Buy Dozemate</Text>
+                  <Text style={[styles.buyButtonText, { color: '#0061A4' }]} numberOfLines={1} adjustsFontSizeToFit={true}>Buy Dozemate</Text>
                 </TouchableOpacity>
               </View>
             </View>
@@ -147,7 +147,7 @@ export default function SetupScreen() {
                   onPress={handleSetupDozemate}
                   activeOpacity={0.8}
                 >
-                  <Text style={styles.setupButtonText}>Setup Dozemate</Text>
+                  <Text style={styles.setupButtonText} numberOfLines={1} adjustsFontSizeToFit={true}>Setup Dozemate</Text>
                 </TouchableOpacity>
 
                 <View style={styles.orDivider}>
@@ -161,7 +161,7 @@ export default function SetupScreen() {
                   onPress={handleBuyDozemate}
                   activeOpacity={0.8}
                 >
-                  <Text style={styles.buyButtonText}>Buy Dozemate</Text>
+                  <Text style={styles.buyButtonText} numberOfLines={1} adjustsFontSizeToFit={true}>Buy Dozemate</Text>
                 </TouchableOpacity>
               </View>
             </BlurView>

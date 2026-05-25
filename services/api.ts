@@ -2,8 +2,8 @@
 export const API_BASE_URL = 'https://dozemate.com';
 export const WS_BASE_URL = 'https://dozemate.com';
 
-// export const API_BASE_URL = 'http:/192.168.1.110:5001';
-// export const WS_BASE_URL = 'http://192.168.1.110:5001';
+// export const API_BASE_URL = 'http://192.168.1.102:5001';
+// export const WS_BASE_URL = 'http://192.168.1.102:5001';
 
 export function apiUrl(path: string) {
   if (path.startsWith('http')) return path;

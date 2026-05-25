@@ -6,6 +6,9 @@
 import { addRawPoint } from './heartRateBuffer';
 import { addRawPoint as addRespirationRawPoint } from './respirationBuffer';
 import { addRawPoint as addStressRawPoint } from './stressBuffer';
+import { addTemperaturePoint } from './temperatureBuffer';
+import { addHumidityPoint } from './humidityBuffer';
+import { addTvocPoint } from './tvocBuffer';
 
 /**
  * Push health_data_update payload into heart rate, respiration, and stress buffers.
@@ -54,4 +57,21 @@ export function pushWebSocketDataToBuffers(data: any, deviceId: string): void {
       addStressRawPoint(id, stressTs, parsed);
     }
   }
+
+  // Environmental Metrics
+  if (data.temperature !== undefined || data.temp !== undefined) {
+    const tVal = data.temperature ?? data.temp;
+    if (tVal != null && Number.isFinite(Number(tVal))) {
+      addTemperaturePoint(id, timestamp, Number(tVal));
+    }
+  }
+
+  if (data.humidity !== undefined && data.humidity != null && Number.isFinite(Number(data.humidity))) {
+    addHumidityPoint(id, timestamp, Number(data.humidity));
+  }
+
+  if (data.tvoc !== undefined && data.tvoc != null && Number.isFinite(Number(data.tvoc))) {
+    addTvocPoint(id, timestamp, Number(data.tvoc));
+  }
 }
+

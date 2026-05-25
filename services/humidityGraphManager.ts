@@ -143,6 +143,28 @@ export function subscribe(
   subscribers.get(deviceId)!.add(callback);
   callback(getHumidityGraphData(deviceId));
 
+  // Also subscribe to buffer updates to trigger aggregation
+  let lastAggregationTime = 0;
+  const AGGREGATION_THROTTLE_MS = 300;
+  
+  const unsubscribeBuffer = require('./humidityBuffer').subscribeToBuffer(deviceId, (points: any[]) => {
+    const now = Date.now();
+    const timeSinceLastAggregation = now - lastAggregationTime;
+    
+    if (timeSinceLastAggregation < AGGREGATION_THROTTLE_MS) {
+      return;
+    }
+    
+    if (points.length > 0) {
+      lastAggregationTime = now;
+      const state = getState(deviceId);
+      const currentZoom = state.currentZoomIndex;
+      updateHumidityGraphData(deviceId, currentZoom).catch((error: any) => {
+        console.error('[HumidityGraphManager] Error updating graph data:', error);
+      });
+    }
+  });
+
   return () => {
     const deviceSubscribers = subscribers.get(deviceId);
     if (deviceSubscribers) {
@@ -151,6 +173,7 @@ export function subscribe(
         subscribers.delete(deviceId);
       }
     }
+    unsubscribeBuffer();
   };
 }
 

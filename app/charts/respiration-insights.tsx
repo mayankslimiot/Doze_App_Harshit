@@ -1625,13 +1625,7 @@ export default function RespirationInsightsScreen() {
                 </View>
               ) : (
                 <View style={[styles.chartContainer, isLightTheme && { backgroundColor: '#FFFFFF', borderColor: 'rgba(0,0,0,0.06)', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.04, shadowRadius: 3, elevation: 1 }]}>
-                  {/* Healthy Range Legend */}
-                  <View style={styles.legendContainer}>
-                    <View style={styles.legendItem}>
-                      <View style={[styles.legendRectangle, { backgroundColor: 'rgba(126,166,255,0.3)' }]} />
-                      <Text style={[styles.legendText, isLightTheme && { color: '#666666' }]}>Your healthy range</Text>
-                    </View>
-                  </View>
+
 
                   {/* Victory Native Bar Chart */}
                   <View style={styles.chartWrapper}>
@@ -1752,13 +1746,7 @@ export default function RespirationInsightsScreen() {
                 </View>
               ) : (
                 <View style={[styles.chartContainer, isLightTheme && { backgroundColor: '#FFFFFF', borderColor: 'rgba(0,0,0,0.06)', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.04, shadowRadius: 3, elevation: 1 }]}>
-                  {/* Healthy Range Legend */}
-                  <View style={styles.legendContainer}>
-                    <View style={styles.legendItem}>
-                      <View style={[styles.legendRectangle, { backgroundColor: 'rgba(126,166,255,0.3)' }]} />
-                      <Text style={[styles.legendText, isLightTheme && { color: '#666666' }]}>Your healthy range</Text>
-                    </View>
-                  </View>
+
 
                   {/* Victory Native Bar Chart */}
                   <View style={styles.chartWrapper}>
@@ -1879,12 +1867,9 @@ export default function RespirationInsightsScreen() {
                 </View>
               ) : (
                 <View style={[styles.chartContainer, isLightTheme && { backgroundColor: '#FFFFFF', borderColor: 'rgba(0,0,0,0.06)', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.04, shadowRadius: 3, elevation: 1 }]}>
-                  {/* Healthy Range Legend with Zoom Controls and Top Tooltip */}
+                  {/* Spacer to keep Tooltip centered with Zoom Controls */}
                   <View style={styles.legendContainer}>
-                    <View style={styles.legendItem}>
-                      <View style={[styles.legendRectangle, { backgroundColor: 'rgba(126,166,255,0.3)' }]} />
-                      <Text style={[styles.legendText, isLightTheme && { color: '#666666' }]}>Your healthy range</Text>
-                    </View>
+                    <View style={{ width: 100 }} />
                     
                     {/* Top Tooltip - Shows value and time above the graph */}
                     {selectedPeriod === 'Day' && topTooltipData && respirationGraphReady && (

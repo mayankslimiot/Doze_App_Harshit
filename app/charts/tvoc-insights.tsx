@@ -47,7 +47,7 @@ interface TvocDataPoint {
 
 interface WeeklyTvocDataPoint {
   day: string;
-  dayppb: number;
+  dayIndex: number;
   date: string;
   avg: number | null;
   min: number | null;
@@ -58,7 +58,7 @@ interface WeeklyTvocDataPoint {
 
 interface MonthlyTvocDataPoint {
   day: number;
-  dayppb: number;
+  dayIndex: number;
   date: string;
   avg: number | null;
   min: number | null;
@@ -134,7 +134,7 @@ export default function TvocInsightsScreen() {
   }, [selectedPeriod, selectedDate]);
   
   // Day view: Use pre-built graph data from TvocGraphManager (prepared on Home screen)
-  const [zoomppb, setZoomppb] = React.useState(0); // Start with 10min zoom
+  const [zoomIndex, setZoomIndex] = React.useState(0); // Start with 10min zoom
   const [graphData, setGraphData] = React.useState<{
     points: Array<{ x: number; y: number | null }>;
     xDomain: [number, number];
@@ -423,7 +423,7 @@ export default function TvocInsightsScreen() {
     if (historicalDayRespirationDateRef.current === dateKey) {
       // Already fetched for this date; if overlay is on and we have points, re-aggregate (e.g. zoom changed)
       if (respirationOverlayChecked && historicalDayRespirationRawPointsRef.current.length > 0) {
-        applyHistoricalRespirationAggregation(historicalDayRespirationRawPointsRef.current, startMs, endMs, zoomppb);
+        applyHistoricalRespirationAggregation(historicalDayRespirationRawPointsRef.current, startMs, endMs, zoomIndex);
       }
       return;
     }
@@ -444,7 +444,7 @@ export default function TvocInsightsScreen() {
         historicalDayRespirationRawPointsRef.current = rawPoints;
         historicalDayRespirationDateRef.current = dateKey; // Store date even when empty so we don't refetch
         if (respirationOverlayChecked && rawPoints.length > 0) {
-          applyHistoricalRespirationAggregation(rawPoints, startMs, endMs, zoomppb);
+          applyHistoricalRespirationAggregation(rawPoints, startMs, endMs, zoomIndex);
         } else {
           setHistoricalRespirationGraphData(null);
         }
@@ -458,7 +458,7 @@ export default function TvocInsightsScreen() {
       });
 
     return () => { cancelled = true; };
-  }, [activeDevice?.deviceId, selectedPeriod, selectedDate, isTodaySelected, auth.isLoggedIn, respirationOverlayChecked, zoomppb, applyHistoricalRespirationAggregation]);
+  }, [activeDevice?.deviceId, selectedPeriod, selectedDate, isTodaySelected, auth.isLoggedIn, respirationOverlayChecked, zoomIndex, applyHistoricalRespirationAggregation]);
 
   // When zoom or overlay changes on historical day: re-aggregate respiration from ref only.
   React.useEffect(() => {
@@ -472,8 +472,8 @@ export default function TvocInsightsScreen() {
     dayEnd.setHours(11, 59, 59, 999);
     const startMs = dayStart.getTime();
     const endMs = dayEnd.getTime();
-    applyHistoricalRespirationAggregation(historicalDayRespirationRawPointsRef.current, startMs, endMs, zoomppb);
-  }, [zoomppb, respirationOverlayChecked, selectedPeriod, selectedDate, isTodaySelected, activeDevice?.deviceId, applyHistoricalRespirationAggregation]);
+    applyHistoricalRespirationAggregation(historicalDayRespirationRawPointsRef.current, startMs, endMs, zoomIndex);
+  }, [zoomIndex, respirationOverlayChecked, selectedPeriod, selectedDate, isTodaySelected, activeDevice?.deviceId, applyHistoricalRespirationAggregation]);
 
   // When zoom changes on historical day: re-aggregate from ref only (no re-fetch, no reload).
   React.useEffect(() => {
@@ -487,8 +487,8 @@ export default function TvocInsightsScreen() {
     dayEnd.setHours(11, 59, 59, 999);
     const startMs = dayStart.getTime();
     const endMs = dayEnd.getTime();
-    applyHistoricalAggregation(historicalDayRawPointsRef.current, startMs, endMs, zoomppb);
-  }, [zoomppb, selectedPeriod, selectedDate, isTodaySelected, activeDevice?.deviceId, applyHistoricalAggregation]);
+    applyHistoricalAggregation(historicalDayRawPointsRef.current, startMs, endMs, zoomIndex);
+  }, [zoomIndex, selectedPeriod, selectedDate, isTodaySelected, activeDevice?.deviceId, applyHistoricalAggregation]);
 
   // When back to today: clear historical refs and re-hydrate buffer for live (prepareTvocGraph does that).
   React.useEffect(() => {
@@ -505,7 +505,7 @@ export default function TvocInsightsScreen() {
   const ZOOM_INDEX_10M = 0;
   React.useEffect(() => {
     if (selectedPeriod !== 'Day') return;
-    setZoomppb(ZOOM_INDEX_10M);
+    setZoomIndex(ZOOM_INDEX_10M);
   }, [selectedPeriod, selectedDate, isTodaySelected]);
 
   // Force-unmount charts briefly when date or period changes to avoid Skia/Reanimated race condition.
@@ -580,15 +580,15 @@ export default function TvocInsightsScreen() {
     }
 
     // Update zoom level in TvocGraphManager
-    updateZoomLevel(activeDevice.deviceId, zoomppb).catch((error: any) => {
+    updateZoomLevel(activeDevice.deviceId, zoomIndex).catch((error: any) => {
       console.error('[TvocInsights] Failed to update zoom level:', error);
     });
     
     // Update respiration zoom level to match heart rate zoom
-    updateZoomLevel(activeDevice.deviceId, zoomppb).catch((error: any) => {
+    updateZoomLevel(activeDevice.deviceId, zoomIndex).catch((error: any) => {
       console.error('[TvocInsights] Failed to update respiration zoom level:', error);
     });
-  }, [activeDevice?.deviceId, selectedPeriod, zoomppb]);
+  }, [activeDevice?.deviceId, selectedPeriod, zoomIndex]);
 
   // PHASE 3: Day graph is prepared on Home screen - no initialization needed here
 
@@ -601,7 +601,7 @@ export default function TvocInsightsScreen() {
   const lastDomainUpdateRef = React.useRef<number>(0);
   const DOMAIN_UPDATE_THROTTLE_MS = 1000; // Update domain every 1 second in live mode
   // Track previous zoom index to detect zoom level changes
-  const prevZoomppbRef = React.useRef<number>(zoomppb);
+  const prevZoomppbRef = React.useRef<number>(zoomIndex);
   // Track if user has manually panned/zoomed to prevent automatic resets
   const hasUserInteractedRef = React.useRef<boolean>(false);
 
@@ -857,8 +857,8 @@ export default function TvocInsightsScreen() {
   React.useEffect(() => {
     // Only reset to live when zoom changes if we're already in live mode
     // If user has panned/zoomed, preserve their current view and transform state
-    if (prevZoomppbRef.current !== zoomppb) {
-      prevZoomppbRef.current = zoomppb;
+    if (prevZoomppbRef.current !== zoomIndex) {
+      prevZoomppbRef.current = zoomIndex;
       
       // CRITICAL: If user has interacted (panned/zoomed), NEVER reset to live
       // Preserve their current domain and transform state
@@ -877,7 +877,7 @@ export default function TvocInsightsScreen() {
         console.log('[TvocInsights] Zoom changed in live mode, will update domain');
       }
     }
-  }, [zoomppb, isLive]);
+  }, [zoomIndex, isLive]);
 
   // Domain updates immediately when buffer data or zoom changes (in live mode)
   // Domain is computed from buffer data, not API-provided domain
@@ -893,7 +893,7 @@ export default function TvocInsightsScreen() {
       domainRef.current = liveDomain;
       setXDomain(liveDomain);
     }
-  }, [computeLiveDomain, isLive, graphData, zoomppb]); // Recompute when graphData or zoom changes
+  }, [computeLiveDomain, isLive, graphData, zoomIndex]); // Recompute when graphData or zoom changes
 
   // Cleanup timers on unmount
   React.useEffect(() => {
@@ -1421,7 +1421,7 @@ export default function TvocInsightsScreen() {
     const formatted = [];
     
     for (let i = 0; i < 7; i++) {
-      const dayData = weeklyTvocData.find((d) => d.dayppb === i);
+      const dayData = weeklyTvocData.find((d) => d.dayIndex === i);
       if (dayData) {
         formatted.push({
           x: i, // MUST be sequential: 0, 1, 2, 3, 4, 5, 6
@@ -1462,7 +1462,7 @@ export default function TvocInsightsScreen() {
     const daysInMonth = monthlyTvocData.length;
     
     for (let i = 0; i < daysInMonth; i++) {
-      const dayData = monthlyTvocData.find((d) => d.dayppb === i);
+      const dayData = monthlyTvocData.find((d) => d.dayIndex === i);
       if (dayData) {
         formatted.push({
           x: i, // Sequential x value (0 to daysInMonth-1)
@@ -1505,7 +1505,7 @@ export default function TvocInsightsScreen() {
     const max = Math.max(...values);
     const padding = (max - min) * 0.2 || 10;
     
-    return [Math.max(0, Math.floor(min - padding)), Math.min(50, Math.ceil(max + padding))];
+    return [Math.max(0, Math.floor(min - padding)), Math.ceil(max + padding)];
   }, [monthlyChartData]);
 
   // Format X-axis labels for monthly view (day numbers)
@@ -1596,7 +1596,7 @@ export default function TvocInsightsScreen() {
       if (last) return { timestamp: last.x, value: last.y };
     }
     return null;
-  }, [selectedPeriod, respirationGraphData, respirationOverlayChecked, zoomppb, activeDevice?.deviceId, isTodaySelected, historicalRespirationGraphData]);
+  }, [selectedPeriod, respirationGraphData, respirationOverlayChecked, zoomIndex, activeDevice?.deviceId, isTodaySelected, historicalRespirationGraphData]);
 
   // Update top tooltip when latest point changes
   React.useEffect(() => {
@@ -1846,7 +1846,7 @@ export default function TvocInsightsScreen() {
     
     // Ensure reasonable bounds
     yMin = Math.max(0, Math.floor(yMin));
-    yMax = Math.min(50, Math.ceil(yMax)); // Cap at 200 BPM
+    yMax = Math.ceil(yMax);
     
     return [yMin, yMax];
   }, []);
@@ -2006,7 +2006,7 @@ export default function TvocInsightsScreen() {
     const max = Math.max(...values);
     const padding = (max - min) * 0.2 || 10; // 20 padding or minimum 10
     
-    return [Math.max(0, Math.floor(min - padding)), Math.min(50, Math.ceil(max + padding))];
+    return [Math.max(0, Math.floor(min - padding)), Math.ceil(max + padding)];
   }, [weeklyChartData]);
 
   // Format X-axis labels for weekly view (day names)
@@ -2357,13 +2357,7 @@ export default function TvocInsightsScreen() {
             </View>
           ) : (
             <View style={[styles.chartContainer, isLightTheme && { backgroundColor: '#FFFFFF', borderColor: 'rgba(0,0,0,0.06)', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.04, shadowRadius: 3, elevation: 1 }]}>
-              {/* Healthy Range Legend */}
-              <View style={styles.legendContainer}>
-                <View style={styles.legendItem}>
-                  <View style={[styles.legendRectangle, { backgroundColor: isLightTheme ? 'rgba(255,152,0,0.2)' : 'rgba(126,166,255,0.3)' }]} />
-                  <Text style={[styles.legendText, isLightTheme && { color: '#666666' }]}>Your healthy range</Text>
-                </View>
-              </View>
+
 
               {/* Victory Native Bar Chart */}
               <View style={styles.chartWrapper}>
@@ -2489,13 +2483,7 @@ export default function TvocInsightsScreen() {
             </View>
           ) : (
             <View style={[styles.chartContainer, isLightTheme && { backgroundColor: '#FFFFFF', borderColor: 'rgba(0,0,0,0.06)', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.04, shadowRadius: 3, elevation: 1 }]}>
-              {/* Healthy Range Legend */}
-              <View style={styles.legendContainer}>
-                <View style={styles.legendItem}>
-                  <View style={[styles.legendRectangle, { backgroundColor: isLightTheme ? 'rgba(255,152,0,0.2)' : 'rgba(126,166,255,0.3)' }]} />
-                  <Text style={[styles.legendText, isLightTheme && { color: '#666666' }]}>Your healthy range</Text>
-                </View>
-              </View>
+
 
               {/* Victory Native Bar Chart */}
               <View style={styles.chartWrapper}>
@@ -2633,28 +2621,14 @@ export default function TvocInsightsScreen() {
             </View>
           ) : (
           <View style={[styles.chartContainer, isLightTheme && { backgroundColor: '#FFFFFF', borderColor: 'rgba(0,0,0,0.06)', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.04, shadowRadius: 3, elevation: 1 }]}>
-            {/* Respiration Overlay Checkbox with Zoom Controls and Tooltip */}
+            {/* Zoom Controls and Tooltip */}
             <View style={styles.legendContainer}>
-              {/* Respiration Overlay Checkbox - Only for Day view */}
-              {selectedPeriod === 'Day' && (
-                <TouchableOpacity
-                  style={styles.checkboxContainer}
-                  onPress={() => handleRespirationOverlayToggle(!respirationOverlayChecked)}
-                  activeOpacity={0.7}
-                >
-                  <View style={[styles.checkbox, respirationOverlayChecked && styles.checkboxChecked, isLightTheme && !respirationOverlayChecked && { borderColor: 'rgba(0,0,0,0.2)' }, isLightTheme && respirationOverlayChecked && { backgroundColor: '#0061A4', borderColor: '#0061A4' }]}>
-                    {respirationOverlayChecked && (
-                      <Ionicons name="checkmark" size={14} color="#FFFFFF" />
-                    )}
-                  </View>
-                  <Text style={[styles.checkboxLabel, isLightTheme && { color: '#666666' }]}>Respiration</Text>
-                </TouchableOpacity>
-              )}
+              <View style={{ flex: 1 }} />
               
               {/* Top Tooltip - Inline with Respiration Overlay, shows value and time */}
               {selectedPeriod === 'Day' && topTooltipData && isChartReady && (
                 <View style={styles.topTooltipInline} pointerEvents="none">
-                  <View style={styles.topTooltipBoxInline}>
+                  <View style={[styles.topTooltipBoxInline, isLightTheme && { backgroundColor: 'rgba(0,0,0,0.06)' }]}>
                     {/* Value - First line */}
                     <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}>
                       <Text style={[styles.topTooltipValueInline, { color: '#FFB74D' }]}>
@@ -2674,7 +2648,7 @@ export default function TvocInsightsScreen() {
                       )}
                     </View>
                     {/* Time - Second line */}
-                    <Text style={styles.topTooltipTimeInline}>
+                    <Text style={[styles.topTooltipTimeInline, isLightTheme && { color: '#666666' }]}>
                       {formatTime(topTooltipData.timestamp)}
                     </Text>
                   </View>
@@ -2683,39 +2657,40 @@ export default function TvocInsightsScreen() {
               
               {/* Zoom Controls - Only for Day view, small buttons on right */}
               {selectedPeriod === 'Day' && (
-                <View style={styles.zoomButtonsInline}>
+                <View style={[styles.zoomButtonsInline, { flex: 1, justifyContent: 'flex-end' }]}>
                   <TouchableOpacity
-                    style={[styles.zoomButtonSmall, zoomppb === 0 && styles.zoomButtonDisabled]}
+                    style={[styles.zoomButtonSmall, zoomIndex === 0 && styles.zoomButtonDisabled, isLightTheme && { backgroundColor: 'rgba(0,0,0,0.04)', borderColor: 'rgba(0,0,0,0.06)' }]}
                     onPress={() => {
-                      const newppb = Math.max(0, zoomppb - 1);
-                      setZoomppb(newppb);
+                      const newIndex = Math.max(0, zoomIndex - 1);
+                      setZoomIndex(newIndex);
                       // Zoom level update is handled by TvocGraphManager subscription
                     }}
-                    disabled={zoomppb === 0}
+                    disabled={zoomIndex === 0}
                     activeOpacity={0.7}
                   >
-                    <Ionicons name="remove" size={14} color={zoomppb === 0 ? '#666' : '#FFFFFF'} />
+                    <Ionicons name="remove" size={14} color={zoomIndex === 0 ? (isLightTheme ? 'rgba(0,0,0,0.3)' : '#666') : (isLightTheme ? '#0061A4' : '#FFFFFF')} />
                   </TouchableOpacity>
-                  <Text style={styles.zoomLabelSmall}>
-                    {ZOOM_LEVELS[zoomppb].label}
+                  <Text style={[styles.zoomLabelSmall, isLightTheme && { color: '#0061A4' }]}>
+                    {ZOOM_LEVELS[zoomIndex].label}
                   </Text>
                   <TouchableOpacity
                     style={[
                       styles.zoomButtonSmall,
-                      zoomppb === ZOOM_LEVELS.length - 1 && styles.zoomButtonDisabled,
+                      zoomIndex === ZOOM_LEVELS.length - 1 && styles.zoomButtonDisabled,
+                      isLightTheme && { backgroundColor: 'rgba(0,0,0,0.04)', borderColor: 'rgba(0,0,0,0.06)' }
                     ]}
                     onPress={() => {
-                      const newppb = Math.min(ZOOM_LEVELS.length - 1, zoomppb + 1);
-                      setZoomppb(newppb);
+                      const newIndex = Math.min(ZOOM_LEVELS.length - 1, zoomIndex + 1);
+                      setZoomIndex(newIndex);
                       // Zoom level update is handled by TvocGraphManager subscription
                     }}
-                    disabled={zoomppb === ZOOM_LEVELS.length - 1}
+                    disabled={zoomIndex === ZOOM_LEVELS.length - 1}
                     activeOpacity={0.7}
                   >
                     <Ionicons
                       name="add"
                       size={14}
-                      color={zoomppb === ZOOM_LEVELS.length - 1 ? '#666' : '#FFFFFF'}
+                      color={zoomIndex === ZOOM_LEVELS.length - 1 ? (isLightTheme ? 'rgba(0,0,0,0.3)' : '#666') : (isLightTheme ? '#0061A4' : '#FFFFFF')}
                     />
                   </TouchableOpacity>
                 </View>
@@ -2757,8 +2732,8 @@ export default function TvocInsightsScreen() {
                       xAxis={{
                         font: skiaFont,
                         tickCount: 5,
-                        labelColor: 'rgba(199,214,255,0.75)',
-                        lineColor: 'rgba(255,255,255,0.08)',
+                        labelColor: chartLabelColor,
+                        lineColor: chartLineColor,
                         labelOffset: 4,
                         enableRescaling: true,
                         formatXLabel: (label) => formatTime(Number(label)),
@@ -2767,8 +2742,8 @@ export default function TvocInsightsScreen() {
                         {
                           font: skiaFont,
                           tickCount: 6,
-                          labelColor: 'rgba(199,214,255,0.75)',
-                          lineColor: 'rgba(255,255,255,0.08)',
+                          labelColor: chartLabelColor,
+                          lineColor: chartLineColor,
                           labelOffset: 4,
                           enableRescaling: true,
                           formatYLabel: (label) => `${Math.round(Number(label))}`,
@@ -2805,7 +2780,7 @@ export default function TvocInsightsScreen() {
                               animate={pathAnimate}
                             />
                             <Line
-                              key={`line-hr-split-${zoomppb}`}
+                              key={`line-hr-split-${zoomIndex}`}
                               points={points.y}
                               color="#FFB74D"
                               strokeWidth={2.5}
@@ -2850,8 +2825,8 @@ export default function TvocInsightsScreen() {
                       xAxis={{
                         font: skiaFont,
                         tickCount: 5,
-                        labelColor: 'rgba(199,214,255,0.75)',
-                        lineColor: 'rgba(255,255,255,0.08)',
+                        labelColor: chartLabelColor,
+                        lineColor: chartLineColor,
                         labelOffset: 4,
                         enableRescaling: true,
                         formatXLabel: (label) => formatTime(Number(label)),
@@ -2860,8 +2835,8 @@ export default function TvocInsightsScreen() {
                         {
                           font: skiaFont,
                           tickCount: respirationYTickCount,
-                          labelColor: 'rgba(199,214,255,0.75)',
-                          lineColor: 'rgba(255,255,255,0.08)',
+                          labelColor: chartLabelColor,
+                          lineColor: chartLineColor,
                           labelOffset: 4,
                           enableRescaling: true,
                           formatYLabel: (label) => `${Math.round(Number(label))}`,
@@ -2903,9 +2878,9 @@ export default function TvocInsightsScreen() {
                         return (
                           <>
                             {/* Yellow shadow/area under respiration line - render for each segment */}
-                            {segments.map((segment, segmentppb) => (
+                            {segments.map((segment, segmentIndex) => (
                               <Area
-                                key={`area-resp-segment-${segmentppb}-${zoomppb}-${respirationChartData.length}`}
+                                key={`area-resp-segment-${segmentIndex}-${zoomIndex}-${respirationChartData.length}`}
                                 points={segment}
                                 y0={chartBounds.bottom}
                                 color="rgba(255, 215, 0, 0.28)"
@@ -2915,9 +2890,9 @@ export default function TvocInsightsScreen() {
                               />
                             ))}
                             {/* Render each segment as a separate line to create gaps */}
-                            {segments.map((segment, segmentppb) => (
+                            {segments.map((segment, segmentIndex) => (
                               <Line
-                                key={`line-resp-segment-${segmentppb}-${zoomppb}-${respirationChartData.length}`}
+                                key={`line-resp-segment-${segmentIndex}-${zoomIndex}-${respirationChartData.length}`}
                                 points={segment}
                                 color="#FFD700"
                                 strokeWidth={2.5}
@@ -2961,8 +2936,8 @@ export default function TvocInsightsScreen() {
                     xAxis={{
                       font: skiaFont,
                       tickCount: 5,
-                      labelColor: 'rgba(199,214,255,0.75)',
-                      lineColor: 'rgba(255,255,255,0.08)',
+                      labelColor: chartLabelColor,
+                      lineColor: chartLineColor,
                       labelOffset: 4,
                       enableRescaling: true,
                       formatXLabel: (label) => formatTime(Number(label)),
@@ -2971,8 +2946,8 @@ export default function TvocInsightsScreen() {
                       {
                         font: skiaFont,
                         tickCount: 6,
-                        labelColor: 'rgba(199,214,255,0.75)',
-                        lineColor: 'rgba(255,255,255,0.08)',
+                        labelColor: chartLabelColor,
+                        lineColor: chartLineColor,
                         labelOffset: 4,
                         enableRescaling: true,
                         formatYLabel: (label) => `${Math.round(Number(label))}`,
@@ -2998,7 +2973,7 @@ export default function TvocInsightsScreen() {
                               animate={pathAnimate}
                             />
                             <Line
-                              key={`line-hr-full-${zoomppb}`}
+                              key={`line-hr-full-${zoomIndex}`}
                               points={points.y}
                               color="#FFB74D"
                               strokeWidth={2.5}
@@ -3038,7 +3013,7 @@ export default function TvocInsightsScreen() {
                     bedStatus === 'Occupied' && styles.bedStatusDotOccupied,
                     bedStatus === 'Waiting' && styles.bedStatusDotWaiting
                   ]} />
-                  <Text style={styles.bedStatusText}>
+                  <Text style={[styles.bedStatusText, isLightTheme && { color: '#111111' }]}>
                     Bed {bedStatus}
                   </Text>
                 </View>
