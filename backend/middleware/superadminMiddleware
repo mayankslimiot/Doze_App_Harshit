@@ -10,7 +10,7 @@ const superadminMiddleware = (req, res, next) => {
 
     const decoded = jwt.verify(token.replace("Bearer ", ""), process.env.JWT_SECRET);
     
-    if (decoded.role !== 'superadmin') {
+    if (decoded.role !== 'superadmin' && decoded.role !== 'super_admin') {
       return next(new createError(403, "Access Denied. Superadmin role required."));
     }
     

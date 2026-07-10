@@ -1,7 +1,7 @@
 const mongoose = require("mongoose");
 
 const loginAttemptSchema = new mongoose.Schema({
-    userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     email: { type: String, required: true },
     success: { type: Boolean, required: true },
     timestamp: { type: Date, default: Date.now },

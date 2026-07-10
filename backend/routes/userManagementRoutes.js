@@ -12,6 +12,11 @@ router.get("/me", authMiddleware, userController.getMe);
 router.use(authMiddleware);
 router.use(adminMiddleware);
 
+// Viewer management routes
+router.post("/viewers", userController.createViewer);
+router.get("/viewers", userController.getViewers);
+router.delete("/viewers/:id", userController.deleteViewer);
+
 // User CRUD routes
 router.post("/", userController.createUser);
 router.get("/", userController.getAllUsers);

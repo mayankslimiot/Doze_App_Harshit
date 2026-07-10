@@ -89,16 +89,17 @@ const fieldNameMapping = {
   'MS': 'motionStart',
   'MST': 'motionStop',
   'AS': 'absenceStart',
-  'AST': 'absenceEnd',
+  'MS_B': 'motionBoolean',
+  'SN_B': 'snoreDetected',
+  'L': 'batteryLevel',
+  'HR_M': 'hr_median',
+  'Res_M': 'respirationMedian',
+  'HR_SD': 'heartRateSD',
+  'RESSD': 'respirationSD',
   'SS': 'snoringStart',
   'SST': 'snoringStop',
   'SF': 'snoringFrequency',
-  'RST': 'snoreDuration',
   'RS': 'snoreCount',
-  'MAX': 'maxSnoreScore',
-  'A': 'signalA',
-  'B': 'signalB',
-  'C': 'signalC',
   'V': 'voltage',
   'L': 'level',
   'S': 'status',
@@ -161,12 +162,7 @@ function parseAbbreviatedFormat(data) {
   if (data.VEN !== undefined && data.VEN !== "") patch.ventilationNeeded = toNumLocal(data.VEN);
   if (data.HV !== undefined && data.HV !== "") patch.heartRateValid = toNumLocal(data.HV);
   if (data.ET !== undefined && data.ET !== "") patch.eventText = data.ET;
-  if (data.A !== undefined && data.A !== "") patch.signalA = toNumLocal(data.A);
-  if (data.B !== undefined && data.B !== "") patch.signalB = toNumLocal(data.B);
-  if (data.C !== undefined && data.C !== "") patch.signalC = toNumLocal(data.C);
-  if (data.MAX !== undefined && data.MAX !== "") patch.maxSnoreScore = toNumLocal(data.MAX);
-  if (data.RST !== undefined && data.RST !== "") patch.snoreDuration = toNumLocal(data.RST);
-  if (data.RS !== undefined && data.RS !== "") patch.snoreCount = toNumLocal(data.RS);
+            if (data.RS !== undefined && data.RS !== "") patch.snoreCount = toNumLocal(data.RS);
   if (data.V !== undefined && data.V !== "") signals.battery = toNumLocal(data.V);
   if (data.L !== undefined && data.L !== "") patch.level = toNumLocal(data.L);
   if (data.TS !== undefined && data.TS !== "") patch.timestampSeconds = toNumLocal(data.TS);
@@ -483,7 +479,10 @@ async function saveLiveData(normalized, deviceId, legacyData) {
       try {
         broadcastDeviceUpdate(deviceId, {
           bedStatus: updatedDevice.bedStatus,
-          absenceStart: updatedDevice.absenceStart,
+          motionBoolean: null,
+        snoreDetected: null,
+        batteryLevel: null,
+        absenceStart: updatedDevice.absenceStart,
           HV: updatedDevice.HV,
           isLive: updatedDevice.isLive,
           source: "packet"
@@ -492,7 +491,10 @@ async function saveLiveData(normalized, deviceId, legacyData) {
           deviceId,
           previousBedStatus,
           newBedStatus: updatedDevice.bedStatus,
-          absenceStart: updatedDevice.absenceStart,
+          motionBoolean: null,
+        snoreDetected: null,
+        batteryLevel: null,
+        absenceStart: updatedDevice.absenceStart,
           HV: updatedDevice.HV
         });
       } catch (wsError) {
@@ -561,17 +563,14 @@ async function saveLiveData(normalized, deviceId, legacyData) {
         humidity: null,
         motionStart: null,
         motionStop: null,
+        motionBoolean: null,
+        snoreDetected: null,
+        batteryLevel: null,
         absenceStart: cleanData.AS !== undefined ? toNum(cleanData.AS) : null,
-        absenceEnd: null,
         snoringStart: null,
         snoringStop: null,
         snoringFrequency: null,
-        snoreDuration: null,
         snoreCount: null,
-        maxSnoreScore: null,
-        signalA: cleanData.A !== undefined ? toNum(cleanData.A) : null,
-        signalB: cleanData.B !== undefined ? toNum(cleanData.B) : null,
-        signalC: cleanData.C !== undefined ? toNum(cleanData.C) : null,
         voltage: null,
         level: null,
         status: null,
@@ -628,18 +627,22 @@ async function saveLiveData(normalized, deviceId, legacyData) {
     // Map abbreviated fields to full names
     const mappedData = mapAbbreviatedToFullNames(cleanData);
 
-    // Define all valid schema fields
+    // Define all valid top-level schema fields
     const validSchemaFields = [
       'timestampSeconds', 'timestampMilliseconds', 'temperature', 'humidity',
-      'motionStart', 'motionStop', 'absenceStart', 'absenceEnd',
-      'snoringStart', 'snoringStop', 'snoringFrequency', 'snoreDuration', 'snoreCount', 'maxSnoreScore',
-      'signalA', 'signalB', 'signalC',
+      'motionStart', 'motionStop', 'absenceStart', 
+      'snoringStart', 'snoringStop', 'snoringFrequency', 'snoreCount',
+      'motionBoolean', 'snoreDetected', 'batteryLevel',
       'voltage', 'level', 'status', 'heartRate', 'respiration',
       'pm10', 'iaq', 'co2', 'voc', 'vocRaw', 'vocStatus', 'vocAlert', 'ventilationNeeded', 'heartRateValid', 'eventText'
     ];
 
+    // Fields that belong under the nested `metrics` sub-document in the HealthData schema
+    const metricsSchemaFields = ['hr_median', 'respirationMedian', 'heartRateSD', 'respirationSD'];
+
     // Extract only valid mapped fields
     const validMappedFields = {};
+    const metricsFields = {};
     const extraFields = {};
 
     // String fields that should NOT be coerced to Number
@@ -658,6 +661,11 @@ async function saveLiveData(normalized, deviceId, legacyData) {
             validMappedFields[key] = coerced;
           }
         }
+      } else if (metricsSchemaFields.includes(key)) {
+        const coerced = toNum(mappedData[key]);
+        if (coerced !== undefined) {
+          metricsFields[key] = coerced;
+        }
       } else {
         extraFields[key] = mappedData[key];
       }
@@ -669,6 +677,15 @@ async function saveLiveData(normalized, deviceId, legacyData) {
       signals.battery = validMappedFields.voltage;
       delete validMappedFields.voltage;
     }
+
+    // Preserve original abbreviated metric keys in raw for backward compatibility
+    // (sleepStageService falls back to raw.HR_M, raw.Res_M, raw.HR_SD, raw.RESSD)
+    const rawMetrics = {};
+    ['HR_M', 'Res_M', 'HR_SD', 'RESSD'].forEach(abbr => {
+      if (cleanData[abbr] !== undefined && cleanData[abbr] !== null && cleanData[abbr] !== '') {
+        rawMetrics[abbr] = toNum(cleanData[abbr]) ?? cleanData[abbr];
+      }
+    });
 
     // now is already defined at the top
     const newHealthData = new HealthData();
@@ -682,9 +699,9 @@ async function saveLiveData(normalized, deviceId, legacyData) {
       receivedAt: new Date(),
       streamVersion: 'v2',
       isBuffered: normalized.TS ? Math.abs(now.getTime() - (normalized.TS * 1000)) > 18000 : false,
-      metrics: {},
+      metrics: { ...metricsFields },
       signals,
-      raw: Object.keys(extraFields).length > 0 ? extraFields : {},
+      raw: { ...extraFields, ...rawMetrics },
     };
 
     // ✅ CRITICAL: Handle heartRate gaps (HV=0 only, NOT AS)
@@ -854,7 +871,10 @@ async function processLegacyLiveData(deviceId, data) {
       try {
         broadcastDeviceUpdate(deviceId, {
           bedStatus: updatedDevice.bedStatus,
-          absenceStart: updatedDevice.absenceStart,
+          motionBoolean: null,
+        snoreDetected: null,
+        batteryLevel: null,
+        absenceStart: updatedDevice.absenceStart,
           HV: updatedDevice.HV,
           isLive: updatedDevice.isLive,
           source: "packet"
@@ -863,7 +883,10 @@ async function processLegacyLiveData(deviceId, data) {
           deviceId,
           previousBedStatus,
           newBedStatus: updatedDevice.bedStatus,
-          absenceStart: updatedDevice.absenceStart,
+          motionBoolean: null,
+        snoreDetected: null,
+        batteryLevel: null,
+        absenceStart: updatedDevice.absenceStart,
           HV: updatedDevice.HV
         });
       } catch (wsError) {
@@ -924,17 +947,14 @@ async function processLegacyLiveData(deviceId, data) {
         humidity: null,
         motionStart: null,
         motionStop: null,
+        motionBoolean: null,
+        snoreDetected: null,
+        batteryLevel: null,
         absenceStart: cleanData.AS !== undefined ? toNum(cleanData.AS) : null,
-        absenceEnd: null,
         snoringStart: null,
         snoringStop: null,
         snoringFrequency: null,
-        snoreDuration: null,
         snoreCount: null,
-        maxSnoreScore: null,
-        signalA: cleanData.A !== undefined ? toNum(cleanData.A) : null,
-        signalB: cleanData.B !== undefined ? toNum(cleanData.B) : null,
-        signalC: cleanData.C !== undefined ? toNum(cleanData.C) : null,
         voltage: null,
         level: null,
         status: null,
@@ -983,18 +1003,22 @@ async function processLegacyLiveData(deviceId, data) {
     // Map abbreviated fields to full names FIRST
     const mappedData = mapAbbreviatedToFullNames(cleanData);
     
-    // Define all valid schema fields
+    // Define all valid top-level schema fields
     const validSchemaFields = [
       'timestampSeconds', 'timestampMilliseconds', 'temperature', 'humidity',
-      'motionStart', 'motionStop', 'absenceStart', 'absenceEnd',
-      'snoringStart', 'snoringStop', 'snoringFrequency', 'snoreDuration', 'snoreCount', 'maxSnoreScore',
-      'signalA', 'signalB', 'signalC',
+      'motionStart', 'motionStop', 'absenceStart', 
+      'snoringStart', 'snoringStop', 'snoringFrequency', 'snoreCount',
+      'motionBoolean', 'snoreDetected', 'batteryLevel',
       'voltage', 'level', 'status', 'heartRate', 'respiration',
       'pm10', 'iaq', 'co2', 'voc', 'vocRaw', 'vocStatus', 'vocAlert', 'ventilationNeeded', 'heartRateValid', 'eventText'
     ];
+
+    // Fields that belong under the nested `metrics` sub-document in the HealthData schema
+    const metricsSchemaFields = ['hr_median', 'respirationMedian', 'heartRateSD', 'respirationSD'];
     
     // Extract only valid mapped fields
     const validMappedFields = {};
+    const metricsFields = {};
     const extraFields = {}; // Fields not in schema - will go to raw
     
     Object.keys(mappedData).forEach(key => {
@@ -1002,6 +1026,13 @@ async function processLegacyLiveData(deviceId, data) {
         // Only include non-null/non-empty values
         if (mappedData[key] !== null && mappedData[key] !== undefined && mappedData[key] !== '') {
           validMappedFields[key] = mappedData[key];
+        }
+      } else if (metricsSchemaFields.includes(key)) {
+        if (mappedData[key] !== null && mappedData[key] !== undefined && mappedData[key] !== '') {
+          const coerced = toNum(mappedData[key]);
+          if (coerced !== undefined) {
+            metricsFields[key] = coerced;
+          }
         }
       } else {
         // Extra fields that don't map to schema
@@ -1017,13 +1048,22 @@ async function processLegacyLiveData(deviceId, data) {
       delete validMappedFields.voltage;
     }
 
+    // Preserve original abbreviated metric keys in raw for backward compatibility
+    // (sleepStageService falls back to raw.HR_M, raw.Res_M, raw.HR_SD, raw.RESSD)
+    const rawMetrics = {};
+    ['HR_M', 'Res_M', 'HR_SD', 'RESSD'].forEach(abbr => {
+      if (cleanData[abbr] !== undefined && cleanData[abbr] !== null && cleanData[abbr] !== '') {
+        rawMetrics[abbr] = toNum(cleanData[abbr]) ?? cleanData[abbr];
+      }
+    });
+
     // Build final document with ONLY mapped fields
     const finalDoc = {
       deviceId,
       timestamp: new Date(),
-      metrics: {},
+      metrics: { ...metricsFields },
       signals: signals,
-      raw: extraFields // Only store extra/unmapped fields in raw
+      raw: { ...extraFields, ...rawMetrics }
     };
 
     // Add all valid mapped fields to finalDoc

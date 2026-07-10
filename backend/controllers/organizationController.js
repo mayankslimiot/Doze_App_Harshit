@@ -325,35 +325,37 @@ exports.getOrganizationUsers = async (req, res, next) => {
   }
 };
 
-// controllers/organizationController.js
 // Public endpoint: get minimal list of active organizations (no auth required)
 exports.getPublicOrganizations = async (req, res, next) => {
   try {
-    const organizations = await Organization.find({ isActive: true })
-      .select('organizationId name') // only send safe fields
-      .sort({ createdAt: -1 })
-      .limit(100);
+    let specificOrgId = null;
+    const authHeader = req.header("Authorization");
+    if (authHeader) {
+      try {
+        const jwt = require("jsonwebtoken");
+        const decoded = jwt.verify(authHeader.replace("Bearer ", ""), process.env.JWT_SECRET);
+        if (decoded && decoded.role === 'admin') {
+          // If the user is an admin (Sub-Admin), find their organization ID from their user record
+          const adminUser = await User.findById(decoded.userId).populate('account').lean();
+          if (adminUser && adminUser.account && adminUser.account.organizationId) {
+            specificOrgId = adminUser.account.organizationId;
+          }
+        }
+      } catch (err) {
+        console.warn("getPublicOrganizations: Optional JWT decoding failed:", err.message);
+      }
+    }
 
-    console.log(`🌍 Public org fetch → ${organizations.length} records`);
+    let filter = { isActive: { $ne: false } };
+    if (specificOrgId) {
+      filter._id = specificOrgId;
+    }
 
-    return res.status(200).json({
-      status: "success",
-      data: { organizations }
-    });
-  } catch (error) {
-    console.error("❌ Error fetching public organizations:", error);
-    next(error);
-  }
-};
+    const orgs = await Organization.find(filter, "organizationId name _id")
+      .sort({ name: 1 })
+      .lean();
 
-
-// controllers/organizationController.js
-
-exports.getPublicOrganizations = async (req, res, next) => {
-  try {
-    const orgs = await Organization.find({}, "organizationId name _id").sort({ name: 1 }).lean();
-
-    console.log(`📤 Public organizations list: ${orgs.length} found`);
+    console.log(`🌍 Public org fetch → ${orgs.length} records`);
 
     return res.status(200).json({
       status: "success",

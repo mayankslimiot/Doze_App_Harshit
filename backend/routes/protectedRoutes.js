@@ -100,8 +100,26 @@ router.post('/devices/assign', authMiddleware, async (req, res) => {
             return res.status(404).json({ status: 'fail', message: 'Device not found' });
         }
 
-        // 1) assign device to user
-        await Device.updateOne({ _id: device._id }, { $set: { userId } });
+        const userObj = await User.findById(userId).populate('account');
+        const updateData = { userId };
+        const unsetData = {};
+
+        if (userObj) {
+            if (userObj.accountId) updateData.accountId = userObj.accountId;
+            if (userObj.account && userObj.account.organizationId) {
+                updateData.organizationId = userObj.account.organizationId;
+            } else {
+                unsetData.organizationId = 1;
+            }
+        }
+
+        const updatePayload = { $set: updateData };
+        if (Object.keys(unsetData).length > 0) {
+            updatePayload.$unset = unsetData;
+        }
+
+        // 1) assign device to user and organization
+        await Device.updateOne({ _id: device._id }, updatePayload);
 
         // 2) add to user's devices and set activeDevice (no full validation)
         const updatedUser = await User.findByIdAndUpdate(
@@ -642,6 +660,7 @@ router.get("/data/health/heart-rate/graph/:deviceId", authMiddleware, async (req
             (device.userId && device.userId.toString() === req.user.userId) ||
             (device.accountId && user?.accountId && device.accountId === user.accountId) ||
             req.user.role === "admin" ||
+            req.user.role === "viewer" ||
             req.user.role === "superadmin" ||
             (user && user.devices && user.devices.some(d => d.toString() === device._id.toString())) ||
             (user && user.sharedDevices && user.sharedDevices.some(id => String(id).trim().toUpperCase() === deviceIdUpper)) ||
@@ -803,6 +822,7 @@ router.get("/data/health/respiration/graph/:deviceId", authMiddleware, async (re
             (device.userId && device.userId.toString() === req.user.userId) ||
             (device.accountId && user?.accountId && device.accountId === user.accountId) ||
             req.user.role === "admin" ||
+            req.user.role === "viewer" ||
             req.user.role === "superadmin" ||
             (user && user.devices && user.devices.some(d => d.toString() === device._id.toString())) ||
             (user && user.sharedDevices && user.sharedDevices.some(id => String(id).trim().toUpperCase() === deviceIdUpper)) ||
@@ -960,6 +980,7 @@ router.get("/data/health/stress/graph/:deviceId", authMiddleware, async (req, re
             (device.userId && device.userId.toString() === req.user.userId) ||
             (device.accountId && user?.accountId && device.accountId === user.accountId) ||
             req.user.role === "admin" ||
+            req.user.role === "viewer" ||
             req.user.role === "superadmin" ||
             (user && user.devices && user.devices.some(d => d.toString() === device._id.toString())) ||
             (user && user.sharedDevices && user.sharedDevices.some(id => String(id).trim().toUpperCase() === deviceIdUpper)) ||
@@ -1067,6 +1088,7 @@ function buildEnvironmentalGraphRoute(routePath, dbField, maxValid, selectFields
                 (device.userId && device.userId.toString() === req.user.userId) ||
                 (device.accountId && user?.accountId && device.accountId === user.accountId) ||
                 req.user.role === "admin" ||
+                req.user.role === "viewer" ||
                 req.user.role === "superadmin" ||
                 (user && user.devices && user.devices.some(d => d.toString() === device._id.toString())) ||
                 (user && user.sharedDevices && user.sharedDevices.some(id => String(id).trim().toUpperCase() === deviceIdUpper)) ||
@@ -1280,7 +1302,7 @@ router.get("/data/health/:deviceId", authMiddleware, async (req, res) => {
         const requestedFields = typeof fields === "string" ? fields.toLowerCase() : "";
         const isMotionOnly = requestedFields === "motion";
         const projection = isMotionOnly
-            ? "timestamp motionStart motionEndReason"
+            ? "timestamp motionStart motionStop"
             : "+metrics +signals +raw";
 
         // Determine sort order: 'asc' for chronological (oldest first), default is 'desc' (newest first)
@@ -1322,6 +1344,7 @@ router.get("/sleep/session/:deviceId", authMiddleware, async (req, res) => {
             (device.userId && device.userId.toString() === req.user.userId) ||
             (device.accountId && user?.accountId && device.accountId === user.accountId) ||
             req.user.role === "admin" ||
+            req.user.role === "viewer" ||
             req.user.role === "superadmin" ||
             (user && user.devices && user.devices.some(d => d.toString() === device._id.toString())) ||
             (user && user.sharedDevices && user.sharedDevices.some(id => String(id).trim().toUpperCase() === device.deviceId)) ||
@@ -1340,6 +1363,7 @@ router.get("/sleep/session/:deviceId", authMiddleware, async (req, res) => {
         const { formatISTDate, getISTComponents, createFromISTComponents, parseISTDate, getDayEndIST } = require('../utils/timezoneHelper');
         // Interpret query date as IST calendar date
         const targetDate = date ? parseISTDate(date) : new Date();
+        const istComponents = getISTComponents(targetDate);
 
         // Start: (selectedDate - 1 day) 12:00 PM IST (noon of previous day)
         const previousDay = new Date(targetDate.getTime() - 24 * 60 * 60 * 1000);
@@ -1351,8 +1375,13 @@ router.get("/sleep/session/:deviceId", authMiddleware, async (req, res) => {
             12, 0, 0  // 12:00 PM (noon)
         );
 
-        // End: end of selected date in IST (23:59:59.999) so we get full 13th including sleep that ends after noon
-        const dayEndUTC = getDayEndIST(targetDate, 0);
+        // End: selectedDate 12:00 PM IST (noon of selected date)
+        const dayEndUTC = createFromISTComponents(
+            istComponents.year,
+            istComponents.month,
+            istComponents.date,
+            12, 0, 0  // 12:00 PM (noon)
+        );
 
         const sessionDate = date || formatISTDate(new Date());
         const resolvedDeviceId = device.deviceId;
@@ -1505,6 +1534,7 @@ router.get("/sleep/sessions/:deviceId", authMiddleware, async (req, res) => {
             (device.userId && device.userId.toString() === req.user.userId) ||
             (device.accountId && user?.accountId && device.accountId === user.accountId) ||
             req.user.role === "admin" ||
+            req.user.role === "viewer" ||
             req.user.role === "superadmin" ||
             (user && user.devices && user.devices.some(d => d.toString() === device._id.toString())) ||
             (user && user.sharedDevices && user.sharedDevices.some(id => String(id).trim().toUpperCase() === device.deviceId)) ||
@@ -1559,6 +1589,7 @@ router.post("/sleep/calculate/:deviceId", authMiddleware, async (req, res) => {
             (device.userId && device.userId.toString() === req.user.userId) ||
             (device.accountId && user?.accountId && device.accountId === user.accountId) ||
             req.user.role === "admin" ||
+            req.user.role === "viewer" ||
             req.user.role === "superadmin" ||
             (user && user.devices && user.devices.some(d => d.toString() === device._id.toString())) ||
             (user && user.sharedDevices && user.sharedDevices.some(id => String(id).trim().toUpperCase() === device.deviceId)) ||
@@ -2087,12 +2118,12 @@ router.post('/device-models', async (req, res, next) => {
 // ✅ Set an Active Device for User
 router.patch("/devices/activate/:deviceId", authMiddleware, async (req, res) => {
     try {
-        const { deviceId } = req.params;
+        const deviceId = req.params.deviceId ? String(req.params.deviceId).trim().toUpperCase() : "";
         const userId = req.user.userId;
         const userObjectId = new mongoose.Types.ObjectId(userId);
 
         console.log("🔑 Activate device route called");
-        console.log("👉 Requested deviceId:", deviceId);
+        console.log("👉 Requested deviceId (normalized):", deviceId);
         console.log("👉 UserId (string):", userId);
         console.log("👉 UserId (ObjectId):", userObjectId);
 
@@ -2105,12 +2136,27 @@ router.patch("/devices/activate/:deviceId", authMiddleware, async (req, res) => 
 
         console.log("✅ Found device:", device.deviceId, "status:", device.status, "userId:", device.userId);
 
-        // 2) Allow owner or caretaker (shared access) to set device as active for viewing
+        // 2) Fetch user and allow owner, caretaker, superadmin, admin, same-account or listed device access
+        const isSuperAdmin = req.user?.role === "superadmin";
+        let loggedInUser = null;
+        if (!isSuperAdmin) {
+            loggedInUser = await User.findById(userId).select("devices accountId sharedDevices role");
+            if (!loggedInUser) {
+                console.log("❌ User not found:", userId);
+                return res.status(404).json({ message: "User not found" });
+            }
+        }
+
         const isOwner = device.userId && String(device.userId) === String(userId);
         const isCaretaker = Array.isArray(device.sharedWith) &&
             device.sharedWith.some((e) => e.userId && String(e.userId) === String(userId));
-        if (!isOwner && !isCaretaker) {
-            console.log("⚠️ Device not owned or shared with this user.");
+        const isAdmin = req.user?.role === "admin" || loggedInUser?.role === "admin";
+        const isSameAccount = device.accountId && loggedInUser?.accountId && String(device.accountId) === String(loggedInUser.accountId);
+        const isInUserDevices = loggedInUser?.devices && loggedInUser.devices.some(d => d.toString() === device._id.toString());
+        const isInUserShared = loggedInUser?.sharedDevices && loggedInUser.sharedDevices.some(id => String(id).trim().toUpperCase() === deviceId);
+
+        if (!isOwner && !isCaretaker && !isSuperAdmin && !isAdmin && !isSameAccount && !isInUserDevices && !isInUserShared) {
+            console.log("⚠️ Device not owned, shared, or associated with this user/admin.");
             return res.status(403).json({ message: "Device does not belong to this user" });
         }
 
@@ -2120,7 +2166,7 @@ router.patch("/devices/activate/:deviceId", authMiddleware, async (req, res) => 
             deviceId: d.deviceId, status: d.status
         })));
 
-        // 4) Deactivate others
+        // 4) Deactivate others owned by this user
         const updateResult = await Device.updateMany(
             { userId: userObjectId, deviceId: { $ne: deviceId } },
             { $set: { status: "inactive" } }
@@ -2134,11 +2180,21 @@ router.patch("/devices/activate/:deviceId", authMiddleware, async (req, res) => 
         console.log("✅ Activated device:", device.deviceId);
 
         // 6) Update user's activeDevice
-        const user = await User.findByIdAndUpdate(
-            userId,
-            { activeDevice: device._id },
-            { new: true }
-        );
+        let user;
+        if (isSuperAdmin) {
+            const SuperAdmin = require("../models/SuperAdmin");
+            user = await SuperAdmin.findByIdAndUpdate(
+                userId,
+                { activeDevice: device._id },
+                { new: true }
+            );
+        } else {
+            user = await User.findByIdAndUpdate(
+                userId,
+                { activeDevice: device._id },
+                { new: true }
+            );
+        }
 
         console.log("👤 User updated activeDevice:", user?.activeDevice);
 

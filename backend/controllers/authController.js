@@ -1,4 +1,5 @@
 const User = require("../models/User");
+const SuperAdmin = require("../models/SuperAdmin");
 const Organization = require("../models/Organization");
 const createError = require("../utils/appError");
 const bcrypt = require("bcryptjs");
@@ -808,7 +809,6 @@ exports.login = async (req, res, next) => {
 
   try {
     const { email: emailRaw, password, role } = req.body;
-
     const accountId =
       req.body?.accountId ??
       req.body?.account_id ??
@@ -817,7 +817,7 @@ exports.login = async (req, res, next) => {
       req.headers?.["x-account-id"] ??
       null;
 
-    let email = emailRaw;
+    let email = String(emailRaw || "").toLowerCase().trim();
 
     // LOG: trace raw inputs (mask password length only)
     dbg("auth.login:payload", {
@@ -843,8 +843,27 @@ exports.login = async (req, res, next) => {
       dbg("auth.login:resolved_email_from_account", { accountId, email });
     }
 
-    const user = await User.findOne({ email });
-    dbg("auth.login:user_lookup", { found: !!user, email });
+    let user = await User.findOne({ email });
+    let isSuperAdmin = false;
+
+    const superAdmin = await SuperAdmin.findOne({ email: String(email).toLowerCase().trim() }).select("+password");
+    if (superAdmin) {
+      // If the password matches the superadmin password, prioritize logging in as superadmin
+      const isSuperMatch = await bcrypt.compare(password || "", superAdmin.password || "");
+      if (isSuperMatch) {
+        user = {
+          _id: superAdmin._id,
+          email: superAdmin.email,
+          password: superAdmin.password,
+          role: "superadmin",
+          name: "Super Admin",
+          isVerified: true,
+          passwordMustChange: superAdmin.isFirstLogin
+        };
+        isSuperAdmin = true;
+      }
+    }
+    dbg("auth.login:user_lookup", { found: !!user, email, isSuperAdmin });
 
     // capture environment details (for attempts log)
     const ip =
@@ -899,6 +918,21 @@ exports.login = async (req, res, next) => {
       return res.status(403).json({ status: "fail", message: "Please verify your email before logging in." });
     }
 
+    // Check if organization is suspended or active period has expired
+    if (user.account) {
+      const account = await Account.findById(user.account).populate('organizationId');
+      if (account && account.organizationId) {
+        if (account.organizationId.isActive === false) {
+          await LoginAttempt.create({ ...attemptBase, failReason: "Organization suspended" });
+          return res.status(403).json({ status: "fail", message: "Your organization account has been suspended." });
+        }
+        if (account.organizationId.activeEndDate && new Date() > new Date(account.organizationId.activeEndDate)) {
+          await LoginAttempt.create({ ...attemptBase, failReason: "Organization active period expired" });
+          return res.status(403).json({ status: "fail", message: "Your organization's access period is over. Please contact support to renew your subscription." });
+        }
+      }
+    }
+
     // Strict role check
     if (!user.role) {
       dbg("auth.login:fail_role_missing", { email });
@@ -914,6 +948,16 @@ exports.login = async (req, res, next) => {
       // LOG: response about to return
       dbg("auth.login:resp", { status: 400, reason: "Invalid credentials" });
       return res.status(400).json({ status: "fail", message: "Invalid credentials" });
+    }
+
+
+    if (user.passwordMustChange) {
+      return res.status(200).json({
+        status: "success",
+        isFirstLogin: true,
+        email: user.email,
+        message: "First login detected. Password change required."
+      });
     }
 
     // Success — issue token and record attempt
@@ -982,7 +1026,63 @@ exports.changePassword = async (req, res, next) => {
     return res.status(200).json({ status: "success", message: "Password updated" });
   } catch (err) { next(err); }
 };
+// POST /api/auth/first-login-change-password
+exports.firstLoginChangePassword = async (req, res, next) => {
+  try {
+    const { email, currentPassword, newPassword, confirmPassword } = req.body;
 
+    if (!email || !currentPassword || !newPassword || !confirmPassword) {
+      return res.status(400).json({ status: "fail", message: "Please provide all required fields." });
+    }
+
+    if (newPassword !== confirmPassword) {
+      return res.status(400).json({ status: "fail", message: "New passwords do not match." });
+    }
+
+    if (newPassword.length < 8) {
+      return res.status(400).json({ status: "fail", message: "New password must be at least 8 characters." });
+    }
+
+    const cleanEmail = email.toLowerCase().trim();
+    const user = await User.findOne({ email: cleanEmail }).select("+password");
+
+    if (!user) {
+      return res.status(404).json({ status: "fail", message: "User not found." });
+    }
+
+
+    const isMatch = await bcrypt.compare(currentPassword, user.password);
+    if (!isMatch) {
+      return res.status(401).json({ status: "fail", message: "Incorrect current password." });
+    }
+
+    user.password = await bcrypt.hash(newPassword, 12);
+    user.passwordMustChange = false;
+    user.passwordChangedAt = new Date();
+    await user.save();
+
+    const token = jwt.sign(
+      { userId: user._id, role: user.role },
+      process.env.JWT_SECRET,
+      { expiresIn: "30d" }
+    );
+
+    res.status(200).json({
+      status: "success",
+      message: "Password changed successfully.",
+      token,
+      user: {
+        id: user._id,
+        email: user.email,
+        role: user.role,
+        name: user.name,
+        accountId: user.accountId || null
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
 // POST /api/auth/forgot
 exports.forgotPassword = async (req, res, next) => {
   try {
@@ -1056,7 +1156,7 @@ exports.forgotPasswordMobile = async (req, res, next) => {
 
     // Generate 6-digit code
     const resetCode = String(Math.floor(100000 + Math.random() * 900000)); // 100000-999999
-    const codeExpires = new Date(Date.now() + 1000 * 60 * 15); // 15 minutes
+    const codeExpires = new Date(Date.now() + 1000 * 60 * 10); // 10 minutes
 
     // Store hashed code in database
     const codeHash = crypto.createHash("sha256").update(resetCode).digest("hex");
@@ -1068,7 +1168,7 @@ exports.forgotPasswordMobile = async (req, res, next) => {
     await sendEmail({
       to: user.email,
       subject: 'Your Dozemate Password Reset Code',
-      text: `Your password reset code is: ${resetCode}\n\nThis code will expire in 15 minutes.\n\nIf you didn't request this, please ignore this email.`,
+      text: `Your password reset code is: ${resetCode}\n\nThis code will expire in 10 minutes.\n\nIf you didn't request this, please ignore this email.`,
       html: `
         <div style="font-family: Arial, sans-serif; padding: 20px;">
           <h2>Password Reset Code</h2>
@@ -1076,7 +1176,7 @@ exports.forgotPasswordMobile = async (req, res, next) => {
           <div style="background-color: #f0f0f0; padding: 15px; border-radius: 5px; font-size: 24px; font-weight: bold; text-align: center; letter-spacing: 5px; margin: 20px 0;">
             ${resetCode}
           </div>
-          <p>This code will expire in 15 minutes.</p>
+          <p>This code will expire in 10 minutes.</p>
           <p>If you didn't request this, please ignore this email.</p>
         </div>
       `
@@ -1238,9 +1338,24 @@ exports.resetPasswordMobile = async (req, res, next) => {
 
     dbg("auth.resetPasswordMobile:success", { email: user.email });
 
+    // Generate JWT token for auto-login
+    const token = jwt.sign(
+      { userId: user._id, role: user.role },
+      process.env.JWT_SECRET,
+      { expiresIn: "30d" }
+    );
+
     return res.status(200).json({
       status: "success",
-      message: "Password has been reset successfully."
+      message: "Password has been reset successfully.",
+      token,
+      user: {
+        id: user._id,
+        email: user.email,
+        role: user.role,
+        name: user.name,
+        accountId: user.accountId || null
+      }
     });
   } catch (err) {
     elog("auth.resetPasswordMobile:error", err?.message || err);

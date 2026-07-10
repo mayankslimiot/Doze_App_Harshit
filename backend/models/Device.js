@@ -7,6 +7,7 @@ const DeviceSchema = new mongoose.Schema({
   // NEW
   accountId: { type: String }, // ties back to account/email
   profileId: { type: mongoose.Schema.Types.ObjectId, ref: "Profile"},
+  organizationId: { type: mongoose.Schema.Types.ObjectId, ref: "Organization", default: null },
 
   firmwareVersion: { type: String, required: true },        // Firmware Version
   location: { type: String, required: true },               // Device Location
@@ -44,7 +45,15 @@ const DeviceSchema = new mongoose.Schema({
   sharedWith: [{
     userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     email: { type: String }
-  }]
+  }],
+  room: { type: String, default: null },
+  bed: { type: String, default: null },
+  // Per-Device Clinical Thresholds
+  hrMin: { type: Number, default: 40 },
+  hrMax: { type: Number, default: 120 },
+  respMin: { type: Number, default: 8 },
+  respMax: { type: Number, default: 30 },
+  thresholdMode: { type: String, enum: ["global", "individual"], default: "global" }
 });
 
 DeviceSchema.index({ profileId: 1 });

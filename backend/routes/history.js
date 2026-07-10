@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 const HealthData = require("../models/HealthData");
 const SleepData = require("../models/SleepData");
+const SleepEpoch = require("../models/SleepEpoch");
 const Device = require("../models/Device");
 const User = require("../models/User");
 const authMiddleware = require("../middleware/authMiddleware");
@@ -50,7 +51,8 @@ router.get("/history", authMiddleware, async (req, res) => {
     }
 
     // Get user's active device(s)
-    const user = await User.findById(userId);
+    const Account = require('../models/Account');
+    const user = await User.findById(userId).populate('account');
     if (!user) {
       return res.status(404).json({
         status: "fail",
@@ -58,46 +60,42 @@ router.get("/history", authMiddleware, async (req, res) => {
       });
     }
 
-    // Get active device IDs - check both activeDevice (singular) and activeDevices (plural)
-    let activeDeviceIds = [];
-    if (user.activeDevice) {
-      activeDeviceIds = [user.activeDevice];
-    } else if (user.activeDevices && user.activeDevices.length > 0) {
-      activeDeviceIds = user.activeDevices;
-    }
-
-    // If no active devices, try to get any device associated with user
-    if (activeDeviceIds.length === 0) {
-      const userDevices = await Device.find({ userId: userId });
-      if (userDevices.length === 0) {
-        return res.json([]); // Return empty array if no devices
+    // Build a broad device filter that covers all access paths:
+    // 1. userId ownership  2. accountId  3. organizationId
+    const deviceFilter = { $or: [{ userId: userId }] };
+    if (user.account) {
+      const accountIdStr = user.account.accountId || String(user.account._id);
+      deviceFilter.$or.push({ accountId: accountIdStr });
+      if (user.account.organizationId) {
+        deviceFilter.$or.push({ organizationId: user.account.organizationId });
       }
-      activeDeviceIds = userDevices.map((d) => d._id);
+    }
+    // Superadmin: allow access to all devices
+    if (req.user.role === 'superadmin') {
+      delete deviceFilter.$or;
     }
 
-    // Get device IDs from active devices
-    const activeDevices = await Device.find({
-      _id: { $in: activeDeviceIds },
-    });
-    let deviceIds = activeDevices.map((d) => d.deviceId);
-
-    // If specific deviceId is provided in query, filter to that device only
+    // If specific deviceId is provided in query, verify access then use it directly
     if (deviceId) {
       const normalizedDeviceId = String(deviceId).trim().toUpperCase();
-      if (deviceIds.includes(normalizedDeviceId)) {
-        deviceIds = [normalizedDeviceId];
-      } else {
-        // Check if device belongs to user
-        const userDevice = await Device.findOne({ deviceId: normalizedDeviceId, userId: userId });
-        if (userDevice) {
-          deviceIds = [normalizedDeviceId];
-        } else {
-          return res.status(403).json({
-            status: "fail",
-            message: "Device not found or access denied",
-          });
-        }
+
+      // Build the access check query
+      const accessQuery = req.user.role === 'superadmin'
+        ? { deviceId: normalizedDeviceId }
+        : { deviceId: normalizedDeviceId, ...deviceFilter };
+
+      const matchedDevice = await Device.findOne(accessQuery);
+      if (!matchedDevice) {
+        return res.status(403).json({
+          status: "fail",
+          message: "Device not found or access denied",
+        });
       }
+      deviceIds = [normalizedDeviceId];
+    } else {
+      // No specific device — get all accessible devices
+      const accessibleDevices = await Device.find(deviceFilter);
+      deviceIds = accessibleDevices.map((d) => d.deviceId);
     }
 
     if (deviceIds.length === 0) {
@@ -124,6 +122,22 @@ router.get("/history", authMiddleware, async (req, res) => {
     })
       .sort({ timestamp: 1 })
       .lean();
+
+    // Fetch sleep epochs (AWAKE/LIGHT/DEEP/REM) for this device and time period
+    const sleepEpochs = await SleepEpoch.find({
+      deviceId: { $in: deviceIds },
+      timestamp: {
+        $gte: Math.floor(startDate.getTime() / 1000),
+        $lte: Math.floor(endDate.getTime() / 1000),
+      },
+    }).lean();
+
+    const sleepStageMap = new Map();
+    sleepEpochs.forEach((epoch) => {
+      if (epoch.timestamp && epoch.stage) {
+        sleepStageMap.set(epoch.timestamp, epoch.stage);
+      }
+    });
 
     // Return raw health data with all sensor fields for export
     const rawData = healthData.map((item) => {
@@ -167,7 +181,15 @@ router.get("/history", authMiddleware, async (req, res) => {
         status: item.status || null,
         // Metrics
         stressIndex: item.metrics?.stress_ind || null,
-        sleepStage: item.metrics?.SleepStage || null,
+        sleepStage: (() => {
+          const epochSeconds = getSanitizedEpochSeconds(item);
+          const rawStage = sleepStageMap.get(epochSeconds);
+          if (rawStage) {
+            if (rawStage === 'REM') return 'REM';
+            return rawStage.charAt(0).toUpperCase() + rawStage.slice(1).toLowerCase();
+          }
+          return item.metrics?.SleepStage || null;
+        })(),
         sleepQuality: item.metrics?.SleepQuality || null,
         meanHR: item.metrics?.mean_hr || null,
         HRrest: item.metrics?.HRrest || null,

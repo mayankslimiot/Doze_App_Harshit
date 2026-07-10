@@ -61,82 +61,7 @@ function initializeWebSocket(server) {
       userId: socket.userId 
     });
 
-    // Get user's devices (owned + shared) and auto-subscribe to device rooms
-    try {
-      const user = await User.findById(socket.userId)
-        .select("devices sharedDevices")
-        .populate("devices");
-      const verifiedDeviceIds = [];
-
-      // 1) Auto-subscribe to owned devices
-      if (user && user.devices && user.devices.length > 0) {
-        const deviceIds = user.devices.map(device => device.deviceId || device._id.toString());
-        for (const deviceId of deviceIds) {
-          const device = await Device.findOne({ deviceId });
-          if (device && device.userId && device.userId.toString() === socket.userId) {
-            const roomName = `device:${device.deviceId}`;
-            socket.join(roomName);
-            verifiedDeviceIds.push(device.deviceId);
-            logger.info("WebSocket: Auto-subscribed to device room (owner)", {
-              socketId: socket.id,
-              userId: socket.userId,
-              deviceId: device.deviceId,
-              room: roomName
-            });
-          } else {
-            logger.warn("WebSocket: Skipped auto-subscribe - ownership mismatch", {
-              socketId: socket.id,
-              userId: socket.userId,
-              deviceId,
-              deviceExists: !!device,
-              deviceOwnerId: device?.userId?.toString() || null
-            });
-          }
-        }
-      }
-
-      // 2) Auto-subscribe to shared devices (caretaker) so they receive live data
-      const sharedIds = user?.sharedDevices || [];
-      for (const rawId of sharedIds) {
-        const deviceIdNorm = String(rawId).trim().toUpperCase();
-        const device = await Device.findOne({ deviceId: deviceIdNorm }) || await Device.findOne({ deviceId: rawId });
-        if (!device) continue;
-        const isCaretaker = Array.isArray(device.sharedWith) &&
-          device.sharedWith.some(e => e.userId && String(e.userId) === String(socket.userId));
-        if (isCaretaker) {
-          const roomName = `device:${device.deviceId}`;
-          socket.join(roomName);
-          if (!verifiedDeviceIds.includes(device.deviceId)) {
-            verifiedDeviceIds.push(device.deviceId);
-          }
-          logger.info("WebSocket: Auto-subscribed to device room (caretaker)", {
-            socketId: socket.id,
-            userId: socket.userId,
-            deviceId: device.deviceId,
-            room: roomName
-          });
-        }
-      }
-
-      // User-specific room
-      socket.join(`user:${socket.userId}`);
-
-      socket.emit("connected", {
-        success: true,
-        message: "Connected to WebSocket server",
-        subscribedDevices: verifiedDeviceIds,
-        userId: socket.userId
-      });
-    } catch (error) {
-      logger.err(error, { where: "WebSocket: Error fetching user devices", socketId: socket.id });
-      socket.emit("connected", {
-        success: true,
-        message: "Connected to WebSocket server",
-        subscribedDevices: [],
-        userId: socket.userId
-      });
-    }
-
+    // 1) Register event listeners synchronously so they are active immediately
     // Handle manual device subscription
     socket.on("subscribe_device", async (data) => {
       try {
@@ -240,6 +165,95 @@ function initializeWebSocket(server) {
         reason 
       });
     });
+
+    // 2) Run asynchronous auto-subscribe logic after event registrations
+    try {
+      const user = await User.findById(socket.userId)
+        .select("devices sharedDevices account")
+        .populate("devices")
+        .populate("account");
+      const verifiedDeviceIds = [];
+
+      // 1) Auto-subscribe to owned devices
+      if (user && user.devices && user.devices.length > 0) {
+        const deviceIds = user.devices.map(device => device.deviceId || device._id.toString());
+        for (const deviceId of deviceIds) {
+          const device = await Device.findOne({ deviceId });
+          if (device && device.userId && device.userId.toString() === socket.userId) {
+            const roomName = `device:${device.deviceId}`;
+            socket.join(roomName);
+            verifiedDeviceIds.push(device.deviceId);
+            logger.info("WebSocket: Auto-subscribed to device room (owner)", {
+              socketId: socket.id,
+              userId: socket.userId,
+              deviceId: device.deviceId,
+              room: roomName
+            });
+          } else {
+            logger.warn("WebSocket: Skipped auto-subscribe - ownership mismatch", {
+              socketId: socket.id,
+              userId: socket.userId,
+              deviceId,
+              deviceExists: !!device,
+              deviceOwnerId: device?.userId?.toString() || null
+            });
+          }
+        }
+      }
+
+      // 2) Auto-subscribe to shared devices (caretaker) so they receive live data
+      const sharedIds = user?.sharedDevices || [];
+      for (const rawId of sharedIds) {
+        const deviceIdNorm = String(rawId).trim().toUpperCase();
+        const device = await Device.findOne({ deviceId: deviceIdNorm }) || await Device.findOne({ deviceId: rawId });
+        if (!device) continue;
+        const isCaretaker = Array.isArray(device.sharedWith) &&
+          device.sharedWith.some(e => e.userId && String(e.userId) === String(socket.userId));
+        if (isCaretaker) {
+          const roomName = `device:${device.deviceId}`;
+          socket.join(roomName);
+          if (!verifiedDeviceIds.includes(device.deviceId)) {
+            verifiedDeviceIds.push(device.deviceId);
+          }
+          logger.info("WebSocket: Auto-subscribed to device room (caretaker)", {
+            socketId: socket.id,
+            userId: socket.userId,
+            deviceId: device.deviceId,
+            room: roomName
+          });
+        }
+      }
+
+      // User-specific room
+      socket.join(`user:${socket.userId}`);
+      
+      // Organization-specific room (for org-wide alerts)
+      const organizationId = user && user.account && user.account.organizationId
+        ? user.account.organizationId.toString()
+        : null;
+      if (organizationId) {
+        socket.join(`org:${organizationId}`);
+        logger.info("WebSocket: Joined organization room", { socketId: socket.id, organizationId });
+      }
+      if (socket.userRole === "superadmin") {
+        socket.join("org:superadmin");
+      }
+
+      socket.emit("connected", {
+        success: true,
+        message: "Connected to WebSocket server",
+        subscribedDevices: verifiedDeviceIds,
+        userId: socket.userId
+      });
+    } catch (error) {
+      logger.err(error, { where: "WebSocket: Error fetching user devices", socketId: socket.id });
+      socket.emit("connected", {
+        success: true,
+        message: "Connected to WebSocket server",
+        subscribedDevices: [],
+        userId: socket.userId
+      });
+    }
   });
 
   logger.info("✅ WebSocket server initialized");
@@ -453,12 +467,29 @@ function getIO() {
   return io;
 }
 
+/**
+ * Broadcast an org-wide notification
+ * @param {string} organizationId - Organization ID
+ * @param {Object} notification - Notification document
+ */
+function broadcastNotification(organizationId, notification) {
+  if (!io) return;
+  try {
+    const roomName = `org:${organizationId}`;
+    io.to(roomName).emit("new_notification", notification);
+    logger.info("WebSocket: Notification broadcasted", { organizationId, room: roomName });
+  } catch (error) {
+    logger.err(error, { where: "broadcastNotification", organizationId });
+  }
+}
+
 module.exports = {
   initializeWebSocket,
   broadcastHealthData,
   broadcastDeviceStatus,
   broadcastDeviceUpdate,
   broadcastHeartRateGraphUpdate,
+  broadcastNotification,
   getIO
 };
 

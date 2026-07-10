@@ -2,12 +2,17 @@ const express = require("express");
 const fs = require("fs");
 const mongoose = require("mongoose");
 const User = require("../models/User");
+const SuperAdmin = require("../models/SuperAdmin");
 const Device = require("../models/Device");
+const Account = require("../models/Account");
+const Organization = require("../models/Organization");
 const bcrypt = require("bcryptjs");
+const jwt = require("jsonwebtoken");
 const authMiddleware = require("../middleware/authMiddleware");
 const router = express.Router();
 const multer = require("multer");
 const path = require("path");
+const { sendEmail } = require("../utils/mailer");
 
 const UPLOADS_PROFILES_DIR = path.join(__dirname, "..", "uploads", "profiles");
 
@@ -44,34 +49,61 @@ router.get("/profile", authMiddleware, async (req, res) => {
       return res.status(401).json({ message: "User ID not found in token" });
     }
 
-    // Try to fetch user without populate first to see if user exists
-    let user = await User.findById(userId).select("-password");
+    let user;
+    let isSuperAdmin = req.user?.role === "superadmin";
+
+    if (isSuperAdmin) {
+      const adminUser = await SuperAdmin.findById(userId).select("-password").lean();
+      if (adminUser) {
+        user = {
+          ...adminUser,
+          role: "superadmin",
+          isVerified: true,
+          devices: [],
+          activeDevices: []
+        };
+      }
+    } else {
+      user = await User.findById(userId).select("-password");
+    }
     
     if (!user) {
       console.error("[PROFILE] User not found with userId:", userId);
       return res.status(404).json({ message: "User not found" });
     }
 
-    console.log("[PROFILE] User found, populating devices...");
-
-    // Populate devices - handle errors gracefully
-    try {
-      user = await User.findById(userId)
-        .select("-password")
-        .populate({
-          path: "devices",
-          select: "deviceId deviceType manufacturer status lastActiveAt",
-          options: { strictPopulate: false }
-        })
-        .populate({
-          path: "activeDevices",
-          select: "deviceId deviceType manufacturer status lastActiveAt",
-          options: { strictPopulate: false }
+    if (!isSuperAdmin) {
+      console.log("[PROFILE] User found, populating devices...");
+      // Populate devices - handle errors gracefully
+      try {
+        user = await User.findById(userId)
+          .select("-password")
+          .populate({
+            path: "devices",
+            select: "deviceId deviceType manufacturer status lastActiveAt",
+            options: { strictPopulate: false }
+          })
+          .populate({
+            path: "activeDevices",
+            select: "deviceId deviceType manufacturer status lastActiveAt",
+            options: { strictPopulate: false }
+          })
+          .populate({
+            path: "account",
+            populate: {
+              path: "organizationId",
+              model: "Organization",
+              select: "name logo accentColor address contactNumber email pincode servicePlan seatLimit organizationType"
+            }
+          });
+      } catch (populateError) {
+        console.warn("[PROFILE] Populate error, returning user without populated devices:", populateError.message);
+        // Return user without populated devices if populate fails
+        user = await User.findById(userId).select("-password").populate({
+          path: "account",
+          populate: { path: "organizationId", model: "Organization", select: "name logo accentColor address contactNumber email pincode servicePlan seatLimit organizationType" }
         });
-    } catch (populateError) {
-      console.warn("[PROFILE] Populate error, returning user without populated devices:", populateError.message);
-      // Return user without populated devices if populate fails
-      user = await User.findById(userId).select("-password");
+      }
     }
 
     console.log("[PROFILE] Successfully fetched profile for user:", user.email);
@@ -104,9 +136,12 @@ router.put("/profile", authMiddleware, async (req, res) => {
       profileImage
     } = req.body;
     
+    const isSuperAdmin = req.user?.role === "superadmin";
+
     // Check if email is already in use by another user
     if (email && email.trim() !== '') {
-      const existingUser = await User.findOne({ email, _id: { $ne: req.user.userId } });
+      const Model = isSuperAdmin ? SuperAdmin : User;
+      const existingUser = await Model.findOne({ email, _id: { $ne: req.user.userId } });
       if (existingUser) {
         return res.status(400).json({ message: "Email already in use" });
       }
@@ -139,7 +174,8 @@ router.put("/profile", authMiddleware, async (req, res) => {
     // Profile image: save base64 to file in uploads/profiles/, or null to clear
     if (profileImage !== undefined) {
       const userId = req.user.userId;
-      const currentUser = await User.findById(userId).select("profileImage").lean();
+      const Model = isSuperAdmin ? SuperAdmin : User;
+      const currentUser = await Model.findById(userId).select("profileImage").lean();
 
       if (profileImage === null || profileImage === "") {
         updateData.profileImage = null;
@@ -173,7 +209,8 @@ router.put("/profile", authMiddleware, async (req, res) => {
     }
 
     // Update profile with only the valid fields
-    const updatedUser = await User.findByIdAndUpdate(
+    const Model = isSuperAdmin ? SuperAdmin : User;
+    const updatedUser = await Model.findByIdAndUpdate(
       req.user.userId,
       { $set: updateData },
       { new: true, runValidators: true }
@@ -186,7 +223,13 @@ router.put("/profile", authMiddleware, async (req, res) => {
     res.json({
       status: "success",
       message: "Profile updated successfully",
-      data: updatedUser,
+      data: isSuperAdmin ? {
+        ...(updatedUser.toObject ? updatedUser.toObject() : updatedUser),
+        role: "superadmin",
+        isVerified: true,
+        devices: [],
+        activeDevices: []
+      } : updatedUser,
       updatedFields: Object.keys(updateData) // Show which fields were updated
     });
   } catch (error) {
@@ -205,7 +248,10 @@ router.put("/profile/image", [authMiddleware, upload.single('profileImage')], as
     // Get profile image path
     const profileImage = `/uploads/profiles/${req.file.filename}`;
 
-    const updatedUser = await User.findByIdAndUpdate(
+    const isSuperAdmin = req.user?.role === "superadmin";
+    const Model = isSuperAdmin ? SuperAdmin : User;
+
+    const updatedUser = await Model.findByIdAndUpdate(
       req.user.userId,
       { $set: { profileImage } },
       { new: true }
@@ -238,7 +284,9 @@ router.put("/profile/password", authMiddleware, async (req, res) => {
     }
 
     // Find the user and check current password
-    const user = await User.findById(req.user.userId);
+    const isSuperAdmin = req.user?.role === "superadmin";
+    const Model = isSuperAdmin ? SuperAdmin : User;
+    const user = await Model.findById(req.user.userId);
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
@@ -252,14 +300,21 @@ router.put("/profile/password", authMiddleware, async (req, res) => {
     const hashedPassword = await bcrypt.hash(newPassword, 12);
     
     // Update password
-    await User.findByIdAndUpdate(
+    await Model.findByIdAndUpdate(
       req.user.userId,
       { $set: { password: hashedPassword } }
     );
 
+    const token = jwt.sign(
+      { userId: user._id, role: user.role },
+      process.env.JWT_SECRET,
+      { expiresIn: "30d" }
+    );
+
     res.json({
       status: "success",
-      message: "Password updated successfully"
+      message: "Password updated successfully",
+      token
     });
   } catch (error) {
     console.error("Error updating password:", error);
@@ -307,6 +362,21 @@ router.delete("/profile", authMiddleware, async (req, res) => {
     // 3. Delete user account
     await User.findByIdAndDelete(userId);
 
+    // 4. Send account deletion email
+    if (user.email) {
+      try {
+        await sendEmail({
+          to: user.email,
+          subject: "Account Deleted",
+          text: "Your Doze account has been successfully deleted.",
+          html: "<p>Your Doze account has been successfully deleted. We're sorry to see you go!</p>"
+        });
+      } catch (emailError) {
+        console.error("Error sending account deletion email:", emailError);
+        // Continue, don't fail the deletion if email fails
+      }
+    }
+
     res.json({
       status: "success",
       message: "Account deleted successfully"
@@ -345,6 +415,9 @@ router.get('/user/organization-id', authMiddleware, async (req, res) => {
  */
 router.post("/fcm-token", authMiddleware, async (req, res) => {
   try {
+    if (req.user?.role === "superadmin") {
+      return res.json({ status: "success", message: "FCM token registration bypassed for SuperAdmin" });
+    }
     const userId = req.user?.userId || req.user?.id;
     const { token, device, platform } = req.body;
 
@@ -386,6 +459,9 @@ router.post("/fcm-token", authMiddleware, async (req, res) => {
  */
 router.delete("/fcm-token", authMiddleware, async (req, res) => {
   try {
+    if (req.user?.role === "superadmin") {
+      return res.json({ status: "success", message: "FCM token removal bypassed for SuperAdmin" });
+    }
     const userId = req.user?.userId || req.user?.id;
     const { token } = req.body;
 
@@ -400,6 +476,158 @@ router.delete("/fcm-token", authMiddleware, async (req, res) => {
   } catch (error) {
     console.error("[FCM] Error removing token:", error);
     res.status(500).json({ message: "Server error", error: error.message });
+  }
+});
+
+// POST /user/handover/request
+// Initiate handover process: send OTP to current email and target new email
+router.post("/handover/request", authMiddleware, async (req, res) => {
+  try {
+    const { newEmail } = req.body;
+    if (!newEmail || typeof newEmail !== 'string') {
+      return res.status(400).json({ message: "New email is required" });
+    }
+
+    const targetEmail = newEmail.trim().toLowerCase();
+
+    // Check if target email is already in use
+    const emailExists = await User.findOne({ email: targetEmail });
+    if (emailExists) {
+      return res.status(400).json({ message: "The target email is already registered to another account" });
+    }
+
+    const userId = req.user.userId;
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    if (user.email.toLowerCase() === targetEmail) {
+      return res.status(400).json({ message: "Target email must be different from current email" });
+    }
+
+    // Generate random 6-digit numeric OTPs
+    const generateOtp = () => Math.floor(100000 + Math.random() * 900000).toString();
+    const currentOtp = generateOtp();
+    const newOtp = generateOtp();
+    const expires = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes expiration
+
+    // Store in User document
+    user.handoverVerification = {
+      currentEmailOtp: currentOtp,
+      currentEmailOtpExpires: expires,
+      newEmailOtp: newOtp,
+      newEmailOtpExpires: expires,
+      targetNewEmail: targetEmail
+    };
+    await user.save();
+
+    // Send emails
+    const currentSubject = "Dozemate Account Handover - Verification Code (Current Account Owner)";
+    const currentText = `Hello,\n\nYou have requested to hand over your Dozemate account to: ${targetEmail}.\n\nYour verification code is: ${currentOtp}\n\nThis code will expire in 15 minutes.`;
+    const currentHtml = `<p>Hello,</p><p>You have requested to hand over your Dozemate account to: <strong>${targetEmail}</strong>.</p><p>Your verification code is: <strong style="font-size: 18px; color: #007b90;">${currentOtp}</strong></p><p>This code will expire in 15 minutes.</p>`;
+
+    const newSubject = "Dozemate Account Handover - Verification Code (New Account Owner)";
+    const newText = `Hello,\n\nAn account handover has been requested to transfer ownership of a Dozemate clinical account to you (${targetEmail}).\n\nYour verification code is: ${newOtp}\n\nThis code will expire in 15 minutes.`;
+    const newHtml = `<p>Hello,</p><p>An account handover has been requested to transfer ownership of a Dozemate clinical account to you (<strong>${targetEmail}</strong>).</p><p>Your verification code is: <strong style="font-size: 18px; color: #007b90;">${newOtp}</strong></p><p>This code will expire in 15 minutes.</p>`;
+
+    await sendEmail({ to: user.email, subject: currentSubject, text: currentText, html: currentHtml });
+    await sendEmail({ to: targetEmail, subject: newSubject, text: newText, html: newHtml });
+
+    res.json({ status: "success", message: "Verification codes sent to current and target emails" });
+  } catch (error) {
+    console.error("Error requesting handover:", error);
+    res.status(500).json({ message: "Server error during handover request" });
+  }
+});
+
+// POST /user/handover/verify
+// Verify both OTPs and complete account email handover
+router.post("/handover/verify", authMiddleware, async (req, res) => {
+  try {
+    const { currentOtp, newOtp } = req.body;
+    if (!currentOtp || !newOtp) {
+      return res.status(400).json({ message: "Both current and new email OTPs are required" });
+    }
+
+    const userId = req.user.userId;
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    const verification = user.handoverVerification;
+    if (!verification || !verification.targetNewEmail) {
+      return res.status(400).json({ message: "No active handover request found. Please start over." });
+    }
+
+    const now = new Date();
+    // Validate Current Email OTP
+    if (verification.currentEmailOtp !== currentOtp || now > new Date(verification.currentEmailOtpExpires)) {
+      return res.status(400).json({ message: "Current email verification code is incorrect or expired" });
+    }
+
+    // Validate New Email OTP
+    if (verification.newEmailOtp !== newOtp || now > new Date(verification.newEmailOtpExpires)) {
+      return res.status(400).json({ message: "New email verification code is incorrect or expired" });
+    }
+
+    const oldEmail = user.email;
+    const newEmail = verification.targetNewEmail;
+
+    // Check one final time if target email is already taken
+    const emailExists = await User.findOne({ email: newEmail });
+    if (emailExists) {
+      return res.status(400).json({ message: "The target email is already registered to another account" });
+    }
+
+    // Push to history
+    user.handoverHistory.push({
+      fromEmail: oldEmail,
+      toEmail: newEmail,
+      handoverDate: now,
+      authorizedBy: user.name
+    });
+
+    // Transfer email ownership
+    user.email = newEmail;
+    user.handoverVerification = undefined; // clear transient info
+    await user.save();
+
+    // 1. Update Account primaryEmail if exists
+    if (user.account) {
+      const account = await Account.findById(user.account);
+      if (account) {
+        account.primaryEmail = newEmail;
+        await account.save();
+
+        // 2. Update Organization email if exists
+        if (account.organizationId) {
+          const organization = await Organization.findById(account.organizationId);
+          if (organization) {
+            organization.email = newEmail;
+            await organization.save();
+          }
+        }
+      }
+    }
+
+    // Generate new token for the user so session stays valid
+    const token = jwt.sign(
+      { userId: user._id, role: user.role },
+      process.env.JWT_SECRET,
+      { expiresIn: "30d" }
+    );
+
+    res.json({
+      status: "success",
+      message: "Account ownership successfully handed over",
+      token,
+      newEmail
+    });
+  } catch (error) {
+    console.error("Error verifying handover:", error);
+    res.status(500).json({ message: "Server error during handover verification" });
   }
 });
 

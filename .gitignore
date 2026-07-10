@@ -1,63 +1,30 @@
-# Learn more https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files
-
-# dependencies
+# Dependencies
 node_modules/
-android/
-.vscode/
-ios/
-Dozemate_Baby/
+**/node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
 
-
-# Expo
-.expo/
-dist/
-web-build/
-expo-env.d.ts
-
-# Native
-.kotlin/
-*.orig.*
-*.jks
-*.p8
-*.p12
-*.key
-*.mobileprovision
-
-# Metro
-.metro-health-check*
-
-# debug
-npm-debug.*
-yarn-debug.*
-yarn-error.*
-
-# macOS
-.DS_Store
-*.pem
-
-# local env files
-.env*.local
-
-# typescript
-*.tsbuildinfo
-
-app-example
-package-lock.json
-yarn.lock
-.pnpm-debug.log*
-pnpm-lock.yaml
+# Environment variables & Secrets
 .env
-.env.local
-.env.development
-.env.test
-.env.production
-.env.production.local
-.env.staging
-.env.staging.local
-.env.test.local
-.env.development.local
-.env.production.local
-.env.staging.local
-.env.test.local
-.expo-shared/
+*.env
+**/.env
+**/*.env
+**/*.env.*
+**/*firebase-adminsdk*.json
 
+# OS files
+.DS_Store
+**/.DS_Store
+
+# Build / Output
+dist/
+**/dist/
+build/
+**/build/
+
+# IDE / Editor
+.vscode/
+.idea/

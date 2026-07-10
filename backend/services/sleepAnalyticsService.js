@@ -1,8 +1,11 @@
 const HealthData = require("../models/HealthData");
 const SleepSession = require("../models/SleepSession");
+const SleepEpoch = require("../models/SleepEpoch");
 const { logger } = require("../utils/logger");
 const { pairMotionEvents, sortMotionDataChronologically } = require("../utils/motionPairing");
 const { refineSleepTimestampsByHeartRate } = require("../utils/sleepHeartRateRefinement");
+const { classifySleepStages, buildEmptySummary } = require("./sleepStageService");
+const { formatTimestampIST } = require("../utils/timezoneHelper");
 
 // Constants
 const MIN_SLEEP_DURATION_MINUTES = 180; // 3 hours minimum
@@ -58,9 +61,23 @@ async function calculateSleepSession(deviceId, startDate, endDate, queryDate) {
 
     // Fetch health data for the date range
     const { getTimeFilter, getSanitizedEpochSeconds } = require('../utils/timeFilterHelper');
-    const timeFilter = getTimeFilter(startDate.getTime(), endDate.getTime());
+    const { getISTComponents, createFromISTComponents } = require('../utils/timezoneHelper');
+
+    // Calculate strict 9:00 PM start bound based on the cycle's start date
+    const startIST = getISTComponents(startDate);
+    const strictStartUTC = createFromISTComponents(startIST.year, startIST.month, startIST.date, 21, 0, 0);
     
-    const healthData = await HealthData.find({
+    // Calculate strict 8:00 AM end bound based on the cycle's end date
+    const endIST = getISTComponents(endDate);
+    const strictEndUTC = createFromISTComponents(endIST.year, endIST.month, endIST.date, 8, 0, 0);
+
+    // Apply the most restrictive bounds
+    const filterStartMs = Math.max(startDate.getTime(), strictStartUTC.getTime());
+    const filterEndMs = Math.min(endDate.getTime(), strictEndUTC.getTime());
+
+    const timeFilter = getTimeFilter(filterStartMs, filterEndMs);
+    
+    let healthData = await HealthData.find({
       deviceId: deviceId,
       ...timeFilter
     })
@@ -91,10 +108,20 @@ async function calculateSleepSession(deviceId, startDate, endDate, queryDate) {
       motionEndReason: point.motionEndReason !== undefined && point.motionEndReason !== null ? Number(point.motionEndReason) : null
     }));
 
+    // Sort by sanitized timestamp (oldest first). The DB sort can be wrong when
+    // timestampSeconds has bogus values (e.g. device uptime instead of Unix epoch).
+    // Build index array so we can reorder healthData in sync.
+    const sortIndices = dataPoints.map((_, i) => i);
+    sortIndices.sort((a, b) => dataPoints[a].timestamp - dataPoints[b].timestamp);
+    const sortedDP = sortIndices.map(i => dataPoints[i]);
+    const sortedHD = sortIndices.map(i => healthData[i]);
+    dataPoints.splice(0, dataPoints.length, ...sortedDP);
+    healthData = sortedHD;
+
     // Count data point types
     const as1Count = dataPoints.filter(p => p.AS === 1).length;
     const hv1Count = dataPoints.filter(p => p.HV === 1).length;
-    const sleepCount = dataPoints.filter(p => p.AS === 1 && p.HV === 1).length;
+    const sleepCount = dataPoints.filter(p => p.AS === 1).length;
     logger.info(`[SleepAnalytics] Data point analysis for device ${deviceId}`, {
       totalPoints: dataPoints.length,
       as1Count,
@@ -142,6 +169,28 @@ async function calculateSleepSession(deviceId, startDate, endDate, queryDate) {
       return null;
     }
 
+    // ── Hard clamp: enforce strict 10 PM – 8 AM boundary on all timestamps ──
+    // The detection algorithm (sliding window, HR refinement, finalWakeUpTime)
+    // can push computed timestamps beyond the filtered data window.
+    // We force every timestamp to stay within [filterStartMs, filterEndMs].
+    const clampTs = (ts) => {
+      if (ts == null) return ts;
+      const t = typeof ts === 'number' ? ts : new Date(ts).getTime();
+      return Math.max(filterStartMs, Math.min(filterEndMs, t));
+    };
+    sleepSession.sleepOnsetTime = clampTs(sleepSession.sleepOnsetTime);
+    sleepSession.sleepEndTime   = clampTs(sleepSession.sleepEndTime);
+    sleepSession.tibStart       = clampTs(sleepSession.tibStart);
+    sleepSession.tibEnd         = clampTs(sleepSession.tibEnd);
+    sleepSession.finalWakeUpTime = clampTs(sleepSession.finalWakeUpTime);
+    logger.info(`[SleepAnalytics] Applied 10PM-8AM hard clamp for device ${deviceId}`, {
+      filterStartIST: new Date(filterStartMs + 5.5 * 60 * 60 * 1000).toISOString(),
+      filterEndIST: new Date(filterEndMs + 5.5 * 60 * 60 * 1000).toISOString(),
+      clampedOnset: new Date(sleepSession.sleepOnsetTime).toISOString(),
+      clampedEnd: new Date(sleepSession.sleepEndTime).toISOString(),
+      clampedTibEnd: new Date(sleepSession.tibEnd).toISOString(),
+    });
+
   // Validate sleep session
   if (!validateSleepSession(sleepSession)) {
     logger.info(`[SleepAnalytics] Sleep session failed validation for device ${deviceId}`, {
@@ -160,6 +209,103 @@ async function calculateSleepSession(deviceId, startDate, endDate, queryDate) {
     dataQuality: sleepSession.dataQuality,
     sleepScore: sleepSession.sleepScore
   });
+
+    // ── Sleep Stage Classification ─────────────────────────────────────────
+    // Fetch the raw data again for stage classification (needs raw.HR_M etc.)
+    // We use a separate query that includes the `raw` field (which the first
+    // query omits for performance).
+    try {
+      const stageHealthData = await HealthData.find({
+        deviceId: deviceId,
+        ...timeFilter,
+        // Only fetch rows that have at least one of the epoch fields
+        // (either mapped or in raw). This prevents loading pure gap-rows.
+        $or: [
+          { 'raw.HR_M': { $ne: null } },
+          { 'metrics.hr_median': { $ne: null } },
+        ],
+      })
+        .sort({ timestampSeconds: 1, timestamp: 1 })
+        .select('timestampSeconds timestamp absenceStart heartRate respiration motionStart motionStop snoreDetected metrics raw')
+        .lean();
+
+      if (stageHealthData && stageHealthData.length > 0) {
+        const { timeline, summary } = classifySleepStages(
+          stageHealthData,
+          sleepSession.sleepOnsetTime,
+          sleepSession.sleepEndTime
+        );
+        sleepSession.stageTimeline      = timeline;
+        sleepSession.deepSleepMinutes   = summary.deepSleepMinutes;
+        sleepSession.remMinutes         = summary.remMinutes;
+        sleepSession.lightSleepMinutes  = summary.lightSleepMinutes;
+        sleepSession.awakeMinutes       = summary.awakeMinutes;
+        sleepSession.recoveryPercent    = summary.recoveryPercent;
+        // New stage-based metrics (from updated sleep algorithm spec)
+        sleepSession.deepPct            = summary.deepPct;
+        sleepSession.remPct             = summary.remPct;
+        sleepSession.WASOmin            = summary.WASOmin;
+        sleepSession.stageAwakenings    = summary.awakenings;
+        sleepSession.stageEfficiency    = summary.efficiency;
+        sleepSession.sleepQuality       = summary.sleepQuality;
+        sleepSession.sleepQualityMsg    = summary.sleepQualityMsg;
+        // Override session-level legacy fields with the stage-based metrics
+        if (summary.sleepScore != null) {
+          sleepSession.sleepScore = summary.sleepScore;
+        }
+        if (summary.efficiency != null) {
+          sleepSession.sleepEfficiency = summary.efficiency;
+        }
+        if (summary.awakenings != null) {
+          sleepSession.awakenings = summary.awakenings;
+        }
+        logger.info(`[SleepAnalytics] Stage classification attached for device ${deviceId}`, {
+          epochs:           timeline.length,
+          deepSleepMinutes: summary.deepSleepMinutes,
+          remMinutes:       summary.remMinutes,
+          recoveryPercent:  summary.recoveryPercent,
+          sleepScore:       summary.sleepScore,
+          sleepQuality:     summary.sleepQuality,
+          efficiency:       summary.efficiency,
+          awakenings:       summary.awakenings,
+        });
+      } else {
+        // No 30-sec epoch data available — attach empty stage data
+        const emptySummary = buildEmptySummary();
+        sleepSession.stageTimeline      = [];
+        sleepSession.deepSleepMinutes   = emptySummary.deepSleepMinutes;
+        sleepSession.remMinutes         = emptySummary.remMinutes;
+        sleepSession.lightSleepMinutes  = emptySummary.lightSleepMinutes;
+        sleepSession.awakeMinutes       = emptySummary.awakeMinutes;
+        sleepSession.recoveryPercent    = emptySummary.recoveryPercent;
+        sleepSession.deepPct            = emptySummary.deepPct;
+        sleepSession.remPct             = emptySummary.remPct;
+        sleepSession.WASOmin            = emptySummary.WASOmin;
+        sleepSession.stageAwakenings    = emptySummary.awakenings;
+        sleepSession.stageEfficiency    = emptySummary.efficiency;
+        sleepSession.sleepQuality       = emptySummary.sleepQuality;
+        sleepSession.sleepQualityMsg    = emptySummary.sleepQualityMsg;
+        logger.info(`[SleepAnalytics] No epoch data found for stage classification for device ${deviceId}`);
+      }
+    } catch (stageError) {
+      // Stage classification failure must NOT prevent session save
+      logger.err(stageError, { where: 'calculateSleepSession:stageClassification', deviceId });
+      const emptySummary = buildEmptySummary();
+      sleepSession.stageTimeline      = [];
+      sleepSession.deepSleepMinutes   = emptySummary.deepSleepMinutes;
+      sleepSession.remMinutes         = emptySummary.remMinutes;
+      sleepSession.lightSleepMinutes  = emptySummary.lightSleepMinutes;
+      sleepSession.awakeMinutes       = emptySummary.awakeMinutes;
+      sleepSession.recoveryPercent    = emptySummary.recoveryPercent;
+      sleepSession.deepPct            = emptySummary.deepPct;
+      sleepSession.remPct             = emptySummary.remPct;
+      sleepSession.WASOmin            = emptySummary.WASOmin;
+      sleepSession.stageAwakenings    = emptySummary.awakenings;
+      sleepSession.stageEfficiency    = emptySummary.efficiency;
+      sleepSession.sleepQuality       = emptySummary.sleepQuality;
+      sleepSession.sleepQualityMsg    = emptySummary.sleepQualityMsg;
+    }
+    // ── End Sleep Stage Classification ────────────────────────────────────
 
     return sleepSession;
   } catch (error) {
@@ -197,12 +343,10 @@ function detectSleepSession(dataPoints, deviceId, healthData, queryDate) {
   let lastSleepPoint = null;
   let lastDataPoint = null;
 
-  const sleepPeriods = []; // Array of {start, end} periods where AS=1 AND HV=1
-  const wakePeriods = []; // Array of {start, end} periods where AS=1 but HV=0
+  const sleepPeriods = []; // Array of {start, end} periods where AS=1
   const outOfBedPeriods = []; // Array of {start, end} periods where AS=0
 
   let currentSleepPeriod = null;
-  let currentWakePeriod = null;
   let currentOutOfBedPeriod = null;
 
   // Calculate average data interval (for expected points calculation)
@@ -220,8 +364,7 @@ function detectSleepSession(dataPoints, deviceId, healthData, queryDate) {
   // Process each data point
   for (let i = 0; i < dataPoints.length; i++) {
     const point = dataPoints[i];
-    const isSleeping = point.AS === 1 && point.HV === 1;
-    const isInBedNotSleeping = point.AS === 1 && point.HV !== 1;
+    const isSleeping = point.AS === 1;
     const isOutOfBed = point.AS === 0;
 
     // Track TIB start (first AS=1)
@@ -263,30 +406,18 @@ function detectSleepSession(dataPoints, deviceId, healthData, queryDate) {
           currentSleepPeriod = null;
         }
       }
+    }
 
-      // Track wake periods (in bed but not sleeping)
-      if (isInBedNotSleeping) {
-        if (currentWakePeriod === null) {
-          currentWakePeriod = { start: point.timestamp, end: point.timestamp };
-          wakePeriods.push(currentWakePeriod);
-        } else {
-          currentWakePeriod.end = point.timestamp;
-        }
+    // Track out-of-bed periods
+    if (isOutOfBed) {
+      if (currentOutOfBedPeriod === null) {
+        currentOutOfBedPeriod = { start: point.timestamp, end: point.timestamp };
+        outOfBedPeriods.push(currentOutOfBedPeriod);
       } else {
-        currentWakePeriod = null;
+        currentOutOfBedPeriod.end = point.timestamp;
       }
-
-      // Track out-of-bed periods
-      if (isOutOfBed) {
-        if (currentOutOfBedPeriod === null) {
-          currentOutOfBedPeriod = { start: point.timestamp, end: point.timestamp };
-          outOfBedPeriods.push(currentOutOfBedPeriod);
-        } else {
-          currentOutOfBedPeriod.end = point.timestamp;
-        }
-      } else {
-        currentOutOfBedPeriod = null;
-      }
+    } else {
+      currentOutOfBedPeriod = null;
     }
 
     lastDataPoint = point;
@@ -391,7 +522,7 @@ function detectSleepSession(dataPoints, deviceId, healthData, queryDate) {
       if (gapMs >= gapThresholdMs && dataPoints[i - 1].timestamp >= sleepOnsetTime) {
         const cutOffTime = dataPoints[i - 1].timestamp;
         const sleepPointsBeforeGap = dataPoints.filter(
-          p => p.timestamp <= cutOffTime && p.AS === 1 && p.HV === 1
+          p => p.timestamp <= cutOffTime && p.AS === 1
         );
         if (sleepPointsBeforeGap.length > 0) {
           lastSleepPointBeforeLongGap = Math.max(...sleepPointsBeforeGap.map(p => p.timestamp));
@@ -468,12 +599,12 @@ function detectSleepSession(dataPoints, deviceId, healthData, queryDate) {
       p.timestamp > sleepEndTime && p.timestamp <= confirmationWindowEnd
     );
     
-    const returnedToBed = dataAfterSleepEnd.some(p => p.AS === 1 && p.HV === 1);
+    const returnedToBed = dataAfterSleepEnd.some(p => p.AS === 1);
     if (returnedToBed) {
       // User returned - continue sleep session
       // Find the latest sleep point after return
       const latestSleepPoint = dataAfterSleepEnd
-        .filter(p => p.AS === 1 && p.HV === 1)
+        .filter(p => p.AS === 1)
         .sort((a, b) => b.timestamp - a.timestamp)[0];
       
       if (latestSleepPoint) {
@@ -609,11 +740,35 @@ function detectSleepSession(dataPoints, deviceId, healthData, queryDate) {
   const sleepLatencyMs = sleepOnsetTime - tibStart;
   const sleepLatencyMinutes = sleepLatencyMs / (1000 * 60);
 
-  const outOfBedTimeMs = outOfBedPeriods
-    .filter(period => period.start >= sleepOnsetTime && period.end <= sleepEndTime)
+  // Calculate Out of Bed Time
+  let rawOutOfBedMs = outOfBedPeriods
+    .filter(period => period.end >= sleepOnsetTime && period.start <= sleepEndTime)
     .reduce((sum, period) => {
-      return sum + (period.end - period.start);
+      const pStart = Math.max(period.start, sleepOnsetTime);
+      const pEnd = Math.min(period.end, sleepEndTime);
+      return sum + Math.max(0, pEnd - pStart);
     }, 0);
+
+  let outOfBedGapsMs = 0;
+  outOfBedPeriods.forEach(period => {
+    if (period.end >= sleepOnsetTime && period.start <= sleepEndTime) {
+      const pStart = Math.max(period.start, sleepOnsetTime);
+      const pEnd = Math.min(period.end, sleepEndTime);
+      
+      const periodDataPoints = dataPoints.filter(p => 
+        p.timestamp >= pStart && p.timestamp <= pEnd
+      ).sort((a, b) => a.timestamp - b.timestamp);
+      
+      for (let i = 1; i < periodDataPoints.length; i++) {
+        const gapMs = periodDataPoints[i].timestamp - periodDataPoints[i - 1].timestamp;
+        if (gapMs / (1000 * 60) >= MIN_DATA_GAP_MINUTES) {
+          outOfBedGapsMs += gapMs;
+        }
+      }
+    }
+  });
+
+  const outOfBedTimeMs = Math.max(0, rawOutOfBedMs - outOfBedGapsMs);
   const outOfBedTimeMinutes = outOfBedTimeMs / (1000 * 60);
 
   const sleepEfficiency = timeInBedMinutes > 0
@@ -634,7 +789,7 @@ function detectSleepSession(dataPoints, deviceId, healthData, queryDate) {
   // Calculate heart rate metrics
   const sleepHeartRates = dataPoints
     .filter(p => p.timestamp >= sleepOnsetTime && p.timestamp <= sleepEndTime)
-    .filter(p => p.AS === 1 && p.HV === 1 && p.heartRate !== null && p.heartRate > 0)
+    .filter(p => p.AS === 1 && p.heartRate !== null && p.heartRate > 0)
     .map(p => p.heartRate);
 
   const restingHeartRate = sleepHeartRates.length > 0
@@ -761,7 +916,23 @@ function detectSleepSession(dataPoints, deviceId, healthData, queryDate) {
     validDataPoints: validDataPoints,
     expectedDataPoints: expectedDataPoints,
     sleepScore: sleepScore,
-    sessionDate: sessionDate
+    sessionDate: sessionDate,
+    // Stage fields — populated by classifySleepStages() call above in calculateSleepSession
+    // (defaulted to empty here; the calling function will overwrite these)
+    stageTimeline:      [],
+    deepSleepMinutes:   0,
+    remMinutes:         0,
+    lightSleepMinutes:  0,
+    awakeMinutes:       0,
+    recoveryPercent:    0,
+    // New stage-based fields (defaults, overwritten by classifySleepStages)
+    deepPct:            0,
+    remPct:             0,
+    WASOmin:            0,
+    stageAwakenings:    0,
+    stageEfficiency:    0,
+    sleepQuality:       null,
+    sleepQualityMsg:    null,
   };
 }
 
@@ -787,7 +958,19 @@ function validateSleepSession(session) {
 }
 
 /**
- * Calculate sleep score (0-100)
+ * Calculate sleep score (0-100) — LEGACY fallback
+ *
+ * The primary sleep score now comes from the stage classifier (penalty model
+ * in sleepStageService.js, §10 of the spec). This function is only used as
+ * a fallback when stage classification data is unavailable.
+ *
+ * Penalty model (from SLEEP_ALGORITHM.md §10):
+ *   score = 100 - max(0, 85-efficiency)
+ *               - max(0, 15-deepPct)*0.7
+ *               - max(0, 10-remPct)*0.5
+ *               - max(0, WASOmin-30)*0.25
+ *               - awakenings*1.5
+ *
  * @param {Object} metrics - Sleep metrics
  * @returns {number} Sleep score (0-100)
  */
@@ -850,7 +1033,7 @@ function calculateSleepScore(metrics) {
     dataQualityScore = 20;
   }
 
-  // Weighted average
+  // Weighted average (legacy fallback — primary score comes from stage classifier)
   const sleepScore = Math.round(
     durationScore * 0.30 +
     efficiencyScore * 0.30 +
@@ -869,6 +1052,8 @@ function calculateSleepScore(metrics) {
  */
 async function storeSleepSession(session, userId) {
   try {
+    let savedSession;
+
     // Check if session already exists for this date
     const existingSession = await SleepSession.findOne({
       deviceId: session.deviceId,
@@ -878,19 +1063,49 @@ async function storeSleepSession(session, userId) {
     if (existingSession) {
       // Update existing session
       Object.assign(existingSession, session, { userId, updatedAt: new Date() });
-      await existingSession.save();
+      savedSession = await existingSession.save();
       logger.info(`[SleepAnalytics] Updated sleep session for device ${session.deviceId}, date ${session.sessionDate}`);
-      return existingSession;
     } else {
       // Create new session
       const newSession = new SleepSession({
         ...session,
         userId: userId
       });
-      await newSession.save();
+      savedSession = await newSession.save();
       logger.info(`[SleepAnalytics] Created sleep session for device ${session.deviceId}, date ${session.sessionDate}`);
-      return newSession;
     }
+
+    // Bulk Insert SleepEpochs if timeline exists
+    if (session.stageTimeline && session.stageTimeline.length > 0) {
+      // Delete old epochs for this session to avoid duplicates if re-calculated
+      await SleepEpoch.deleteMany({ sessionId: savedSession._id });
+
+      const epochsToInsert = session.stageTimeline.map(epoch => {
+        return {
+          deviceId: session.deviceId,
+          sessionId: savedSession._id,
+          sessionDate: session.sessionDate,
+          timestamp: epoch.ts,
+          timestampIST: formatTimestampIST(epoch.ts * 1000),
+          stage: epoch.stage,
+          rawStage: epoch.rawStage,
+          hr: epoch.hr,
+          rr: epoch.rr,
+          hr_sd_5m: epoch.hr_sd_5m,
+          rr_sd_5m: epoch.rr_sd_5m,
+          tLastTurn: epoch.tLastTurn,
+          hr_state: epoch.hr_state,
+          resp_state: epoch.resp_state,
+          hr_stability: epoch.hr_stability
+        };
+      });
+
+      await SleepEpoch.insertMany(epochsToInsert);
+      logger.info(`[SleepAnalytics] Inserted ${epochsToInsert.length} SleepEpoch records for session ${savedSession._id}`);
+    }
+
+    return savedSession;
+
   } catch (error) {
     logger.err(error, { where: "storeSleepSession", deviceId: session.deviceId });
     throw error;
