@@ -1,6 +1,8 @@
 const express = require("express");
 const Device = require("../models/Device");
 const User = require("../models/User");
+const Account = require("../models/Account");
+const MonitoringSession = require("../models/MonitoringSession");
 const authMiddleware = require("../middleware/authMiddleware");
 const adminMiddleware = require("../middleware/adminMiddleware");
 const mongoose = require('mongoose');
@@ -123,6 +125,17 @@ router.post("/add", authMiddleware, async (req, res) => {
   const processedStatus = (status || 'inactive').toLowerCase();
 
   try {
+    const userObj = await User.findById(req.user.userId).populate('account');
+    let orgId = null;
+    let finalAccountId = accountId;
+
+    if (userObj) {
+      if (!finalAccountId && userObj.accountId) finalAccountId = userObj.accountId;
+      if (userObj.account && userObj.account.organizationId) {
+        orgId = userObj.account.organizationId;
+      }
+    }
+
     const payload = {
       firmwareVersion,
       location,
@@ -131,7 +144,8 @@ router.post("/add", authMiddleware, async (req, res) => {
       createdAt: now,
       lastActiveAt: now,
       userId: req.user.userId,
-      accountId,
+      accountId: finalAccountId,
+      organizationId: orgId,
       profileId
     };
     if (profileId) {
@@ -277,22 +291,20 @@ router.get('/devices/organization/:organizationId', authMiddleware, adminMiddlew
     const limit = parseInt(req.query.limit) || 10;
     const skip = (page - 1) * limit;
 
-    // Step 1: Find all users in this organization using ObjectId
-    const usersInOrg = await User.find({ organizationId: orgObjectId }).select('devices');
+    // Step 1: Find all accounts linked to this organization
+    const accountsInOrg = await Account.find({ organizationId: orgObjectId }).select('_id accountId');
+    const accountIds = accountsInOrg.map(a => a._id);
+    const accountIdsStr = accountsInOrg.map(a => a.accountId).filter(Boolean);
 
-    if (usersInOrg.length === 0) {
-      return res.status(200).json({
-        status: "success",
-        results: 0,
-        totalPages: 0,
-        currentPage: page,
-        total: 0,
-        organizationId,
-        data: []
-      });
-    }
+    // Step 2: Find all users in this organization (either via Account link or via legacy organizationId on User)
+    const usersInOrg = await User.find({
+      $or: [
+        { account: { $in: accountIds } },
+        { organizationId: orgObjectId }
+      ]
+    }).select('devices');
 
-    // Step 2: Extract all device IDs from users' devices arrays
+    // Step 3: Extract all device IDs from users' devices arrays
     const deviceIds = [];
     usersInOrg.forEach(user => {
       if (user.devices && user.devices.length > 0) {
@@ -300,22 +312,17 @@ router.get('/devices/organization/:organizationId', authMiddleware, adminMiddlew
       }
     });
 
-    if (deviceIds.length === 0) {
-      return res.status(200).json({
-        status: "success",
-        results: 0,
-        totalPages: 0,
-        currentPage: page,
-        total: 0,
-        organizationId,
-        data: []
-      });
-    }
-
-    // Step 3: Build filter for devices
+    // Step 4: Build filter for devices (either assigned to users in org, assigned directly to org, or matching organization accounts' accountIds)
     const filter = {
-      _id: { $in: deviceIds }
+      $or: [
+        { _id: { $in: deviceIds } },
+        { organizationId: orgObjectId }
+      ]
     };
+
+    if (accountIdsStr.length > 0) {
+      filter.$or.push({ accountId: { $in: accountIdsStr } });
+    }
 
     // Additional filters
     if (req.query.status) {
@@ -498,22 +505,58 @@ router.get("/profiles/:profileId/active-device", authMiddleware, async (req, res
 // GET /devices/user - Fetch owned + shared devices for logged-in user
 router.get("/user", authMiddleware, async (req, res) => {
   try {
-    const user = await User.findById(req.user.userId).lean();
+    let user;
+    const isSuperAdmin = req.user?.role === "superadmin";
+    const isAdmin = req.user?.role === "admin";
+
+    if (isSuperAdmin) {
+      const SuperAdmin = require("../models/SuperAdmin");
+      const adminUser = await SuperAdmin.findById(req.user.userId).lean();
+      if (!adminUser) return res.status(404).json({ message: "SuperAdmin not found" });
+      user = {
+        _id: adminUser._id,
+        email: adminUser.email,
+        role: "superadmin",
+        ownedDevices: [],
+        sharedDevices: [],
+        activeDevice: adminUser.activeDevice || null
+      };
+    } else {
+      user = await User.findById(req.user.userId).lean();
+    }
     if (!user) return res.status(404).json({ message: "User not found" });
 
     // Owned: by userId (owner) or by user.ownedDevices if set
-    let ownedIds = user.ownedDevices && user.ownedDevices.length
-      ? user.ownedDevices
-      : (await Device.find({ userId: req.user.userId }).select("deviceId").lean()).map((d) => d.deviceId);
+    let ownedIds;
+    if (isSuperAdmin) {
+      ownedIds = (await Device.find().select("deviceId").lean()).map((d) => d.deviceId);
+    } else if (isAdmin) {
+      const adminUser = await User.findById(req.user.userId).populate('account').lean();
+      if (adminUser && adminUser.account) {
+        const accountIdStr = adminUser.account.accountId || String(adminUser.account._id);
+        const filter = { $or: [{ accountId: accountIdStr }] };
+        if (adminUser.account.organizationId) {
+          filter.$or.push({ organizationId: adminUser.account.organizationId });
+        }
+        ownedIds = (await Device.find(filter).select("deviceId").lean()).map((d) => d.deviceId);
+      } else {
+        ownedIds = [];
+      }
+    } else {
+      ownedIds = user.ownedDevices && user.ownedDevices.length
+        ? user.ownedDevices
+        : (await Device.find({ userId: req.user.userId }).select("deviceId").lean()).map((d) => d.deviceId);
+    }
+
     const ownedDevices = await Device.find(
       { deviceId: { $in: ownedIds } },
-      "deviceId name deviceType manufacturer firmwareVersion location status _id customName defaultName sharedWith bleMac"
+      "deviceId name deviceType manufacturer firmwareVersion location status _id customName defaultName sharedWith bleMac organizationId hrMin hrMax respMin respMax"
     ).lean();
     const sharedIds = user.sharedDevices || [];
     const sharedDevicesRaw = sharedIds.length
       ? await Device.find(
         { deviceId: { $in: sharedIds } },
-        "deviceId name deviceType manufacturer firmwareVersion location status _id customName defaultName bleMac"
+        "deviceId name deviceType manufacturer firmwareVersion location status _id customName defaultName bleMac organizationId hrMin hrMax respMin respMax"
       ).lean()
       : [];
     const sharedDevices = sharedDevicesRaw.map((d) => ({ ...d, isShared: true }));
@@ -533,13 +576,13 @@ router.get("/user", authMiddleware, async (req, res) => {
     // Backward compat: single "devices" list = owned first, then shared
     const devices = [...ownedWithNames, ...sharedWithNames];
 
-    console.log("📋 Returning devices for user:", req.user.userId, "owned:", ownedWithNames.length, "shared:", sharedWithNames.length);
+    console.log("📋 Returning devices for user:", req.user.userId, "role:", req.user?.role, "owned:", ownedWithNames.length, "shared:", sharedWithNames.length);
 
     res.json({
       devices,
       ownedDevices: ownedWithNames,
       sharedDevices: sharedWithNames,
-      activeDevice: user.activeDevice,
+      activeDevice: isSuperAdmin ? (user.activeDevice || (ownedWithNames[0]?._id || null)) : user.activeDevice,
       deviceNames: deviceNamesMap
     });
   } catch (error) {
@@ -671,11 +714,115 @@ router.post("/remove-caretaker", authMiddleware, async (req, res) => {
   }
 });
 
+// Dashboard Device Renaming (Allowed for sub-admins/hospital admins)
+router.patch("/dashboard-rename/:deviceId", authMiddleware, async (req, res) => {
+  try {
+    const { deviceId } = req.params;
+    const { name, room, bed } = req.body;
+
+    if (!deviceId || typeof deviceId !== 'string') {
+      return res.status(400).json({ message: "Invalid device ID" });
+    }
+    const normalizedDeviceId = deviceId.trim().toUpperCase();
+
+    const device = await Device.findOne({ deviceId: normalizedDeviceId });
+    if (!device) return res.status(404).json({ message: "Device not found" });
+
+    device.customName = name ? String(name).trim() : null;
+    device.name = name ? String(name).trim() : device.defaultName;
+    if (room !== undefined) {
+      device.room = room ? String(room).trim().replace(/^Room\s+/i, '') : null;
+    }
+    if (bed !== undefined) {
+      device.bed = bed ? String(bed).trim().replace(/^Bed\s+/i, '') : null;
+    }
+    await device.save();
+
+    // Sync room and bed to any active monitoring session for this device
+    if (room !== undefined || bed !== undefined) {
+      // If either room or bed is explicitly cleared (set to null/empty string), the device is unassigned,
+      // so we should auto-complete the active session.
+      const isUnassigned = (room === null || room === '') || (bed === null || bed === '');
+      
+      if (isUnassigned) {
+        await MonitoringSession.updateMany(
+          { deviceId: normalizedDeviceId, status: 'active' },
+          { $set: { status: 'completed', dischargeDate: new Date() } }
+        );
+      } else {
+        const updateFields = {};
+        if (room !== undefined) updateFields.room = device.room;
+        if (bed !== undefined) updateFields.bed = device.bed;
+        
+        if (Object.keys(updateFields).length > 0) {
+          await MonitoringSession.updateMany(
+            { deviceId: normalizedDeviceId, status: 'active' },
+            { $set: updateFields }
+          );
+        }
+      }
+    }
+
+    res.json({ 
+      success: true, 
+      message: "Device updated successfully", 
+      deviceId: normalizedDeviceId, 
+      name: device.name,
+      room: device.room,
+      bed: device.bed
+    });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+});
+
+// Dashboard Device Removal
+router.delete("/dashboard-remove/:deviceId", authMiddleware, async (req, res) => {
+  try {
+    const { deviceId } = req.params;
+    if (!deviceId) return res.status(400).json({ message: "Invalid device ID" });
+    const normalizedDeviceId = deviceId.trim().toUpperCase();
+
+    const device = await Device.findOne({ deviceId: normalizedDeviceId });
+    if (!device) return res.status(404).json({ message: "Device not found" });
+
+    // Remove deviceId from every caretaker's sharedDevices
+    if (device.sharedWith && device.sharedWith.length > 0) {
+      const caretakerIds = device.sharedWith.map((e) => e.userId).filter(Boolean);
+      await User.updateMany(
+        { _id: { $in: caretakerIds } },
+        { $pull: { sharedDevices: device.deviceId } }
+      );
+    }
+
+    if (device.userId) {
+      await User.findByIdAndUpdate(device.userId, {
+        $pull: {
+          devices: device._id,
+          ownedDevices: normalizedDeviceId,
+          activeDevices: device._id
+        }
+      });
+    }
+
+    // Auto-complete any active monitoring sessions for this device
+    await MonitoringSession.updateMany(
+      { deviceId: normalizedDeviceId, status: 'active' },
+      { $set: { status: 'completed', dischargeDate: new Date() } }
+    );
+
+    await Device.deleteOne({ deviceId: normalizedDeviceId });
+    res.json({ success: true, message: "Device removed successfully" });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+});
+
 // PATCH /devices/rename/:deviceId - Owner only: update device custom name
 router.patch("/rename/:deviceId", authMiddleware, async (req, res) => {
   try {
     const { deviceId } = req.params;
-    const { customName } = req.body;
+    const { customName, room, bed } = req.body;
     const userId = req.user.userId;
 
     // Validate deviceId format
@@ -689,9 +836,24 @@ router.patch("/rename/:deviceId", authMiddleware, async (req, res) => {
     if (!device) {
       return res.status(404).json({ message: "Device not found" });
     }
-    // Only owner can rename (caretakers read-only)
-    if (device.userId.toString() !== userId.toString()) {
-      return res.status(403).json({ message: "Only the device owner can rename it" });
+    // Only owner, org admin, or superadmin can rename
+    const isSuperAdmin = req.user?.role === 'superadmin';
+    let isOrgAdmin = false;
+    let isOwner = false;
+    let userObj = null;
+
+    if (!isSuperAdmin) {
+      userObj = await User.findById(userId).populate('account');
+      isOwner = device.userId && device.userId.toString() === userId.toString();
+      if (!isOwner && req.user?.role === 'admin' && device.organizationId) {
+        if (userObj && userObj.account && userObj.account.organizationId && device.organizationId.toString() === userObj.account.organizationId.toString()) {
+          isOrgAdmin = true;
+        }
+      }
+    }
+
+    if (!isOwner && !isOrgAdmin && !isSuperAdmin) {
+      return res.status(403).json({ message: "Only the device owner, organization admin, or superadmin can rename it" });
     }
 
     // Validate customName (optional, but if provided must be non-empty string)
@@ -713,8 +875,40 @@ router.patch("/rename/:deviceId", authMiddleware, async (req, res) => {
       updatedName = device.defaultName;
     }
 
+    if (room !== undefined) {
+      device.room = room ? String(room).trim().replace(/^Room\s+/i, '') : null;
+    }
+    if (bed !== undefined) {
+      device.bed = bed ? String(bed).trim().replace(/^Bed\s+/i, '') : null;
+    }
+
     // Save to Device collection
     await device.save();
+
+    // Sync room and bed to any active monitoring session for this device
+    if (room !== undefined || bed !== undefined) {
+      // If either room or bed is explicitly cleared (set to null/empty string), the device is unassigned,
+      // so we should auto-complete the active session.
+      const isUnassigned = (room === null || room === '') || (bed === null || bed === '');
+      
+      if (isUnassigned) {
+        await MonitoringSession.updateMany(
+          { deviceId: normalizedDeviceId, status: 'active' },
+          { $set: { status: 'completed', dischargeDate: new Date() } }
+        );
+      } else {
+        const updateFields = {};
+        if (room !== undefined) updateFields.room = device.room;
+        if (bed !== undefined) updateFields.bed = device.bed;
+        
+        if (Object.keys(updateFields).length > 0) {
+          await MonitoringSession.updateMany(
+            { deviceId: normalizedDeviceId, status: 'active' },
+            { $set: updateFields }
+          );
+        }
+      }
+    }
 
     // Also update User.deviceNames Map for backward compatibility
     const user = await User.findById(userId);
@@ -747,11 +941,92 @@ router.patch("/rename/:deviceId", authMiddleware, async (req, res) => {
   }
 });
 
+// PUT /devices/:deviceId/thresholds - Owner or admin updates device specific thresholds
+router.put("/:deviceId/thresholds", authMiddleware, async (req, res) => {
+  try {
+    const { deviceId } = req.params;
+    const { hrMin, hrMax, respMin, respMax, thresholdMode } = req.body;
+    
+    if (!deviceId) return res.status(400).json({ message: "deviceId required" });
+    const normalizedDeviceId = deviceId.trim().toUpperCase();
+
+    const device = await Device.findOne({ deviceId: normalizedDeviceId });
+    if (!device) return res.status(404).json({ message: "Device not found" });
+
+    // Ensure user has access
+    const uid = req.user.userId?.toString();
+    const isSuperAdmin = req.user?.role === 'superadmin';
+    const isOwner = device.userId && device.userId.toString() === uid;
+    
+    let isOrgAdmin = false;
+    if (!isSuperAdmin && !isOwner && req.user?.role === 'admin' && device.organizationId) {
+      const userObj = await User.findById(uid).populate('account');
+      if (userObj && userObj.account && userObj.account.organizationId && device.organizationId.toString() === userObj.account.organizationId.toString()) {
+        isOrgAdmin = true;
+      }
+    }
+
+    if (!isOwner && !isOrgAdmin && !isSuperAdmin) {
+      return res.status(403).json({ message: "Access denied. You cannot modify thresholds for this device." });
+    }
+
+    // Handle thresholdMode switching
+    if (thresholdMode === "global") {
+      // Reset device thresholds to the organization's global SystemConfig values
+      const SystemConfig = require("../models/SystemConfig");
+      let globalConfig = null;
+
+      if (device.organizationId) {
+        // Find the admin user account linked to this organization
+        const orgAccount = await Account.findOne({ organizationId: device.organizationId });
+        if (orgAccount && orgAccount.defaultUser) {
+          globalConfig = await SystemConfig.findOne({ userId: orgAccount.defaultUser });
+        }
+      }
+
+      // Fall back to defaults if no SystemConfig found
+      device.hrMin = globalConfig?.hrMin ?? 40;
+      device.hrMax = globalConfig?.hrMax ?? 120;
+      device.respMin = globalConfig?.respMin ?? 8;
+      device.respMax = globalConfig?.respMax ?? 30;
+      device.thresholdMode = "global";
+    } else {
+      // Individual mode — save custom values
+      if (hrMin !== undefined) device.hrMin = hrMin;
+      if (hrMax !== undefined) device.hrMax = hrMax;
+      if (respMin !== undefined) device.respMin = respMin;
+      if (respMax !== undefined) device.respMax = respMax;
+      device.thresholdMode = "individual";
+    }
+
+    await device.save();
+
+    return res.status(200).json({
+      success: true,
+      message: thresholdMode === "global"
+        ? "Device thresholds reset to global organization values"
+        : "Device thresholds updated successfully",
+      device: {
+        deviceId: device.deviceId,
+        hrMin: device.hrMin,
+        hrMax: device.hrMax,
+        respMin: device.respMin,
+        respMax: device.respMax,
+        thresholdMode: device.thresholdMode
+      }
+    });
+
+  } catch (error) {
+    console.error("Error updating device thresholds:", error);
+    res.status(500).json({ success: false, message: "Server error", error: error.message });
+  }
+});
+
 // POST /devices/auto-register - Auto-register device to current user
 // Called automatically when device connects to WiFi
 router.post("/auto-register", authMiddleware, async (req, res) => {
   try {
-    const { serialNumber, bleMac } = req.body;
+    const { serialNumber, bleMac, organizationId } = req.body;
     const currentUserId = req.user.userId;
 
     // Validate serial number
@@ -779,8 +1054,8 @@ router.post("/auto-register", authMiddleware, async (req, res) => {
       previousUserId = device.userId ? device.userId.toString() : null;
       const currentUserIdStr = currentUserId.toString();
 
-      if (previousUserId && previousUserId !== currentUserIdStr) {
-        // Device is registered to another user - transfer ownership
+      // Transfer ownership if moving to a new user, OR moving from a user to an organization
+      if (previousUserId && (organizationId || previousUserId !== currentUserIdStr)) {
         wasReassigned = true;
 
         // Remove device from previous user's devices array and ownedDevices
@@ -802,8 +1077,21 @@ router.post("/auto-register", authMiddleware, async (req, res) => {
         }
       }
 
-      // Update device to current user
-      device.userId = new mongoose.Types.ObjectId(currentUserId);
+      // Update device owner
+      if (organizationId) {
+        device.organizationId = new mongoose.Types.ObjectId(organizationId);
+        device.userId = null;
+      } else {
+        // Personal user registration — NEVER inherit organizationId from the user's account.
+        // Only explicitly-passed organizationId should link a device to an org.
+        const userObj = await User.findById(currentUserId);
+        device.userId = new mongoose.Types.ObjectId(currentUserId);
+        device.organizationId = null; // Always clear org for personal registration
+        if (userObj && userObj.accountId) {
+          device.accountId = userObj.accountId;
+        }
+      }
+
       device.status = "active";
       device.wifiStatus = "CONNECTED";
       device.wifiConnectedAt = now;
@@ -820,6 +1108,15 @@ router.post("/auto-register", authMiddleware, async (req, res) => {
       }
 
       await device.save();
+
+      // Mongoose .save() ignores `undefined` fields — use a raw $unset to guarantee
+      // the old organizationId/accountId are wiped for personal registrations.
+      if (!organizationId) {
+        await Device.updateOne(
+          { _id: device._id },
+          { $unset: { organizationId: 1 } }
+        );
+      }
 
       // ✅ WebSocket cleanup and audit logging for ownership transfer
       if (wasReassigned && previousUserId) {
@@ -883,7 +1180,8 @@ router.post("/auto-register", authMiddleware, async (req, res) => {
         firmwareVersion: "1.0.0", // Default, can be updated later
         location: "Unknown", // Default, can be updated later
         status: "active",
-        userId: new mongoose.Types.ObjectId(currentUserId),
+        userId: organizationId ? null : new mongoose.Types.ObjectId(currentUserId),
+        organizationId: organizationId ? new mongoose.Types.ObjectId(organizationId) : null,
         wifiStatus: "CONNECTED",
         wifiConnectedAt: now,
         lastActiveAt: now,
@@ -905,27 +1203,27 @@ router.post("/auto-register", authMiddleware, async (req, res) => {
       });
     }
 
-    // Add device to current user's devices array (if not already present)
-    const currentUser = await User.findById(currentUserId);
-    if (currentUser) {
-      const deviceIdInArray = currentUser.devices.find(
-        d => d.toString() === device._id.toString()
-      );
+    // Add device to current user's devices array (if not already present AND not assigning to org)
+    if (!organizationId) {
+      const currentUser = await User.findById(currentUserId);
+      if (currentUser) {
+        const deviceIdInArray = currentUser.devices.find(
+          d => d.toString() === device._id.toString()
+        );
 
-      if (!deviceIdInArray) {
-        currentUser.devices.push(device._id);
+        if (!deviceIdInArray) {
+          currentUser.devices.push(device._id);
+          currentUser.ownedDevices = currentUser.ownedDevices || [];
+          if (!currentUser.ownedDevices.includes(device.deviceId)) {
+            currentUser.ownedDevices.push(device.deviceId);
+          }
+          // Set as active device if user doesn't have one
+          if (!currentUser.activeDevice && device.status === "active") {
+            currentUser.activeDevice = device._id;
+          }
+          await currentUser.save();
+        }
       }
-      if (!currentUser.ownedDevices) currentUser.ownedDevices = [];
-      if (!currentUser.ownedDevices.includes(device.deviceId)) {
-        currentUser.ownedDevices.push(device.deviceId);
-      }
-
-      // Set as active device if user doesn't have one
-      if (!currentUser.activeDevice && device.status === "active") {
-        currentUser.activeDevice = device._id;
-      }
-
-      await currentUser.save();
     }
 
     // ✅ Notify new owner via WebSocket (if ownership was transferred)

@@ -12,6 +12,7 @@ router.post("/register-simple", authController.registerSimple);
 
 // Login
 router.post("/login", authController.login);
+router.post("/first-login-change-password", authController.firstLoginChangePassword);
 
 // Email verification
 router.get("/verify/:token", authController.verifyEmail);

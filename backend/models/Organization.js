@@ -27,6 +27,22 @@ const OrganizationSchema = new mongoose.Schema({
     type: String, 
     required: [true, "Pincode is required"] 
   },
+  website: {
+    type: String,
+    default: ""
+  },
+  taxId: {
+    type: String,
+    default: ""
+  },
+  servicePlan: {
+    type: String,
+    default: "trial"
+  },
+  seatLimit: {
+    type: Number,
+    default: 100
+  },
   // New fields
   contactPerson: {
     type: String,
@@ -40,9 +56,25 @@ const OrganizationSchema = new mongoose.Schema({
     type: String,
     default: "/uploads/defaults/default-org-logo.png" 
   },
+  accentColor: {
+    type: String,
+    default: "#007b90"
+  },
   isActive: {
     type: Boolean,
     default: true
+  },
+  activeStartDate: {
+    type: Date,
+    default: Date.now
+  },
+  activeEndDate: {
+    type: Date,
+    default: null
+  },
+  suspendedAt: {
+    type: Date,
+    default: null
   },
   createdAt: { 
     type: Date, 
@@ -51,7 +83,18 @@ const OrganizationSchema = new mongoose.Schema({
   updatedAt: { 
     type: Date, 
     default: Date.now 
-  }
+  },
+  organizationType: {
+    type: String,
+    enum: ["hospital", "other"],
+    default: "hospital"
+  },
+  viewers: [{
+    name: { type: String, required: true },
+    email: { type: String, required: true },
+    phone: { type: String },
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" }
+  }]
 });
 
 // Pre-save hook to update the updatedAt field

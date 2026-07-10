@@ -33,7 +33,38 @@ const SleepSessionSchema = new mongoose.Schema({
   
   // Sleep score (only if TST >= 3 hours)
   sleepScore: { type: Number }, // 0-100 score
-  
+
+  // ── Sleep Stage Data (from sleepStageService) ──────────────────────────
+  // Per-epoch timeline: one entry per 30-sec classified epoch
+  stageTimeline: [{
+    ts:           { type: Number },  // Unix timestamp seconds
+    stage:        { type: String },  // 'AWAKE' | 'LIGHT' | 'DEEP' | 'REM'
+    rawStage:     { type: String },  // pre-smoothing stage
+    hr:           { type: Number },  // heart rate for this epoch
+    rr:           { type: Number },  // respiration for this epoch
+    hr_sd_5m:     { type: Number },  // HR SD 5-min rolling (from firmware)
+    rr_sd_5m:     { type: Number },  // Resp SD 5-min rolling (from firmware)
+    tLastTurn:    { type: Number },  // seconds since last motion stop
+    hr_state:     { type: Number },  // HR state bucket (1-5)
+    resp_state:   { type: Number },  // Resp state bucket (1-4)
+    hr_stability: { type: Number },  // HR stability (1=stable, 2=moderate, 3=unstable)
+  }],
+  // Stage summaries (in minutes, 0.5-min per epoch)
+  deepSleepMinutes:  { type: Number, default: 0 },
+  remMinutes:        { type: Number, default: 0 },
+  lightSleepMinutes: { type: Number, default: 0 },
+  awakeMinutes:      { type: Number, default: 0 },
+  // Recovery % = (deep + REM) share of sleep time
+  recoveryPercent:   { type: Number, default: 0 },
+  // New stage-based metrics (from updated sleep algorithm spec)
+  deepPct:           { type: Number, default: 0 },  // Deep % of sleep time
+  remPct:            { type: Number, default: 0 },  // REM % of sleep time
+  WASOmin:           { type: Number, default: 0 },  // WASO in minutes (Awake after onset)
+  stageAwakenings:   { type: Number, default: 0 },  // Awakenings from stage classification
+  stageEfficiency:   { type: Number, default: 0 },  // Efficiency from stage classification
+  sleepQuality:      { type: String },               // 'Excellent' | 'Good' | 'Fair' | 'Poor'
+  sleepQualityMsg:   { type: String },               // Human-readable message
+
   // Session date (IST date for the sleep session)
   sessionDate: { type: String, required: true, index: true }, // YYYY-MM-DD format
   

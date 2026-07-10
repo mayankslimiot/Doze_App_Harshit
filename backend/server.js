@@ -18,6 +18,7 @@ const { updateAllDeviceStatuses } = require("./utils/deviceStatusManagement");
 const { verifySmtp } = require('./utils/mailer');
 const { initializeWebSocket, broadcastDeviceUpdate } = require("./services/websocketService");
 const { initializeMQTT } = require("./services/mqttService");
+require("./services/cronService");
 const Device = require("./models/Device");
 
 // routes
@@ -33,6 +34,7 @@ const deviceManagementRoutes = require("./routes/deviceManagementRoutes");
 const httpRoutes = require("./routes/http");
 const devicePrefixesRouter = require('./routes/devicePrefixes');
 const profileRoutes = require("./routes/profileRoutes");
+const dashboardRoutes = require("./routes/dashboardRoutes");
 const app = express();
 
 /* ───────────────────────── Middleware ───────────────────────── */
@@ -71,14 +73,22 @@ app.use("/api/organizations", organizationRoutes);
 app.use("/api/admins", adminRoutes);
 app.use("/api/manage/users", userManagementRoutes);
 app.use("/api/manage/devices", deviceManagementRoutes);
+app.use("/api/superadmin", require("./routes/superadminRoutes"));
+app.use("/api/feedbacks", require("./routes/feedbackRoutes"));
+app.use("/api/tickets", require("./routes/ticketRoutes"));
 app.use("/api/http", httpRoutes);
 app.use("/api", profileRoutes);
 app.use("/api", require("./routes/history"));
+app.use("/api/sessions", require("./routes/sessionRoutes"));
+app.use("/api/manual-entries", require("./routes/manualEntryRoutes"));
+app.use("/api/system-config", require("./routes/configRoutes"));
+app.use("/api/notifications", require("./routes/notificationRoutes"));
 
 // keep protected catch-all last
 app.use("/api/graph-settings", require("./routes/graphSettings"));
 app.use("/api/device-prefixes", devicePrefixesRouter);
 app.use("/api", protectedRoutes);
+app.use("/api/dashboard", dashboardRoutes);
 
 /* 404 */
 app.use((req, res) => {
@@ -112,6 +122,10 @@ const PORT = process.env.PORT || 5001;
 
 connectDB()
   .then(async () => {
+    // Initialize default super admin
+    const { initSuperAdmin } = require("./controllers/superadminController");
+    await initSuperAdmin();
+
     verifySmtp()
       .then(() => logger.info('📧 SMTP verify OK'))
       .catch((err) => logger.err(err, { where: 'smtp-verify-startup' }));

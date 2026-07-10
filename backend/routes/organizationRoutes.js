@@ -3,8 +3,12 @@ const organizationController = require("../controllers/organizationController");
 const authMiddleware = require("../middleware/authMiddleware");
 const adminMiddleware = require("../middleware/adminMiddleware");
 const { getPublicOrganizations } = require('../controllers/organizationController');
+const { logoUploadMw, uploadLogo } = require("../controllers/superadminController");
 
 const router = express.Router();
+
+// Public routes that don't need auth or admin
+router.get('/public', getPublicOrganizations);
 
 // Apply authentication middleware to all organization routes
 router.use(authMiddleware);
@@ -17,10 +21,9 @@ router.get("/name/:organizationId", organizationController.getOrganizationNameBy
 router.use(adminMiddleware);
 
 // Organization CRUD routes
+router.post("/upload-logo", logoUploadMw, uploadLogo);
 router.post("/", organizationController.createOrganization);
 router.get("/", organizationController.getAllOrganizations);
-
-router.get('/public', getPublicOrganizations);
 
 router.get("/:id", organizationController.getOrganization);
 router.get("/byOrgId/:organizationId", organizationController.getOrganizationByOrgId);

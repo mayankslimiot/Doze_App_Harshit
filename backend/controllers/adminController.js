@@ -134,12 +134,53 @@ exports.getAllAdmins = async (req, res, next) => {
     const skip = (page - 1) * limit;
 
     const filter = { role: "admin" };
-    if (req.query.organizationId) filter.organizationId = req.query.organizationId;
+
     if (req.query.search) {
       filter.$or = [
         { name: { $regex: req.query.search, $options: "i" } },
         { email: { $regex: req.query.search, $options: "i" } },
       ];
+    }
+
+    if (req.query.organizationId) {
+      const orgId = req.query.organizationId;
+      const Account = require("../models/Account");
+      
+      let organization = null;
+      if (mongoose.Types.ObjectId.isValid(orgId)) {
+        organization = await Organization.findById(orgId);
+      }
+      if (!organization) {
+        organization = await Organization.findOne({ organizationId: orgId });
+      }
+
+      if (organization) {
+        const orgIdString = organization.organizationId;
+        const orgObjectId = organization._id;
+
+        // Find accounts under this organization
+        const accounts = await Account.find({ organizationId: orgObjectId }).select("_id");
+        const accountIds = accounts.map(acc => acc._id);
+
+        const orgConditions = [
+          { organizationId: orgIdString },
+          { organizationId: orgObjectId.toString() },
+          { organizationId: orgObjectId },
+          { account: { $in: accountIds } }
+        ];
+
+        if (filter.$or) {
+          filter.$and = [
+            { $or: filter.$or },
+            { $or: orgConditions }
+          ];
+          delete filter.$or;
+        } else {
+          filter.$or = orgConditions;
+        }
+      } else {
+        filter._id = null; // matches nothing if organization not found
+      }
     }
 
     const admins = await User.find(filter)
@@ -152,7 +193,19 @@ exports.getAllAdmins = async (req, res, next) => {
     const adminsWithOrgName = await Promise.all(
       admins.map(async (a) => {
         const obj = a.toObject();
-        obj.organizationName = await getOrganizationName(a.organizationId);
+        let orgId = a.organizationId;
+
+        // If organizationId is not directly on the user, check account
+        if (!orgId && a.account) {
+          const Account = require("../models/Account");
+          const acct = await Account.findById(a.account).select("organizationId");
+          if (acct && acct.organizationId) {
+            orgId = acct.organizationId;
+            obj.organizationId = orgId;
+          }
+        }
+
+        obj.organizationName = await getOrganizationName(orgId);
         return obj;
       })
     );
@@ -237,9 +290,14 @@ exports.updateAdmin = async (req, res, next) => {
 // ---- Delete Admin ----
 exports.deleteAdmin = async (req, res, next) => {
   try {
-    const admin = await User.findOneAndDelete({ _id: req.params.id, role: "admin" });
+    const admin = await User.findOne({ _id: req.params.id, role: "admin" });
     if (!admin) return next(new createError(404, "Admin not found"));
 
+    if (admin.isDefaultProfile) {
+      return res.status(400).json({ status: "fail", message: "Cannot delete the default/primary administrator of the organization." });
+    }
+
+    await User.findByIdAndDelete(admin._id);
     res.status(200).json({ status: "success", message: "Admin deleted successfully" });
   } catch (error) {
     console.error("Error deleting admin:", error);
@@ -263,11 +321,23 @@ exports.getAdminsByOrganization = async (req, res, next) => {
     const limit = parseInt(req.query.limit) || 10;
     const skip = (page - 1) * limit;
 
-    const orgIdString = organizationId.toString();
-    const orgObjectId = organization._id.toString();
+    const orgIdString = organization.organizationId;
+    const orgObjectId = organization._id;
+
+    // Find accounts under this organization
+    const Account = require("../models/Account");
+    const accounts = await Account.find({ organizationId: orgObjectId }).select("_id");
+    const accountIds = accounts.map(acc => acc._id);
+
+    const conditions = [
+      { organizationId: orgIdString },
+      { organizationId: orgObjectId.toString() },
+      { organizationId: orgObjectId },
+      { account: { $in: accountIds } }
+    ];
 
     const admins = await User.find({
-      $or: [{ organizationId: orgIdString }, { organizationId: orgObjectId }],
+      $or: conditions,
       role: "admin",
     })
       .select("-password")
@@ -276,13 +346,16 @@ exports.getAdminsByOrganization = async (req, res, next) => {
       .limit(limit);
 
     const total = await User.countDocuments({
-      $or: [{ organizationId: orgIdString }, { organizationId: orgObjectId }],
+      $or: conditions,
       role: "admin",
     });
 
     const adminsWithOrgName = admins.map((a) => {
       const obj = a.toObject();
       obj.organizationName = organization.name;
+      if (!obj.organizationId) {
+        obj.organizationId = orgObjectId;
+      }
       return obj;
     });
 

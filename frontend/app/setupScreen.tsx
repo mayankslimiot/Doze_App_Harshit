@@ -1,0 +1,317 @@
+import React from 'react';
+import {
+  StyleSheet,
+  Text,
+  View,
+  TouchableOpacity,
+  Image,
+  Dimensions,
+  StatusBar,
+  Linking,
+  Animated,
+  Platform,
+  ScrollView,
+} from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
+import { BlurView } from 'expo-blur';
+import { useRouter } from 'expo-router';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useAuth } from '@/contexts/AuthContext';
+import { useBoot } from '@/contexts/BootContext';
+import { useTheme } from '@/contexts/ThemeContext';
+import { useProvisioning } from '@/contexts/ProvisioningContext';
+
+const { width, height } = Dimensions.get('window');
+const isTablet = width >= 768;
+
+export default function SetupScreen() {
+  const router = useRouter();
+  const { isLightTheme } = useTheme();
+  const insets = useSafeAreaInsets();
+  const { logout } = useAuth();
+  const { completeSetup } = useBoot();
+  const { setProvisionForHospitalId, setProvisionForHospitalName } = useProvisioning();
+  const scaleAnim = React.useRef(new Animated.Value(1)).current;
+
+  const handleSetupDozemate = () => {
+    setProvisionForHospitalId(null);
+    setProvisionForHospitalName(null);
+    router.push('/(bluetooth)/ScanScreen');
+  };
+
+  const handleBuyDozemate = () => {
+    Linking.openURL('https://www.slimiot.com/');
+  };
+
+  const handleLogout = async () => {
+    await logout();
+    router.replace('/');
+  };
+
+  const handleSkip = async () => {
+    await completeSetup();
+    router.replace('/(tabs)/home');
+  };
+
+  const startZoomAnimation = React.useCallback(() => {
+    Animated.sequence([
+      Animated.timing(scaleAnim, {
+        toValue: 1.05,
+        duration: 2000,
+        useNativeDriver: true,
+      }),
+      Animated.timing(scaleAnim, {
+        toValue: 1,
+        duration: 2000,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, [scaleAnim]);
+
+  React.useEffect(() => {
+    startZoomAnimation();
+    const interval = setInterval(startZoomAnimation, 4000);
+    return () => clearInterval(interval);
+  }, [startZoomAnimation]);
+
+  return (
+    <SafeAreaView style={[styles.container, isLightTheme && { backgroundColor: '#F8F9FA' }]} edges={Platform.OS === 'ios' ? ['top'] : ['top', 'bottom']}>
+      <StatusBar barStyle={isLightTheme ? "dark-content" : "light-content"} backgroundColor={isLightTheme ? "#F8F9FA" : "#02041A"} />
+
+      {isLightTheme ? null : (
+        <LinearGradient
+          colors={['#1D244D', '#02041A', '#1A1D3E']}
+          style={styles.gradientBackground}
+        />
+      )}
+
+      <TouchableOpacity
+        style={[styles.logoutButton, { top: insets.top + (Platform.OS === 'ios' ? 10 : 10) }]}
+        onPress={handleLogout}
+        activeOpacity={0.8}
+      >
+        <Text style={[styles.logoutButtonText, isLightTheme && { color: '#0061A4' }]}>Logout</Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity
+        style={[styles.skipButton, { top: insets.top + (Platform.OS === 'ios' ? 10 : 10) }]}
+        onPress={handleSkip}
+        activeOpacity={0.8}
+      >
+        <Text style={[styles.skipButtonText, isLightTheme && { color: '#0061A4' }]}>Skip</Text>
+      </TouchableOpacity>
+
+      <ScrollView 
+        contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + 40 }]}
+        showsVerticalScrollIndicator={false}
+        bounces={false}
+      >
+        <View style={styles.contentContainer}>
+          <Text style={[styles.title, isLightTheme && { color: '#111111' }]}>Connect your Dozemate</Text>
+
+          <View style={styles.deviceContainer}>
+            <Animated.Image
+              source={require('../assets/images/dozemate_transparent.png')}
+              style={[styles.deviceImage, { transform: [{ scale: scaleAnim }] }]}
+              resizeMode="contain"
+            />
+          </View>
+
+          {isLightTheme ? (
+            <View style={[styles.glassContainer, { backgroundColor: '#FFFFFF', borderColor: '#E5E7EB', shadowColor: '#000000', shadowOpacity: 0.05, shadowRadius: 10, elevation: 2 }]}>
+              <View style={styles.buttonsContainer}>
+                <TouchableOpacity
+                  style={[styles.setupButton, { backgroundColor: '#0061A4' }]}
+                  onPress={handleSetupDozemate}
+                  activeOpacity={0.8}
+                >
+                  <Text style={[styles.setupButtonText, { color: '#FFFFFF' }]} numberOfLines={1} adjustsFontSizeToFit={true}>Setup Dozemate</Text>
+                </TouchableOpacity>
+
+                <View style={styles.orDivider}>
+                  <View style={[styles.orLine, { backgroundColor: '#E5E7EB' }]} />
+                  <Text style={[styles.orText, { color: '#666666' }]}>OR</Text>
+                  <View style={[styles.orLine, { backgroundColor: '#E5E7EB' }]} />
+                </View>
+
+                <TouchableOpacity
+                  style={[styles.buyButton, { borderColor: '#0061A4' }]}
+                  onPress={handleBuyDozemate}
+                  activeOpacity={0.8}
+                >
+                  <Text style={[styles.buyButtonText, { color: '#0061A4' }]} numberOfLines={1} adjustsFontSizeToFit={true}>Buy Dozemate</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          ) : (
+            <BlurView intensity={25} tint="dark" style={styles.glassContainer}>
+              <View style={styles.buttonsContainer}>
+                <TouchableOpacity
+                  style={styles.setupButton}
+                  onPress={handleSetupDozemate}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.setupButtonText} numberOfLines={1} adjustsFontSizeToFit={true}>Setup Dozemate</Text>
+                </TouchableOpacity>
+
+                <View style={styles.orDivider}>
+                  <View style={styles.orLine} />
+                  <Text style={styles.orText}>OR</Text>
+                  <View style={styles.orLine} />
+                </View>
+
+                <TouchableOpacity
+                  style={styles.buyButton}
+                  onPress={handleBuyDozemate}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.buyButtonText} numberOfLines={1} adjustsFontSizeToFit={true}>Buy Dozemate</Text>
+                </TouchableOpacity>
+              </View>
+            </BlurView>
+          )}
+        </View>
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#02041A',
+  },
+  gradientBackground: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    top: 0,
+    bottom: 0,
+  },
+  scrollContent: {
+    flexGrow: 1,
+    minHeight: height,
+  },
+  contentContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: isTablet ? Math.min(width * 0.15, 100) : 20,
+    paddingTop: isTablet ? 40 : 60,
+    paddingBottom: isTablet ? 40 : 20,
+  },
+  title: {
+    fontSize: isTablet ? 36 : 28,
+    fontWeight: 'bold',
+    color: '#FFFFFF',
+    textAlign: 'center',
+    marginBottom: isTablet ? 30 : 20,
+    paddingHorizontal: 20,
+  },
+  deviceContainer: {
+    justifyContent: 'center',
+    alignItems: 'center',
+    width: '100%',
+    marginVertical: isTablet ? 30 : 20,
+    minHeight: isTablet ? 300 : 200,
+  },
+  deviceImage: {
+    width: isTablet ? Math.min(width * 0.6, 500) : Math.min(width * 0.8, 350),
+    height: isTablet ? Math.min(width * 0.55, 450) : Math.min(width * 0.75, 320),
+    maxWidth: 500,
+    maxHeight: 450,
+  },
+  glassContainer: {
+    width: '100%',
+    maxWidth: isTablet ? 500 : '100%',
+    alignSelf: 'center',
+    padding: isTablet ? 30 : 20,
+    borderRadius: 30,
+    alignItems: 'center',
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+  },
+  buttonsContainer: {
+    width: '100%',
+    gap: 0,
+  },
+  orDivider: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginVertical: 15,
+  },
+  orLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+  },
+  orText: {
+    color: 'rgba(255, 255, 255, 0.6)',
+    fontSize: 12,
+    fontWeight: '500',
+    marginHorizontal: 15,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  setupButton: {
+    backgroundColor: '#FFFFFF',
+    paddingVertical: 18,
+    paddingHorizontal: 30,
+    borderRadius: 25,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+    elevation: 5,
+  },
+  setupButtonText: {
+    color: '#1D244D',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  buyButton: {
+    backgroundColor: 'transparent',
+    paddingVertical: 18,
+    paddingHorizontal: 30,
+    borderRadius: 25,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.2)',
+  },
+  buyButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  logoutButton: {
+    position: 'absolute',
+    left: 16,
+    paddingVertical: 8,
+    paddingHorizontal: 4,
+    zIndex: 10,
+  },
+  logoutButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  skipButton: {
+    position: 'absolute',
+    right: 16,
+    paddingVertical: 8,
+    paddingHorizontal: 4,
+    zIndex: 10,
+  },
+  skipButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+});
+
+

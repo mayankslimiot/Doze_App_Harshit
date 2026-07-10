@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/x-icon" href="%BASE_URL%favicon.ico" />
+    <link rel="icon" type="image/png" sizes="32x32" href="%BASE_URL%favicon-32x32.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Dashboard</title>
+    <style>
+      /* Pre-React loading screen – shown instantly by browser, replaced when React mounts */
+      #app-loader {
+        position: fixed;
+        inset: 0;
+        z-index: 99999;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: #ffffff;
+        transition: opacity 0.3s ease;
+      }
+      #app-loader.fade-out {
+        opacity: 0;
+        pointer-events: none;
+      }
+      .loader-brand {
+        font-size: 2.5rem;
+        font-weight: 800;
+        letter-spacing: -0.02em;
+        user-select: none;
+        animation: loaderPulse 1.6s ease-in-out infinite;
+      }
+      .loader-brand .dark { color: #000; }
+      .loader-brand .accent { color: #0097b2; }
+      @keyframes loaderPulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.4; }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root">
+      <!-- Pre-React loader: auto-replaced by React's createRoot().render() -->
+      <div id="app-loader">
+        <span class="loader-brand">
+          <span class="dark">doze</span><span class="accent">mate</span>
+        </span>
+      </div>
+    </div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

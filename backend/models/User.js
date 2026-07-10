@@ -33,7 +33,7 @@ const UserSchema = new mongoose.Schema({
   city: { type: String },
 
   profileImage: { type: String, default: "/uploads/defaults/default-profile.jpg" },
-  role: { type: String, enum: ["user", "admin", "superadmin"], default: "user" },
+  role: { type: String, enum: ["user", "admin", "superadmin", "viewer"], default: "user" },
 
   devices: { type: [{ type: mongoose.Schema.Types.ObjectId, ref: "Device" }], default: [] },
   // Caretaker: deviceIds for owned (synced with devices) and shared (read-only)
@@ -57,6 +57,7 @@ const UserSchema = new mongoose.Schema({
   // Account/profile linkage
   account: { type: mongoose.Schema.Types.ObjectId, ref: "Account", default: null },
   accountId: { type: String, index: true, sparse: true },    // e.g. "12345"
+  organizationId: { type: mongoose.Schema.Types.Mixed, default: null, index: true },
   // userId: { type: String, unique: true, required: true },  // e.g. "12345a"
   isDefaultProfile: { type: Boolean, default: false },
 
@@ -122,6 +123,19 @@ const UserSchema = new mongoose.Schema({
     type: Map,
     of: String,
     default: {}
+  },
+  handoverHistory: [{
+    fromEmail: { type: String, required: true },
+    toEmail: { type: String, required: true },
+    handoverDate: { type: Date, default: Date.now },
+    authorizedBy: { type: String }
+  }],
+  handoverVerification: {
+    currentEmailOtp: { type: String },
+    currentEmailOtpExpires: { type: Date },
+    newEmailOtp: { type: String },
+    newEmailOtpExpires: { type: Date },
+    targetNewEmail: { type: String }
   }
 });
 

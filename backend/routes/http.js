@@ -4,7 +4,11 @@ const HealthData = require("../models/HealthData");
 const SleepData = require("../models/SleepData");
 const Device = require("../models/Device");
 const deviceApiKeyMiddleware = require("../middleware/deviceApiKeyMiddleware");
-const { broadcastHealthData, broadcastDeviceStatus } = require("../services/websocketService");
+const { broadcastHealthData, broadcastDeviceStatus, broadcastNotification } = require("../services/websocketService");
+const Notification = require("../models/Notification");
+const SystemConfig = require("../models/SystemConfig");
+const Account = require("../models/Account");
+const Profile = require("../models/Profile");
 const { formatTimestampIST } = require("../utils/timezoneHelper");
 
 dotenv.config();
@@ -59,7 +63,13 @@ const fieldNameMapping = {
   'MS': 'motionStart',
   'MST': 'motionEndReason',
   'AS': 'absenceStart',
-  'AST': 'absenceEnd',
+  'MS_B': 'motionBoolean',
+  'SN_B': 'snoreDetected',
+  'L': 'batteryLevel',
+  'HR_M': 'hr_median',
+  'Res_M': 'respirationMedian',
+  'HR_SD': 'heartRateSD',
+  'RESSD': 'respirationSD',
   'SS': 'snoringStart',
   'SST': 'snoringStop',
   'SF': 'snoringFrequency',
@@ -224,6 +234,10 @@ function parseUartLine(line) {
   return { patch, metrics, signals, raw: line };
 }
 
+// Map to throttle notifications per device and parameter (e.g., "DEV1_HR")
+const notificationThrottleCache = new Map();
+const THROTTLE_MS = 5 * 60 * 1000; // 5 minutes
+
 router.post("/ingest", deviceApiKeyMiddleware, async (req, res) => {
   try {
     const { deviceId, type, data } = req.body;
@@ -357,12 +371,34 @@ router.post("/ingest", deviceApiKeyMiddleware, async (req, res) => {
       if (isAbbreviatedFormat && originalDataForRaw) {
         // Map all abbreviated fields to full names
         const mappedData = mapAbbreviatedToFullNames(originalDataForRaw);
+        // Fields that belong under the nested `metrics` sub-document in the HealthData schema
+        const metricsSchemaFields = ['hr_median', 'respirationMedian', 'heartRateSD', 'respirationSD'];
         // Add mapped fields to finalDoc (exclude base fields)
         Object.keys(mappedData).forEach(key => {
           if (!['deviceId', 'timestamp', 'metrics', 'signals', 'raw'].includes(key)) {
-            finalDoc[key] = mappedData[key];
+            if (metricsSchemaFields.includes(key)) {
+              // Route to metrics sub-document instead of top-level (where Mongoose strict:true drops them)
+              const coerced = toNum(mappedData[key]);
+              if (coerced !== undefined) {
+                finalDoc.metrics[key] = coerced;
+              }
+            } else {
+              finalDoc[key] = mappedData[key];
+            }
           }
         });
+
+        // Preserve original abbreviated metric keys in raw for backward compatibility
+        // (sleepStageService falls back to raw.HR_M, raw.Res_M, raw.HR_SD, raw.RESSD)
+        const rawMetrics = {};
+        ['HR_M', 'Res_M', 'HR_SD', 'RESSD'].forEach(abbr => {
+          if (originalDataForRaw[abbr] !== undefined && originalDataForRaw[abbr] !== null && originalDataForRaw[abbr] !== '') {
+            rawMetrics[abbr] = toNum(originalDataForRaw[abbr]) ?? originalDataForRaw[abbr];
+          }
+        });
+        if (Object.keys(rawMetrics).length > 0) {
+          finalDoc.raw = { ...(typeof finalDoc.raw === 'object' ? finalDoc.raw : {}), ...rawMetrics };
+        }
       }
       
       // Create document using set() method to ensure only valid fields
@@ -383,10 +419,12 @@ router.post("/ingest", deviceApiKeyMiddleware, async (req, res) => {
       // Only add fields that are in the schema (full names)
       const schemaFields = [
         'timestampSeconds', 'timestampMilliseconds', 'temperature', 'humidity',
-        'motionStart', 'motionEndReason', 'absenceStart', 'absenceEnd',
+        'motionStart', 'motionEndReason', 'absenceStart', 
         'snoringStart', 'snoringStop', 'snoringFrequency', 'respirationStop', 'respirationStart',
         'voltage', 'level', 'status', 'heartRate', 'respiration',
-        'pm10', 'co2', 'voc', 'etoh'
+        'pm10', 'co2', 'voc', 'etoh',
+        'motionBoolean', 'snoreDetected', 'batteryLevel', 'motionStop', 'snoreCount',
+        'iaq', 'vocRaw', 'vocStatus', 'vocAlert', 'ventilationNeeded', 'heartRateValid', 'eventText'
       ];
       
       schemaFields.forEach(field => {
@@ -412,6 +450,100 @@ router.post("/ingest", deviceApiKeyMiddleware, async (req, res) => {
         // Broadcast health data via WebSocket to all subscribed clients
         try {
           broadcastHealthData(deviceId, savedDoc.toObject());
+          
+          // --- THRESHOLD CHECKS & NOTIFICATIONS ---
+          if (device.organizationId) {
+            const hr = finalDoc.heartRate;
+            const resp = finalDoc.respiration;
+            const nowTime = Date.now();
+            let alertMsg = null;
+            let paramType = null;
+
+            // Resolve thresholds: global (from org SystemConfig) or individual (from device)
+            let effectiveHrMin = device.hrMin;
+            let effectiveHrMax = device.hrMax;
+            let effectiveRespMin = device.respMin;
+            let effectiveRespMax = device.respMax;
+
+            if (device.thresholdMode !== "individual") {
+              // Global mode — fetch org's SystemConfig
+              try {
+                const orgAccount = await Account.findOne({ organizationId: device.organizationId });
+                if (orgAccount && orgAccount.defaultUser) {
+                  const globalConfig = await SystemConfig.findOne({ userId: orgAccount.defaultUser });
+                  if (globalConfig) {
+                    effectiveHrMin = globalConfig.hrMin ?? 40;
+                    effectiveHrMax = globalConfig.hrMax ?? 120;
+                    effectiveRespMin = globalConfig.respMin ?? 8;
+                    effectiveRespMax = globalConfig.respMax ?? 30;
+                  }
+                }
+              } catch (cfgErr) {
+                console.error("⚠️ Failed to fetch global SystemConfig, using device defaults:", cfgErr.message);
+              }
+            }
+
+            // Resolve patient name from Profile
+            let patientName = "Patient";
+            if (device.profileId) {
+              try {
+                const profile = await Profile.findById(device.profileId).lean();
+                if (profile && profile.identifier) {
+                  patientName = profile.identifier;
+                }
+              } catch (pErr) {
+                // Non-fatal — fall back to "Patient"
+              }
+            }
+
+            // Check HR
+            if (hr !== undefined && hr !== null && hr > 0) {
+              if (hr < effectiveHrMin) {
+                alertMsg = `In Room ${device.room || 'N/A'} on Bed ${device.bed || 'N/A'}, ${patientName}'s Heart Rate is ${hr} (below min ${effectiveHrMin})`;
+                paramType = "HR";
+              } else if (hr > effectiveHrMax) {
+                alertMsg = `In Room ${device.room || 'N/A'} on Bed ${device.bed || 'N/A'}, ${patientName}'s Heart Rate is ${hr} (above max ${effectiveHrMax})`;
+                paramType = "HR";
+              }
+            }
+
+            // Check Respiration if no HR alert
+            if (!alertMsg && resp !== undefined && resp !== null && resp > 0) {
+              if (resp < effectiveRespMin) {
+                alertMsg = `In Room ${device.room || 'N/A'} on Bed ${device.bed || 'N/A'}, ${patientName}'s Respiration is ${resp} (below min ${effectiveRespMin})`;
+                paramType = "RESP";
+              } else if (resp > effectiveRespMax) {
+                alertMsg = `In Room ${device.room || 'N/A'} on Bed ${device.bed || 'N/A'}, ${patientName}'s Respiration is ${resp} (above max ${effectiveRespMax})`;
+                paramType = "RESP";
+              }
+            }
+
+            if (alertMsg && paramType) {
+              const cacheKey = `${deviceId}_${paramType}`;
+              const lastAlert = notificationThrottleCache.get(cacheKey) || 0;
+
+              if (nowTime - lastAlert > THROTTLE_MS) {
+                notificationThrottleCache.set(cacheKey, nowTime);
+
+                // Create Notification in DB
+                const notification = new Notification({
+                  organizationId: device.organizationId,
+                  deviceId: deviceId,
+                  title: `${paramType} Alert`,
+                  message: alertMsg,
+                  type: "alert"
+                });
+
+                await notification.save();
+
+                // Broadcast to organization
+                broadcastNotification(device.organizationId.toString(), notification.toObject());
+                console.log(`⚠️ Alert Triggered: ${alertMsg}`);
+              }
+            }
+          }
+          // --- END THRESHOLD CHECKS ---
+          
         } catch (wsError) {
           // Don't fail the request if WebSocket broadcast fails
           console.error("⚠️ WebSocket broadcast error (non-fatal):", wsError.message);

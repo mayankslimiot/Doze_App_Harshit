@@ -61,7 +61,7 @@ function refineSleepTimestampsByHeartRate(
     .filter((p) => {
       const t = p && typeof p.timestamp === "number" && Number.isFinite(p.timestamp) ? p.timestamp : null;
       const as = p && (p.AS === 1 || p.AS === "1");
-      const hv = p && (p.HV === 1 || p.HV === "1");
+      const hv = true;
       const hr = p && typeof p.heartRate === "number" && Number.isFinite(p.heartRate) && p.heartRate > 0;
       return t !== null && t >= tibStartMs && t <= tibEndMs && as && hv && hr;
     })
